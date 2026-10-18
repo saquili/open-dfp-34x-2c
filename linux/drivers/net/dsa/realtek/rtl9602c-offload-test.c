@@ -2,8 +2,8 @@
 /*
  * KUnit tests of the pure functions of rtl9602c-offload.c, which includes
  * this file when CONFIG_NET_DSA_RTL9602C_KUNIT_TEST is set: the NAPT hashes,
- * the fields of the engine's table entries, the action of an ACL rule and the
- * numbers of a GEM port's limit.
+ * the fields of the engine's table entries, the records of the flows it
+ * carries, the action of an ACL rule and the numbers of a GEM port's limit.
  */
 
 #include <kunit/test.h>
@@ -75,6 +75,58 @@ static void rtl9602c_test_flow_fields(struct kunit *test)
 					hweight64(val));
 		}
 	}
+}
+
+/*
+ * A flow rule's cookie, which netfilter makes of a pointer: here any distinct
+ * values, 128 apart as objects would be.
+ */
+#define TEST_COOKIE(i)	(0x10000UL + (i) * 128)
+
+/*
+ * Each of as many flows as the engine has outbound entries gets a record that
+ * its cookie finds; one more is refused until one is forgotten, and the
+ * teardown leaves none.
+ */
+static void rtl9602c_test_l34_flow_records(struct kunit *test)
+{
+	struct rtl9602c_l34_flow *f;
+	struct rtl9602c_priv *p;
+	unsigned int i;
+
+	p = kunit_kzalloc(test, sizeof(*p), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, p);
+	KUNIT_ASSERT_EQ(test, rtl9602c_l34_flows_init(p), 0);
+
+	KUNIT_EXPECT_NULL(test, rtl9602c_l34_flow_find(p, TEST_COOKIE(0)));
+	for (i = 0; i < RTL9602C_NAPT_ENTRIES; i++) {
+		f = rtl9602c_l34_flow_new(p, TEST_COOKIE(i));
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, f);
+		f->napt = i;
+	}
+	KUNIT_EXPECT_EQ(test, p->l34_flows_n, (unsigned int)RTL9602C_NAPT_ENTRIES);
+	KUNIT_EXPECT_EQ(test, PTR_ERR(rtl9602c_l34_flow_new(p, TEST_COOKIE(i))),
+			-ENOSPC);
+
+	for (i = 0; i < RTL9602C_NAPT_ENTRIES; i++) {
+		f = rtl9602c_l34_flow_find(p, TEST_COOKIE(i));
+		KUNIT_ASSERT_NOT_NULL(test, f);
+		KUNIT_EXPECT_EQ(test, f->cookie, TEST_COOKIE(i));
+		KUNIT_EXPECT_EQ(test, f->napt, (u16)i);
+	}
+	KUNIT_EXPECT_NULL(test, rtl9602c_l34_flow_find(p, TEST_COOKIE(i)));
+
+	rtl9602c_l34_flow_forget(p, rtl9602c_l34_flow_find(p, TEST_COOKIE(7)));
+	KUNIT_EXPECT_NULL(test, rtl9602c_l34_flow_find(p, TEST_COOKIE(7)));
+	KUNIT_EXPECT_EQ(test, p->l34_flows_n, (unsigned int)RTL9602C_NAPT_ENTRIES - 1);
+	f = rtl9602c_l34_flow_new(p, TEST_COOKIE(i));
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, f);
+	KUNIT_EXPECT_PTR_EQ(test, rtl9602c_l34_flow_find(p, TEST_COOKIE(i)), f);
+
+	rtl9602c_l34_flows_fini(p);
+	KUNIT_EXPECT_EQ(test, p->l34_flows_n, 0U);
+	KUNIT_EXPECT_TRUE(test, hash_empty(p->l34_flows));
+	KUNIT_EXPECT_NULL(test, p->l34_flow_cache);
 }
 
 /* The @len bits at @lsb of the action of ACL rule words @w. */
@@ -154,6 +206,7 @@ static struct kunit_case rtl9602c_offload_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_napt_rem_hash),
 	KUNIT_CASE(rtl9602c_test_napt_buckets),
 	KUNIT_CASE(rtl9602c_test_flow_fields),
+	KUNIT_CASE(rtl9602c_test_l34_flow_records),
 	KUNIT_CASE(rtl9602c_test_acl_classes),
 	KUNIT_CASE(rtl9602c_test_gem_ds_units),
 	KUNIT_CASE(rtl9602c_test_gem_ds_bucket),

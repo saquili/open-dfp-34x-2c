@@ -69,6 +69,7 @@
 #include <linux/of.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <net/dsa.h>
 #include <net/flow_offload.h>
 #include <net/pkt_cls.h>
@@ -3812,16 +3813,93 @@ static ssize_t rtl9602c_qdepth_write(struct file *file, const char __user *ubuf,
 	return len;
 }
 
+/*
+ * The flow records start empty, as the tables do. They come from a cache of
+ * their own: kmalloc() would round each up to ARCH_DMA_MINALIGN, 128 bytes on
+ * this CPU without coherent DMA, where the cache takes 24. The 1024
+ * connections netfilter tracks by default on this board then take 24 KiB of
+ * records at most, and the engine's 4096 flows 96 KiB.
+ */
+static int rtl9602c_l34_flows_init(struct rtl9602c_priv *p)
+{
+	hash_init(p->l34_flows);
+	p->l34_flows_n = 0;
+	p->l34_flow_cache = KMEM_CACHE(rtl9602c_l34_flow, 0);
+	return p->l34_flow_cache ? 0 : -ENOMEM;
+}
+
+/* The record of @cookie, or NULL. Context: flow_lock held. */
+static struct rtl9602c_l34_flow *rtl9602c_l34_flow_find(struct rtl9602c_priv *p,
+							unsigned long cookie)
+{
+	struct rtl9602c_l34_flow *f;
+
+	hash_for_each_possible(p->l34_flows, f, node, cookie)
+		if (f->cookie == cookie)
+			return f;
+	return NULL;
+}
+
+/*
+ * A record for @cookie, zeroed and in the table, or -ENOSPC once there are
+ * as many as the engine has outbound entries, one of which each flow takes.
+ * netfilter calls the flow block from its offload work items, which may sleep,
+ * so the record is allocated with GFP_KERNEL. Context: flow_lock held.
+ */
+static struct rtl9602c_l34_flow *rtl9602c_l34_flow_new(struct rtl9602c_priv *p,
+						       unsigned long cookie)
+{
+	struct rtl9602c_l34_flow *f;
+
+	if (p->l34_flows_n >= RTL9602C_NAPT_ENTRIES)
+		return ERR_PTR(-ENOSPC);
+	if (!p->l34_flow_cache)
+		return ERR_PTR(-ENOMEM);
+
+	f = kmem_cache_zalloc(p->l34_flow_cache, GFP_KERNEL);
+	if (!f)
+		return ERR_PTR(-ENOMEM);
+	f->cookie = cookie;
+	hash_add(p->l34_flows, &f->node, cookie);
+	p->l34_flows_n++;
+	return f;
+}
+
+/* Take @f out of the table and free it. Context: flow_lock held. */
+static void rtl9602c_l34_flow_forget(struct rtl9602c_priv *p,
+				     struct rtl9602c_l34_flow *f)
+{
+	hash_del(&f->node);
+	kmem_cache_free(p->l34_flow_cache, f);
+	p->l34_flows_n--;
+}
+
+/*
+ * Forget every record and destroy the cache; the entries are left to the
+ * clear of the tables. Context: flow_lock held, or no flow block bound.
+ */
+static void rtl9602c_l34_flows_fini(struct rtl9602c_priv *p)
+{
+	struct rtl9602c_l34_flow *f;
+	struct hlist_node *tmp;
+	unsigned int bkt;
+
+	hash_for_each_safe(p->l34_flows, bkt, tmp, f, node)
+		rtl9602c_l34_flow_forget(p, f);
+	kmem_cache_destroy(p->l34_flow_cache);
+	p->l34_flow_cache = NULL;
+}
+
 /**
  * rtl9602c_l34_init() - bring up the L3/NAT engine
  * @p: the switch
  *
- * Strobes the reset of each table engine, configures the engine and turns it
- * on, then records whether it came on as l34_up, which gates everything that
- * hands the engine frames or rows. Only then are this device's own addresses
- * handed to it. Which table each strobe resets, and that the strobes are needed
- * before the enable, are not verified; a strobe does not empty its table,
- * rtl9602c_nat_clear() does.
+ * Starts the flow records empty, strobes the reset of each table engine,
+ * configures the engine and turns it on, then records whether it came on as
+ * l34_up, which gates everything that hands the engine frames or rows. Only
+ * then are this device's own addresses handed to it. Which table each strobe
+ * resets, and that the strobes are needed before the enable, are not verified;
+ * a strobe does not empty its table, rtl9602c_nat_clear() does.
  */
 /*
  * Strobe the reset of each table engine and return how many there are. A strobe
@@ -3861,6 +3939,9 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 {
 	unsigned int done, busy, tables;
 	u32 v;
+
+	if (rtl9602c_l34_flows_init(p))
+		pr_warn("L3: no cache for flow records; every flow stays in software\n");
 
 	tables = rtl9602c_l34_tables_reset(p, &done, &busy);
 
@@ -3974,7 +4055,8 @@ static void rtl9602c_l34_nh_l2_set(struct rtl9602c_priv *p, unsigned int row,
  * are trapped to the CPU again, the address-table entries of the next hops are
  * deleted, the engine's master enable is cleared, and its tables are reset and
  * emptied, so that no flow is forwarded by rows that no driver keeps any more,
- * and a driver bound again finds the engine as its bookkeeping starts.
+ * and a driver bound again finds the engine as its bookkeeping starts. The
+ * flow records go with the tables, and a flow offered after this is declined.
  */
 void rtl9602c_l34_fini(struct rtl9602c_priv *p)
 {
@@ -3989,6 +4071,7 @@ void rtl9602c_l34_fini(struct rtl9602c_priv *p)
 	rtl9602c_rmw(p, RTL9602C_L3_GLOBAL_CTRL, RTL9602C_L3_GLOBAL_CTRL_EN, 0);
 	rtl9602c_l34_tables_reset(p, &done, &busy);
 	rtl9602c_nat_clear(p);
+	rtl9602c_l34_flows_fini(p);
 	mutex_unlock(&p->flow_lock);
 	pr_info("L3: engine off, %u table engine(s) reset\n", done);
 }
@@ -6235,8 +6318,9 @@ static bool rtl9602c_l34_route6_wan_sync(struct rtl9602c_priv *p)
  * the time, and a pointer written first could name an entry that still holds
  * another flow. Free ways are read from the hardware, since entries survive a
  * warm restart. That the engine searches every way of a bucket is not verified.
- * A cookie already held reuses its slot, its old entries zeroed first:
- * netfilter offers a flow once to each device of its flowtable.
+ * A cookie already held reuses its record, its old entries zeroed first:
+ * netfilter offers a flow once to each device of its flowtable. A new record is
+ * dropped again if the flow is declined.
  */
 static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 				 u32 lip, u16 lport, u32 rip, u16 rport,
@@ -6248,9 +6332,11 @@ static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 	u32 naptr[RTL9602C_L3TBL_DATA_WORDS] = {};
 	u32 zero[RTL9602C_L3TBL_DATA_WORDS] = {};
 	unsigned int naptr_words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_NAPT_IN];
-	unsigned int bucket, way, slot, i, inbucket, rway, free_way;
+	unsigned int bucket, way, inbucket, rway, free_way;
 	unsigned int naptr_idx = 0;
-	unsigned int wan = 0, old_wan = 0, old_ports = 0;
+	unsigned int wan = 0, old_wan = 0;
+	struct rtl9602c_l34_flow *f;
+	bool created = false;
 	int extidx, err = -ENOSPC;
 
 	bucket = rtl9602c_napt_bucket(lip, lport, rip, rport, tcp);
@@ -6287,28 +6373,24 @@ static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 		}
 	}
 
-	/* The cookie's slot, its old entries zeroed, or a free one. */
-	slot = UINT_MAX;
-	for (i = 0; i < ARRAY_SIZE(p->l34_flow); i++)
-		if (p->l34_flow[i].used && p->l34_flow[i].cookie == cookie) {
-			slot = i;
-			break;
-		}
-	if (slot != UINT_MAX) {
-		old_wan = p->l34_flow[slot].wan;
-		old_ports = p->l34_flow[slot].ports;
+	/* The cookie's record, its old entries zeroed, or a new one. */
+	f = rtl9602c_l34_flow_find(p, cookie);
+	if (f) {
+		old_wan = f->wan;
 		rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NAPT,
-				       p->l34_flow[slot].napt, zero, 1);
+				       f->napt, zero, 1);
 		rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NAPT_IN,
-				       p->l34_flow[slot].naptr, zero,
-				       naptr_words);
+				       f->naptr, zero, naptr_words);
 	} else {
-		for (i = 0; i < ARRAY_SIZE(p->l34_flow); i++)
-			if (!p->l34_flow[i].used)
-				break;
-		if (i == ARRAY_SIZE(p->l34_flow))
+		f = rtl9602c_l34_flow_new(p, cookie);
+		if (IS_ERR(f)) {
+			err = PTR_ERR(f);
+			if (err == -ENOSPC)
+				pr_debug("<flow> %u flows held, as many as the engine has entries\n",
+					 p->l34_flows_n);
 			goto out;
-		slot = i;
+		}
+		created = true;
 	}
 
 	for (way = 0; way < RTL9602C_NAPT_WAYS; way++) {
@@ -6389,19 +6471,21 @@ static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 	if (old_wan && p->l34_pppoe[old_wan].refs)
 		p->l34_pppoe[old_wan].refs--;
 
-	p->l34_flow[slot].cookie = cookie;
-	p->l34_flow[slot].napt = bucket * RTL9602C_NAPT_WAYS + way;
-	p->l34_flow[slot].naptr = naptr_idx;
-	p->l34_flow[slot].wan = wan;
+	f->napt = bucket * RTL9602C_NAPT_WAYS + way;
+	f->naptr = naptr_idx;
+	f->wan = wan;
 
 	/* Owned by every port whose block offered it. */
-	p->l34_flow[slot].ports = old_ports | (port >= 0 ? BIT(port) : 0);
-	p->l34_flow[slot].used = true;
+	if (port >= 0)
+		f->ports |= BIT(port);
 
-	pr_debug("<flow> %pI4:%u -> %pI4:%u as %pI4:%u, slot %u, bucket %u way %u, napt-in %u (inbound bucket %u), digest %04x\n",
-		 &lip, lport, &rip, rport, &extip, extport, slot, bucket, way,
-		 naptr_idx, inbucket, rtl9602c_napt_rem_hash(rip, rport));
+	pr_debug("<flow> %pI4:%u -> %pI4:%u as %pI4:%u, napt %u (bucket %u way %u), napt-in %u (inbound bucket %u), digest %04x, %u flow(s) held\n",
+		 &lip, lport, &rip, rport, &extip, extport, f->napt, bucket,
+		 way, naptr_idx, inbucket, rtl9602c_napt_rem_hash(rip, rport),
+		 p->l34_flows_n);
 out:
+	if (err && created)
+		rtl9602c_l34_flow_forget(p, f);
 	mutex_unlock(&p->flow_lock);
 	return err;
 }
@@ -6425,30 +6509,28 @@ static bool rtl9602c_l34_trf_take(struct rtl9602c_priv *p, unsigned int napt)
 }
 
 /*
- * Free slot @i: the outbound entry zeroed, then the inbound one; the flow's hit
+ * Free flow @f: the outbound entry zeroed, then the inbound one; the flow's hit
  * bit taken; the PPPoE WAN's reference dropped, its rows kept for the next
- * flow.
+ * flow; the record forgotten.
  */
-static int rtl9602c_l34_flow_free(struct rtl9602c_priv *p, unsigned int i)
+static int rtl9602c_l34_flow_free(struct rtl9602c_priv *p,
+				  struct rtl9602c_l34_flow *f)
 {
 	unsigned int naptr_words =
 		rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_NAPT_IN];
 	u32 zero[RTL9602C_L3TBL_DATA_WORDS] = {};
-	unsigned int wan = p->l34_flow[i].wan;
+	unsigned int wan = f->wan;
 	int e;
 
 	e = rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NAPT,
-				   p->l34_flow[i].napt, zero, 1);
+				   f->napt, zero, 1);
 	if (!e)
 		e = rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NAPT_IN,
-					   p->l34_flow[i].naptr, zero,
-					   naptr_words);
+					   f->naptr, zero, naptr_words);
 	if (wan && p->l34_pppoe[wan].refs)
 		p->l34_pppoe[wan].refs--;
-	rtl9602c_l34_trf_take(p, p->l34_flow[i].napt);
-	p->l34_flow[i].wan = 0;
-	p->l34_flow[i].ports = 0;
-	p->l34_flow[i].used = false;
+	rtl9602c_l34_trf_take(p, f->napt);
+	rtl9602c_l34_flow_forget(p, f);
 	return e;
 }
 
@@ -6464,14 +6546,13 @@ static int rtl9602c_l34_flow_stats(struct rtl9602c_priv *p,
 				   struct flow_cls_offload *cls)
 {
 	bool held = false, used = false;
-	unsigned int i;
+	struct rtl9602c_l34_flow *f;
 
 	mutex_lock(&p->flow_lock);
-	for (i = 0; i < ARRAY_SIZE(p->l34_flow); i++) {
-		if (!p->l34_flow[i].used || p->l34_flow[i].cookie != cls->cookie)
-			continue;
+	f = rtl9602c_l34_flow_find(p, cls->cookie);
+	if (f) {
 		held = true;
-		used |= rtl9602c_l34_trf_take(p, p->l34_flow[i].napt);
+		used = rtl9602c_l34_trf_take(p, f->napt);
 	}
 	mutex_unlock(&p->flow_lock);
 
@@ -6485,39 +6566,35 @@ static int rtl9602c_l34_flow_stats(struct rtl9602c_priv *p,
 
 static int rtl9602c_l34_flow_del(struct rtl9602c_priv *p, unsigned long cookie)
 {
-	unsigned int i;
+	struct rtl9602c_l34_flow *f;
 	int err = -ENOENT;
 
 	mutex_lock(&p->flow_lock);
-	for (i = 0; i < ARRAY_SIZE(p->l34_flow); i++) {
-		int e;
-
-		if (!p->l34_flow[i].used || p->l34_flow[i].cookie != cookie)
-			continue;
-		e = rtl9602c_l34_flow_free(p, i);
-		if (err == -ENOENT || !err)
-			err = e;
-	}
+	f = rtl9602c_l34_flow_find(p, cookie);
+	if (f)
+		err = rtl9602c_l34_flow_free(p, f);
 	mutex_unlock(&p->flow_lock);
 	return err;
 }
 
 /*
  * The flow block of @port is gone: the port no longer owns its flows, and a
- * flow no remaining block owns is freed.
+ * flow no remaining block owns is freed. Rare enough to walk every record.
  */
 static void rtl9602c_l34_flows_release_port(struct rtl9602c_priv *p, int port)
 {
-	unsigned int i, freed = 0;
+	struct rtl9602c_l34_flow *f;
+	struct hlist_node *tmp;
+	unsigned int bkt, freed = 0;
 
 	mutex_lock(&p->flow_lock);
-	for (i = 0; i < ARRAY_SIZE(p->l34_flow); i++) {
-		if (!p->l34_flow[i].used || !(p->l34_flow[i].ports & BIT(port)))
+	hash_for_each_safe(p->l34_flows, bkt, tmp, f, node) {
+		if (!(f->ports & BIT(port)))
 			continue;
-		p->l34_flow[i].ports &= ~BIT(port);
-		if (p->l34_flow[i].ports)
+		f->ports &= ~BIT(port);
+		if (f->ports)
 			continue;
-		rtl9602c_l34_flow_free(p, i);
+		rtl9602c_l34_flow_free(p, f);
 		freed++;
 	}
 	mutex_unlock(&p->flow_lock);

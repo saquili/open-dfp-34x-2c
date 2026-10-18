@@ -593,8 +593,9 @@ struct rtl9602c_field {
 
 /*
  * Outbound NAPT entry, four ways to a hash bucket, holding the index of its
- * inbound entry.
+ * inbound entry. The table has 4096 entries, and the inbound one as many.
  */
+#define RTL9602C_NAPT_ENTRIES		4096
 #define RTL9602C_NAPT_WAYS		4
 #define RTL9602C_NAPT_INBOUND_IDX	RTL9602C_FIELD(0, 12)
 #define RTL9602C_NAPT_VALID		RTL9602C_FIELD(12, 1)
@@ -1527,6 +1528,7 @@ enum rtl9602c_optics_limit {
 #include <linux/gpio/consumer.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/workqueue.h>
+#include <linux/hashtable.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
 #include <linux/bitops.h>
@@ -1663,6 +1665,34 @@ struct rtl9602c_l34_src_wan {
 
 /* The PPPoE WANs of the routed hosts' own tables: the rows but the default route's. */
 #define RTL9602C_L34_SRC_WANS	6
+
+/**
+ * struct rtl9602c_l34_flow - the record of a flow the L3/NAT engine carries
+ * @node: its place in rtl9602c_priv.l34_flows, hashed by @cookie
+ * @cookie: the flow rule's cookie
+ * @napt: its outbound NAPT entry
+ * @naptr: its inbound NAPT entry
+ * @wan: its PPPoE WAN, 0 for none
+ * @ports: the ports whose flow blocks offered it
+ *
+ * One per flow, from rtl9602c_priv.l34_flow_cache: 20 bytes on this 32-bit
+ * CPU, 24 in the cache.
+ */
+struct rtl9602c_l34_flow {
+	struct hlist_node	node;
+	unsigned long		cookie;
+	u16			napt;
+	u16			naptr;
+	u8			wan;
+	u8			ports;
+};
+
+/*
+ * The heads of rtl9602c_priv.l34_flows, as a power of two: 256, 1 KiB on this
+ * CPU. A head holds four records on average at netfilter's default limit of
+ * 1024 connections on this board, and sixteen at the engine's 4096 flows.
+ */
+#define RTL9602C_L34_FLOW_HASH_BITS	8
 
 /**
  * struct rtl9602c_pppoe_wan - a PPPoE WAN of the L3/NAT engine
@@ -1961,21 +1991,22 @@ struct rtl9602c_priv {
 	 * entries' bits at once
 	 */
 	u32 l34_trf[RTL9602C_NAPT_HIT_WORDS];
-	/** @l34_flow: the flows the engine carries, one slot each */
-	struct {
-		/** @l34_flow.cookie: the flow rule's cookie */
-		unsigned long	cookie;
-		/** @l34_flow.napt: its outbound NAPT entry */
-		u16		napt;
-		/** @l34_flow.naptr: its inbound NAPT entry */
-		u16		naptr;
-		/** @l34_flow.wan: its PPPoE WAN, 0 for none */
-		u8		wan;
-		/** @l34_flow.ports: the ports whose flow blocks offered it */
-		u8		ports;
-		/** @l34_flow.used: the slot holds a flow */
-		bool		used;
-	} l34_flow[8];
+	/**
+	 * @l34_flows: the records of the flows the engine carries, struct
+	 * rtl9602c_l34_flow, hashed by cookie
+	 */
+	DECLARE_HASHTABLE(l34_flows, RTL9602C_L34_FLOW_HASH_BITS);
+	/**
+	 * @l34_flows_n: the records in @l34_flows, at most
+	 * %RTL9602C_NAPT_ENTRIES
+	 */
+	unsigned int l34_flows_n;
+	/**
+	 * @l34_flow_cache: where the records come from; NULL before
+	 * rtl9602c_l34_init(), after rtl9602c_l34_fini(), or when it could not
+	 * be made
+	 */
+	struct kmem_cache *l34_flow_cache;
 
 	/** @gem_flows: the flows GEM ports hold; the MAC tells the switch of each */
 	DECLARE_BITMAP(gem_flows, RTL9602C_GPON_NUM_FLOW);
