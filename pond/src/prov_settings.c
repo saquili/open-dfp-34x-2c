@@ -43,7 +43,7 @@
  * keeps its address: the one it has from its network's DHCP server becomes
  * its fixed address in the same write when it has none, as the panel's
  * stand-in does it. A network removed takes its forwards and its DMZs with
- * it.
+ * it, and so does a fixed address taken away, those of its device.
  */
 
 #define _GNU_SOURCE
@@ -1380,9 +1380,32 @@ int prov_ipoe_set(const char *val, char *err, size_t errcap)
 }
 
 /*
+ * The forwards to the device @mac of network @lan and the DMZ that is the
+ * device removed in @change, which holds @len bytes of @cap, of the settings
+ * @text: they go to its fixed address, which goes.
+ */
+static void device_drop(const char *text, int lan, const char *mac, char *change,
+			size_t cap, size_t *len)
+{
+	char conn[16], m[18];
+	struct fwd w;
+
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int d, l;
+
+		if (fwd_of(p, &w) && w.lan == lan && !strcasecmp(w.mac, mac))
+			append(change, cap, len, "FORWARD%d=\n", w.n);
+		else if (dmz_of(p, &d, conn, &l, m) && l == lan && !strcasecmp(m, mac))
+			append(change, cap, len, "DMZ%d=\n", d);
+	}
+}
+
+/*
  * A device's fixed address: LAN, the network, MAC, the device, IP, the
  * address it gets, empty or absent to take it away, and NAME. A device has
- * one in a network: a new IP replaces the one it had.
+ * one in a network: a new IP replaces the one it had. A fixed address taken
+ * away takes the forwards to its device and the DMZ that is its device with
+ * it, which onu-config refuses to keep without it.
  */
 int prov_fixed_write(const char *val, char *err, size_t errcap,
 		     prov_done done, void *ctx)
@@ -1422,8 +1445,10 @@ int prov_fixed_write(const char *val, char *err, size_t errcap,
 	}
 	change[0] = '\0';
 	if (!a || !*a) {
-		if (n)
+		if (n) {
 			append(change, sizeof(change), &len, "FIXED%d=\n", n);
+			device_drop(text, *l - '0', macv, change, sizeof(change), &len);
+		}
 		return prov_settings_write(change, err, errcap, done, ctx);
 	}
 	for (int f = 1; f <= FIXED_MAX && !n; f++)

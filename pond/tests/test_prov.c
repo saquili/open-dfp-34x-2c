@@ -2587,9 +2587,17 @@ static void test_forwards(void)
 			       "FORWARD1_NAME=WWW\n") &&
 		      !file_has("/run/onu.conf", "FORWARD3"),
 	      "a forward is changed by its ID");
-	check(prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a3\nIP=\n", err, sizeof(err)) == -EINVAL &&
-		      strstr(err, "forward 1: the device 00:00:5e:00:53:a3 has no fixed address"),
-	      "the fixed address of a forward's device stays while the forward does");
+	/* onu-config's own rule stays: the settings alone are refused. */
+	check(prov_settings_set("FIXED1=\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "forward 1: the device 00:00:5e:00:53:a3 has no fixed address") &&
+		      file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a3/192.168.1.100"),
+	      "onu-config still refuses a forward whose device has no fixed address");
+	/* A new address for the device keeps its forwards. */
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a3\nIP=192.168.1.101\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a3/192.168.1.101") &&
+		      file_has("/run/onu.conf", "FORWARD1=") && file_has("/run/onu.conf", "FORWARD2="),
+	      "a fixed address changed keeps the forwards to its device");
 
 	rc = prov_dmz_set("CONN=pppoe:1\nLAN=1\nMAC=00:00:5e:00:53:a3\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
@@ -2619,7 +2627,32 @@ static void test_forwards(void)
 		      file_has("/run/onu.conf", "FORWARD1="),
 	      "CONN= takes a forward away");
 
+	/*
+	 * A fixed address taken away takes the forwards to its device and the
+	 * DMZ that is its device with it, and leaves another device's.
+	 */
 	rc = prov_dmz_set("CONN=pppoe:1\nLAN=1\nMAC=00:00:5e:00:53:a5\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_forward_set("NAME=Gra\nCONN=pppoe:1\nPROTO=udp\nEXT_FROM=5000\nLAN=1\n"
+			       "MAC=00:00:5e:00:53:a5\n",
+			       err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "FORWARD2=pppoe:1/udp/5000/1/00:00:5e:00:53:a5") &&
+		      file_has("/run/onu.conf", "DMZ1=pppoe:1/1/00:00:5e:00:53:a5"),
+	      "a device with a fixed address, a forward and the DMZ");
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5E:00:53:A5\nIP=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "00:00:5e:00:53:a5") &&
+		      !file_has("/run/onu.conf", "FORWARD2") && !file_has("/run/onu.conf", "DMZ") &&
+		      !strstr(s, "00:00:5e:00:53:a5") && strstr(s, "\"dmz\":[]"),
+	      "its fixed address taken away takes its forward and the DMZ in the same write");
+	check(file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a3/192.168.1.101") &&
+		      file_has("/run/onu.conf", "FORWARD1=pppoe:1/tcp/443/1/00:00:5e:00:53:a3"),
+	      "and leaves another device's fixed address and forward");
+
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a5\nIP=192.168.1.50\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_dmz_set("CONN=pppoe:1\nLAN=1\nMAC=00:00:5e:00:53:a5\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	rc |= prov_lan_set("ID=1\nCONN=\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));

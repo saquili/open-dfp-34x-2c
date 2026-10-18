@@ -389,6 +389,8 @@ export const en = {
     pin: "Pin",
     pinTitle: "Pin the address",
     unpin: "Unpin",
+    unpinConfirm:
+      "Unpin {name}? The port forwards and the DMZ that go to this device are removed with its fixed address.",
     fixedMark: "fixed address",
     fixedOn: "fixed",
     off: "off",

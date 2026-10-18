@@ -40,8 +40,10 @@ import { ip4, net4 } from "../lib/ipv4";
 import { subnet64, subnets64 } from "../lib/ipv6";
 import { ipv4, ipv4Cidr, mac, required, upTo, vlan, z } from "../lib/schemas";
 import {
+  dmzs,
   downVlan,
   fixed,
+  forwards,
   type LanView,
   lans,
   leases,
@@ -898,8 +900,15 @@ function FixedForm({
       { LAN: v.lan, MAC: v.mac.toLowerCase(), IP: v.ip, NAME: v.name },
       { onSuccess: onClose },
     );
-  const unpin = () =>
-    d && change.mutate({ LAN: String(d.lan), MAC: d.mac, IP: "" }, { onSuccess: onClose });
+  /* The forwards to the device and the DMZ that is it go with its fixed address. */
+  const used =
+    !!d &&
+    (forwards(live).some((f) => f.lan === d.lan && f.mac === d.mac) ||
+      dmzs(live).some((y) => y.lan === d.lan && y.mac === d.mac));
+  const unpin = () => {
+    if (!d || (used && !window.confirm(t("lan.unpinConfirm", { name: d.name ?? d.mac })))) return;
+    change.mutate({ LAN: String(d.lan), MAC: d.mac, IP: "" }, { onSuccess: onClose });
+  };
   const title = editing
     ? t("lan.fixedEditTitle", { name: d?.name ?? d?.mac ?? "" })
     : d
