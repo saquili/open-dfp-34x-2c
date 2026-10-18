@@ -24,7 +24,7 @@ static int checks;
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 static char g_err[256];
-static char g_out[8192];
+static char g_out[16384];
 
 /* Take the lines of @text over the defaults, as onu-config check does: 0, or
  * -1 at the first line that is not taken, or -2 when the whole makes no
@@ -34,7 +34,7 @@ static unsigned int g_mgmt[2];
 
 static int judge(struct settings *s, const char *text)
 {
-	char copy[4096], *line, *save = NULL;
+	char copy[16384], *line, *save = NULL;
 
 	snprintf(copy, sizeof(copy), "%s", text);
 	settings_defaults(s);
@@ -586,6 +586,124 @@ static void test_ipoe(void)
 	CHECK(judge(&s, KEEPS NET1 DHCP2 "LAN2_CONN=ipoe:2\nLAN2_ADDRESS=10.0.0.1/24\n") == 0);
 }
 
+/* Network 1's device DEV, with its fixed address, and network 2 by a connection. */
+#define PINNED KEEPS NET1 "FIXED1=1/" DEV "/192.168.1.10\n"
+#define NET2 DHCP2 "LAN2_CONN=ipoe:2\nLAN2_VLAN=200\nLAN2_ADDRESS=10.0.0.1/24\n" \
+	     "FIXED2=2/00:00:5e:00:53:a2/10.0.0.20\n"
+
+static void test_forwards(void)
+{
+	static const char *const bad[] = {
+		"FORWARD0=pppoe:1/tcp/443/1/" DEV "/443/on",
+		"FORWARD97=pppoe:1/tcp/443/1/" DEV "/443/on",
+		"FORWARD01=pppoe:1/tcp/443/1/" DEV "/443/on",
+		"FORWARD1_FOO=x",
+		"FORWARD1=pppoe:8/tcp/443/1/" DEV "/443/on",
+		"FORWARD1=lan:1/tcp/443/1/" DEV "/443/on",
+		"FORWARD1=pppoe:1/icmp/443/1/" DEV "/443/on",
+		"FORWARD1=pppoe:1/tcp/0/1/" DEV "/443/on",
+		"FORWARD1=pppoe:1/tcp/65536/1/" DEV "/443/on",
+		"FORWARD1=pppoe:1/tcp/0443/1/" DEV "/443/on",
+		"FORWARD1=pppoe:1/tcp/9000-8000/1/" DEV "/9000/on",
+		"FORWARD1=pppoe:1/tcp/8000-/1/" DEV "/8000/on",
+		"FORWARD1=pppoe:1/tcp/443/9/" DEV "/443/on",
+		"FORWARD1=pppoe:1/tcp/443/1/01:00:5e:00:00:01/443/on",
+		"FORWARD1=pppoe:1/tcp/443/1/" DEV "/0/on",
+		"FORWARD1=pppoe:1/tcp/65000-65010/1/" DEV "/65530/on",
+		"FORWARD1=pppoe:1/tcp/443/1/" DEV "/443/yes",
+		"FORWARD1=pppoe:1/tcp/443/1/" DEV "/443",
+		"FORWARD1=pppoe:1/tcp/443/1/" DEV "/443/on/x",
+		"FORWARD1_NAME=a\tb",
+		"DMZ0=pppoe:1/1/" DEV,
+		"DMZ8=pppoe:1/1/" DEV,
+		"DMZ1_NAME=x",
+		"DMZ1=pppoe:1/1",
+		"DMZ1=pppoe:1/0/" DEV,
+		"DMZ1=ipoe:8/1/" DEV,
+		"DMZ1=pppoe:1/1/" DEV "/x",
+	};
+	struct settings s;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		int rc = judge(&s, bad[i]);
+
+		CHECK(rc == -1 && *g_err);
+		if (rc != -1)
+			printf("    taken: %s\n", bad[i]);
+	}
+
+	/* A forward and a DMZ are written as they are, with a name for people. */
+	CHECK(judge(&s, PINNED "FORWARD96=pppoe:1/both/8000-8010/1/" DEV "/8000/off\n"
+			"FORWARD96_NAME=Kamera w gara\xc5\xbcu\n"
+			"FORWARD2=pppoe:1/udp/3074/1/00:00:5E:00:53:A1/3075/on\n"
+			"DMZ7=pppoe:1/1/" DEV "\n") == 0);
+	CHECK(has("FORWARD96=pppoe:1/both/8000-8010/1/" DEV "/8000/off") &&
+	      has("FORWARD96_NAME=Kamera w gara\xc5\xbcu") &&
+	      has("FORWARD2=pppoe:1/udp/3074/1/00:00:5E:00:53:A1/3075/on") &&
+	      !strstr(g_out, "FORWARD2_NAME") && has("DMZ7=pppoe:1/1/" DEV));
+	/* An empty one is none, its name gone with it. */
+	CHECK(judge(&s, PINNED "FORWARD3=pppoe:1/tcp/443/1/" DEV "/443/on\nFORWARD3_NAME=x\n"
+			"FORWARD3=\nDMZ1=pppoe:1/1/" DEV "\nDMZ1=\n") == 0 &&
+	      !strstr(g_out, "FORWARD3") && !strstr(g_out, "DMZ1"));
+
+	/* A port alone may go to another; a range keeps its numbers. */
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8080/1/" DEV "/80/on\n") == 0);
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8000-8010/1/" DEV "/8000/on\n") == 0);
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8000-8010/1/" DEV "/9000/on\n") == -2 &&
+	      strstr(g_err, "forward 1: a range of ports goes to the ports of the same numbers"));
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/65530-65535/1/" DEV "/65530/on\n") == 0);
+
+	/* Its device: in a network out by its connection, at a fixed address. */
+	CHECK(judge(&s, KEEPS NET1 "FORWARD1=pppoe:1/tcp/443/1/" DEV "/443/on\n") == -2 &&
+	      strstr(g_err, "forward 1: the device " DEV " has no fixed address in network 1"));
+	CHECK(judge(&s, PINNED "FORWARD5=pppoe:1/tcp/443/2/" DEV "/443/on\n") == -2 &&
+	      strstr(g_err, "forward 5: network 2 is not set up"));
+	CHECK(judge(&s, PINNED NET2 "FORWARD1=pppoe:1/tcp/443/2/00:00:5e:00:53:a2/443/on\n") == -2 &&
+	      strstr(g_err, "forward 1: network 2 does not go out by pppoe:1"));
+	CHECK(judge(&s, PINNED NET2 "FORWARD1=ipoe:2/tcp/443/2/00:00:5e:00:53:a2/443/on\n") == 0);
+	/* One kept but not in force is judged as well. */
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/443/1/00:00:5e:00:53:a9/443/off\n") == -2 &&
+	      strstr(g_err, "no fixed address"));
+
+	/* No two forwards of a connection take a port of one protocol. */
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8000-8010/1/" DEV "/8000/on\n"
+			"FORWARD2=pppoe:1/tcp/8010/1/" DEV "/80/off\n") == -2 &&
+	      strstr(g_err, "forwards 1 and 2 take the same ports of pppoe:1"));
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/both/53/1/" DEV "/53/on\n"
+			"FORWARD2=pppoe:1/udp/53/1/" DEV "/53/on\n") == -2);
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/53/1/" DEV "/53/on\n"
+			"FORWARD2=pppoe:1/udp/53/1/" DEV "/53/on\n"
+			"FORWARD3=pppoe:1/tcp/54-60/1/" DEV "/54/on\n") == 0);
+	CHECK(judge(&s, PINNED NET2 "FORWARD1=pppoe:1/tcp/443/1/" DEV "/443/on\n"
+			"FORWARD2=ipoe:2/tcp/443/2/00:00:5e:00:53:a2/443/on\n") == 0);
+
+	/* A DMZ: a device as a forward's, and one for a connection. */
+	CHECK(judge(&s, PINNED NET2 "DMZ1=pppoe:1/1/" DEV "\nDMZ2=ipoe:2/2/00:00:5e:00:53:a2\n") == 0);
+	CHECK(judge(&s, PINNED "DMZ1=pppoe:1/1/00:00:5e:00:53:a9\n") == -2 &&
+	      strstr(g_err, "DMZ 1: the device 00:00:5e:00:53:a9 has no fixed address"));
+	CHECK(judge(&s, PINNED NET2 "DMZ3=pppoe:1/2/00:00:5e:00:53:a2\n") == -2 &&
+	      strstr(g_err, "DMZ 3: network 2 does not go out by pppoe:1"));
+	CHECK(judge(&s, PINNED "FIXED2=1/00:00:5e:00:53:a2/192.168.1.20\n"
+			"DMZ1=pppoe:1/1/" DEV "\nDMZ4=pppoe:1/1/00:00:5e:00:53:a2\n") == -2 &&
+	      strstr(g_err, "DMZs 1 and 4 are of one connection, pppoe:1"));
+
+	/* The most forwards there may be, each with a name, and a DMZ. */
+	{
+		static char text[16384];
+		size_t at = (size_t)snprintf(text, sizeof(text), "%s", PINNED "DMZ1=pppoe:1/1/" DEV "\n");
+
+		for (int i = 1; i <= SETTINGS_FORWARDS; i++)
+			at += (size_t)snprintf(text + at, sizeof(text) - at,
+					       "FORWARD%d=pppoe:1/both/%d-%d/1/" DEV "/%d/on\n"
+					       "FORWARD%d_NAME=Forward %d\n",
+					       i, 10000 + 10 * i, 10009 + 10 * i, 10000 + 10 * i,
+					       i, i);
+		CHECK(at < sizeof(text) && judge(&s, text) == 0 &&
+		      has("FORWARD96=pppoe:1/both/10960-10969/1/" DEV "/10960/on") &&
+		      has("FORWARD96_NAME=Forward 96"));
+	}
+}
+
 int main(void)
 {
 	test_defaults();
@@ -600,6 +718,7 @@ int main(void)
 	test_lans();
 	test_fixed();
 	test_ipoe();
+	test_forwards();
 	printf("test_settings: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }

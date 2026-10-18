@@ -44,6 +44,17 @@
  * connection is none. The fixed addresses 1 to 512 are FIXEDn, "L/MAC/IP",
  * the address IP that DHCP gives the device MAC in network L, and FIXEDn_NAME;
  * an empty FIXEDn removes one.
+ *
+ * The ports forwarded from the internet to a device of a local network, 1 to
+ * 96, are FORWARDn, "CONN/PROTO/PORTS/L/MAC/PORT/ON": what comes in by the
+ * connection CONN (pppoe:N or ipoe:N), of PROTO (tcp, udp or both), to the
+ * port or the range of ports PORTS (443, or 8000-8010), goes to the device
+ * MAC of network L, which goes out by CONN, at its fixed address, to the
+ * port PORT, or for a range to the ports of the same numbers; ON is on, or
+ * off for one kept but not in force. FORWARDn_NAME is its name. An empty
+ * FORWARDn removes one. DMZn, 1 to 7, "CONN/L/MAC", is a connection's DMZ:
+ * the device that takes what comes in by it that no forward takes; an empty
+ * DMZn removes one.
  */
 
 #ifndef SETTINGS_H
@@ -62,6 +73,9 @@
 #define SETTINGS_SECRET_MAX 255
 #define SETTINGS_LANS 8
 #define SETTINGS_FIXED 512
+#define SETTINGS_FORWARDS 96
+/* A DMZ for each connection at most. */
+#define SETTINGS_DMZS SETTINGS_CONNS
 
 /* The keys of before that are not a session's, read and never written. */
 enum settings_key {
@@ -119,6 +133,12 @@ struct settings_fixed {
 	char name[SETTINGS_VALUE_MAX];
 };
 
+/* A forward: FORWARDn, "CONN/PROTO/PORTS/L/MAC/PORT/ON", and FORWARDn_NAME. */
+struct settings_forward {
+	char spec[64];
+	char name[SETTINGS_VALUE_MAX];
+};
+
 struct settings_account {
 	char user[SETTINGS_USER_MAX + 1];
 	char secret[SETTINGS_SECRET_MAX + 1];
@@ -132,6 +152,8 @@ struct settings_account {
  * @ival: the value of each key of each IPoE connection
  * @lval: the value of each key of each local network
  * @fixed: the fixed addresses
+ * @fwd: the forwards
+ * @dmz: the DMZs, DMZn: "CONN/L/MAC", empty for none
  * @legacy_lan: LAN_VLAN, the one link of before, when @had_legacy_lan
  * @had_legacy_lan: whether the set named LAN_VLAN
  */
@@ -142,6 +164,8 @@ struct settings {
 	char ival[SETTINGS_IPOE][SETTINGS_NIKEYS][SETTINGS_VALUE_MAX];
 	char lval[SETTINGS_LANS][SETTINGS_NLKEYS][SETTINGS_VALUE_MAX];
 	struct settings_fixed fixed[SETTINGS_FIXED];
+	struct settings_forward fwd[SETTINGS_FORWARDS];
+	char dmz[SETTINGS_DMZS][32];
 	char legacy_lan[SETTINGS_VALUE_MAX];
 	bool had_legacy_lan;
 	/*
@@ -217,8 +241,8 @@ size_t settings_format_defaults(char *out, size_t cap);
  * @cap: the size of @out
  *
  * The keys of each session that has an account, of each IPoE connection, of
- * each local network and the fixed addresses; never an account, nor a key of
- * before.
+ * each local network, the fixed addresses, the forwards and the DMZs; never
+ * an account, nor a key of before.
  *
  * Return: the length of the lines, which is @cap or more when they did not
  *         fit.

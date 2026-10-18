@@ -433,6 +433,108 @@ static bool fixed_spec(const char *v, int *lan, char *macv, uint32_t *ip)
 	return true;
 }
 
+/*
+ * The @n fields of @v, apart by '/', into @f: false for another number of
+ * fields, or one longer than a field holds.
+ */
+static bool fields(const char *v, int n, char (*f)[24])
+{
+	for (int i = 0; i < n; i++) {
+		size_t len = strcspn(v, "/");
+
+		if (len >= sizeof(f[i]) || (i < n - 1) != (v[len] == '/'))
+			return false;
+		memcpy(f[i], v, len);
+		f[i][len] = '\0';
+		v += len + (i < n - 1);
+	}
+	return true;
+}
+
+/* A forward's protocols. */
+#define PROTO_TCP 1
+#define PROTO_UDP 2
+
+/**
+ * struct fwd - A forward, as FORWARDn says it.
+ * @conn: the connection it comes in by, pppoe:N or ipoe:N
+ * @proto: %PROTO_TCP, %PROTO_UDP, or both
+ * @from: the first port it takes
+ * @to: the last, @from for one
+ * @lan: the device's network, from 0
+ * @mac: the device's MAC address
+ * @port: the device's port, the first of a range
+ * @on: whether it is in force
+ */
+struct fwd {
+	char conn[8];
+	int proto;
+	unsigned long from, to;
+	int lan;
+	char mac[18];
+	unsigned long port;
+	bool on;
+};
+
+/*
+ * CONN/PROTO/PORTS/L/MAC/PORT/ON: a forward. PORTS is a port, or the first
+ * and the last of a range apart by '-'; PORT, and a port after it for each
+ * one of the range, are ports too.
+ */
+static bool fwd_spec(const char *v, struct fwd *out)
+{
+	char f[7][24], *dash;
+	struct fwd w = { 0 };
+	unsigned long lan;
+
+	if (!fields(v, 7, f) || !conn(f[0], NULL, NULL))
+		return false;
+	memcpy(w.conn, f[0], strlen(f[0]) + 1);
+	if (!strcmp(f[1], "tcp"))
+		w.proto = PROTO_TCP;
+	else if (!strcmp(f[1], "udp"))
+		w.proto = PROTO_UDP;
+	else if (!strcmp(f[1], "both"))
+		w.proto = PROTO_TCP | PROTO_UDP;
+	else
+		return false;
+	dash = strchr(f[2], '-');
+	if (dash)
+		*dash = '\0';
+	if (!number(f[2], 1, 65535, &w.from) ||
+	    !number(dash ? dash + 1 : f[2], w.from, 65535, &w.to))
+		return false;
+	if (!number(f[3], 1, SETTINGS_LANS, &lan) || !mac(f[4]) ||
+	    !number(f[5], 1, 65535 - (w.to - w.from), &w.port))
+		return false;
+	if (strcmp(f[6], "on") && strcmp(f[6], "off"))
+		return false;
+	w.lan = (int)lan - 1;
+	memcpy(w.mac, f[4], sizeof(w.mac));
+	w.on = !strcmp(f[6], "on");
+	if (out)
+		*out = w;
+	return true;
+}
+
+/* CONN/L/MAC: a connection's DMZ, the device MAC of network L, from 0. */
+static bool dmz_spec(const char *v, char cn[8], int *lan, char macv[18])
+{
+	char f[3][24];
+	unsigned long l;
+
+	if (!fields(v, 3, f) || !conn(f[0], NULL, NULL) ||
+	    !number(f[1], 1, SETTINGS_LANS, &l) || !mac(f[2]))
+		return false;
+	if (cn)
+		memcpy(cn, f[0], strlen(f[0]) + 1);
+	if (lan)
+		*lan = (int)l - 1;
+	if (macv)
+		memcpy(macv, f[2], 18);
+	return true;
+}
+
 /* A user or a secret: printable, without blanks, which separate the two. */
 static bool word(const char *v, size_t max)
 {
@@ -502,17 +604,22 @@ static bool lkey_index(const char *name, int *n, int *k)
 	return false;
 }
 
-/* FIXEDn or FIXEDn_NAME: the fixed address, from 0; or false. */
-static bool fixed_key(const char *name, int *n, bool *isname)
+/*
+ * PREFIXn or PREFIXn_NAME, n from 1 to @max, an item of a list such as the
+ * fixed addresses, FIXEDn: the item, from 0; or false.
+ */
+static bool list_key(const char *name, const char *prefix, unsigned long max,
+		     int *n, bool *isname)
 {
-	const char *p = name + 5;
+	size_t plen = strlen(prefix);
+	const char *p = name + plen;
 	size_t d = strspn(p, "0123456789");
 	unsigned long v;
 
-	if (strncmp(name, "FIXED", 5) || !d || d > 3 || *p == '0')
+	if (strncmp(name, prefix, plen) || !d || d > 3 || *p == '0')
 		return false;
 	v = strtoul(p, NULL, 10);
-	if (v < 1 || v > SETTINGS_FIXED)
+	if (v < 1 || v > max)
 		return false;
 	if (!p[d])
 		*isname = false;
@@ -649,7 +756,7 @@ int settings_line(struct settings *s, const char *line, char *err,
 		snprintf(s->lval[n][k], SETTINGS_VALUE_MAX, "%s", v);
 		return 0;
 	}
-	if (fixed_key(key, &n, &user)) {
+	if (list_key(key, "FIXED", SETTINGS_FIXED, &n, &user)) {
 		struct settings_fixed *f = &s->fixed[n];
 
 		if (user ? !name(v) : *v && !fixed_spec(v, NULL, NULL, NULL)) {
@@ -660,6 +767,28 @@ int settings_line(struct settings *s, const char *line, char *err,
 			snprintf(f->name, sizeof(f->name), "%s", v);
 		else
 			snprintf(f->spec, sizeof(f->spec), "%s", v);
+		return 0;
+	}
+	if (list_key(key, "FORWARD", SETTINGS_FORWARDS, &n, &user)) {
+		struct settings_forward *f = &s->fwd[n];
+
+		if (user ? !name(v) : *v && !fwd_spec(v, NULL)) {
+			snprintf(err, errcap, "%s: not a value of it", key);
+			return -1;
+		}
+		if (user)
+			snprintf(f->name, sizeof(f->name), "%s", v);
+		else
+			snprintf(f->spec, sizeof(f->spec), "%s", v);
+		return 0;
+	}
+	/* A DMZ has no name: it is its connection's. */
+	if (list_key(key, "DMZ", SETTINGS_DMZS, &n, &user) && !user) {
+		if (*v && !dmz_spec(v, NULL, NULL, NULL)) {
+			snprintf(err, errcap, "%s: not a value of it", key);
+			return -1;
+		}
+		snprintf(s->dmz[n], sizeof(s->dmz[n]), "%s", v);
 		return 0;
 	}
 	if (!strcmp(key, LEGACY_LAN)) {
@@ -1049,6 +1178,107 @@ static bool fixed_coherent(const struct settings *s, char *err, size_t errcap)
 	return true;
 }
 
+/* Whether the device @macv of network @lan, from 0, has a fixed address. */
+static bool has_fixed(const struct settings *s, int lan, const char *macv)
+{
+	char m[18];
+	int l;
+
+	for (int i = 0; i < SETTINGS_FIXED; i++)
+		if (*s->fixed[i].spec && fixed_spec(s->fixed[i].spec, &l, m, NULL) &&
+		    l == lan && !strcasecmp(m, macv))
+			return true;
+	return false;
+}
+
+/*
+ * Whether the device @macv of network @lan, from 0, may take what comes in by
+ * the connection @cn: its network goes out by the connection, so that its
+ * answers leave by the way they came, and it has a fixed address, which a
+ * new lease does not move. @what and @i name the forward or the DMZ.
+ */
+static bool device_coherent(const struct settings *s, const char *what, int i,
+			    const char *cn, int lan, const char *macv, char *err,
+			    size_t errcap)
+{
+	if (!lan_on(s, lan)) {
+		snprintf(err, errcap, "%s %d: network %d is not set up", what,
+			 i + 1, lan + 1);
+		return false;
+	}
+	if (strcmp(s->lval[lan][SET_L_CONN], cn)) {
+		snprintf(err, errcap, "%s %d: network %d does not go out by %s",
+			 what, i + 1, lan + 1, cn);
+		return false;
+	}
+	if (!has_fixed(s, lan, macv)) {
+		snprintf(err, errcap,
+			 "%s %d: the device %s has no fixed address in network %d",
+			 what, i + 1, macv, lan + 1);
+		return false;
+	}
+	return true;
+}
+
+/*
+ * A forward goes to a device of a network that goes out by its connection.
+ * A range of ports goes to the ports of the same numbers: the kernel's NAT
+ * moves a range by no offset (nft_nat has no base port). No two forwards of
+ * a connection take a port of one protocol. A DMZ's device is as a
+ * forward's, and a connection has one DMZ.
+ */
+static bool forwards_coherent(const struct settings *s, char *err, size_t errcap)
+{
+	for (int i = 0; i < SETTINGS_FORWARDS; i++) {
+		struct fwd a, b;
+
+		if (!*s->fwd[i].spec)
+			continue;
+		(void)fwd_spec(s->fwd[i].spec, &a);
+		if (!device_coherent(s, "forward", i, a.conn, a.lan, a.mac, err,
+				     errcap))
+			return false;
+		if (a.to > a.from && a.port != a.from) {
+			snprintf(err, errcap,
+				 "forward %d: a range of ports goes to the ports of the same numbers",
+				 i + 1);
+			return false;
+		}
+		for (int j = i + 1; j < SETTINGS_FORWARDS; j++) {
+			if (!*s->fwd[j].spec)
+				continue;
+			(void)fwd_spec(s->fwd[j].spec, &b);
+			if (!strcmp(a.conn, b.conn) && (a.proto & b.proto) &&
+			    a.from <= b.to && b.from <= a.to) {
+				snprintf(err, errcap,
+					 "forwards %d and %d take the same ports of %s",
+					 i + 1, j + 1, a.conn);
+				return false;
+			}
+		}
+	}
+	for (int i = 0; i < SETTINGS_DMZS; i++) {
+		char ca[8], cb[8], m[18];
+		int lan;
+
+		if (!*s->dmz[i])
+			continue;
+		(void)dmz_spec(s->dmz[i], ca, &lan, m);
+		if (!device_coherent(s, "DMZ", i, ca, lan, m, err, errcap))
+			return false;
+		for (int j = i + 1; j < SETTINGS_DMZS; j++) {
+			if (*s->dmz[j] && dmz_spec(s->dmz[j], cb, NULL, NULL) &&
+			    !strcmp(ca, cb)) {
+				snprintf(err, errcap,
+					 "DMZs %d and %d are of one connection, %s",
+					 i + 1, j + 1, ca);
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 {
 	for (int n = 0; n < SETTINGS_SESSIONS; n++) {
@@ -1115,7 +1345,7 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 		}
 	}
 	return ipoe_coherent(s, err, errcap) && lans_coherent(s, err, errcap) &&
-	       fixed_coherent(s, err, errcap);
+	       fixed_coherent(s, err, errcap) && forwards_coherent(s, err, errcap);
 }
 
 size_t settings_format_defaults(char *out, size_t cap)
@@ -1190,5 +1420,23 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 						len < cap ? cap - len : 0,
 						"FIXED%d_NAME=%s\n", i + 1, f->name);
 	}
+	for (int i = 0; i < SETTINGS_FORWARDS; i++) {
+		const struct settings_forward *f = &s->fwd[i];
+
+		if (!*f->spec)
+			continue;
+		len += (size_t)snprintf(out + (len < cap ? len : cap),
+					len < cap ? cap - len : 0,
+					"FORWARD%d=%s\n", i + 1, f->spec);
+		if (*f->name)
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0,
+						"FORWARD%d_NAME=%s\n", i + 1, f->name);
+	}
+	for (int i = 0; i < SETTINGS_DMZS; i++)
+		if (*s->dmz[i])
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0,
+						"DMZ%d=%s\n", i + 1, s->dmz[i]);
 	return len;
 }
