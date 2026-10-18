@@ -176,6 +176,15 @@ password must change; ``POST /api/auth/logout`` ends the session; ``POST
 /api/set/ID`` read and change values; ``POST /api/system/restart`` restarts the
 stick a second after it answers.
 
+A value is written straight into the send buffer of the connection that asked
+for it, which grows with the reply and goes back once the reply has gone: the
+daemon keeps no buffer of its own for values, and a large one costs memory
+only while it is sent. A value is at most 1.25 MiB of JSON, which the largest
+settings fit with room to spare (``src/value.h``); one that would be larger is
+not served cut short, but answered with an error that says so (500, and in
+``/api/getm`` an object ``{"error": "too large", "detail"}`` in its place), and
+the daemon's log says so too.
+
 The updates go through ``onu-update`` (``docs/handbook/updating.rst``). The
 value ``firmware`` is its status: which bank runs and which starts next, a trial
 under way or one that failed, each bank's state, version, time and sizes, and an

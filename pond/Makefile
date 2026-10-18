@@ -27,7 +27,8 @@ MG_FLAGS := -DMG_ENABLE_PACKED_FS=0 -DMG_MAX_RECV_SIZE=262144
 LDLIBS  += -lmnl
 
 PROV := prov.o prov_file.o prov_net.o prov_mtd.o prov_netlink.o prov_settings.o \
-        prov_identity.o prov_firmware.o prov_omci.o prov_system.o table.o tls.o cert.o
+        prov_identity.o prov_firmware.o prov_omci.o prov_system.o table.o tls.o cert.o \
+        value.o
 OBJS := $(addprefix $(BUILD)/src/,pond.o auth.o changes.o firmware.o mgmt.o $(PROV)) $(BUILD)/mongoose.o
 
 .PHONY: all check clean

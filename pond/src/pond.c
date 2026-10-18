@@ -40,6 +40,7 @@
 #include "prov.h"
 #include "providers.h"
 #include "tls.h"
+#include "value.h"
 
 #include "mongoose.h"
 
@@ -59,8 +60,6 @@
 #include <sys/syscall.h>
 #endif
 
-#define POND_VALUE_CAP (64 * 1024)
-#define POND_REPLY_CAP (96 * 1024)
 #define POND_SET_CAP 4096
 
 /*
@@ -112,70 +111,14 @@ static void reply_err(struct mg_connection *c, int code, const char *what,
 	reply_json(c, code, body);
 }
 
-static void api_schema(struct mg_connection *c)
-{
-	static char body[POND_REPLY_CAP];
-	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
-	size_t i;
-	bool first = true;
-
-	pv_open(&b, '{');
-	pv_key(&b, "items");
-	pv_open(&b, '[');
-	for (i = 0; i < pond_nprovs; i++) {
-		const struct prov *p = &pond_provs[i];
-
-		if (!prov_present(p))
-			continue;
-		if (!first)
-			pv_comma(&b);
-		first = false;
-		pv_open(&b, '{');
-		pv_key(&b, "id");
-		pv_str(&b, p->id);
-		pv_comma(&b);
-		pv_key(&b, "cat");
-		pv_str(&b, p->cat);
-		pv_comma(&b);
-		pv_key(&b, "label");
-		pv_str(&b, p->label);
-		pv_comma(&b);
-		pv_key(&b, "readable");
-		pv_bool(&b, p->read != NULL);
-		pv_comma(&b);
-		pv_key(&b, "writable");
-		pv_bool(&b, p->write != NULL);
-		pv_comma(&b);
-
-		pv_key(&b, "volatile");
-		pv_bool(&b, (p->flags & PROV_VOLATILE) != 0);
-		pv_comma(&b);
-		pv_key(&b, "slow");
-		pv_bool(&b, (p->flags & PROV_SLOW) != 0);
-		pv_close(&b, '}');
-	}
-	pv_close(&b, ']');
-	pv_close(&b, '}');
-
-	if (b.overflow) {
-		reply_err(c, 500, "schema too large",
-			  "the reply buffer is smaller than the table");
-		return;
-	}
-	reply_json(c, 200, body);
-}
-
 static void api_get(struct mg_connection *c, struct mg_str id,
 		    struct mg_str query)
 {
-	static char body[POND_VALUE_CAP + 256];
-	static char val[POND_VALUE_CAP];
 	char name[64];
 	const struct prov *p;
-	struct prov_buf v = { .buf = val, .cap = sizeof(val) };
-	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
 	struct mg_str since = mg_http_var(query, mg_str("since"));
-	int err;
+	const struct prov_from *from = NULL;
+	unsigned long point = 0;
 
 	if (id.len >= sizeof(name)) {
 		reply_err(c, 404, "no such item",
@@ -195,86 +138,21 @@ static void api_get(struct mg_connection *c, struct mg_str id,
 		char num[16];
 
 		snprintf(num, sizeof(num), "%.*s", (int)since.len, since.buf);
-		err = prov_find_from(name)->read(&v, strtoul(num, NULL, 10));
-	} else {
-		err = p->read(&v);
+		from = prov_find_from(name);
+		point = strtoul(num, NULL, 10);
 	}
-	if (err) {
-		char why[128];
-
-		snprintf(why, sizeof(why), "%s", strerror(-err));
-		reply_err(c, 500, name, why);
-		return;
-	}
-	if (v.overflow) {
-		reply_err(c, 500, name, "the value did not fit in the buffer");
-		return;
-	}
-
-	pv_open(&b, '{');
-	pv_key(&b, "id");
-	pv_str(&b, name);
-	pv_comma(&b);
-	pv_key(&b, "value");
-	pv_raw(&b, val);
-	pv_close(&b, '}');
-	reply_json(c, b.overflow ? 500 : 200,
-		   b.overflow ? "{\"error\":\"reply too large\"}" : body);
+	value_get(c, p, from, point);
 }
 
 static void api_getm(struct mg_connection *c, struct mg_str query)
 {
-	static char body[POND_REPLY_CAP];
-	static char val[POND_VALUE_CAP];
-	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
 	struct mg_str ids = mg_http_var(query, mg_str("ids"));
-	const char *s, *end;
-	bool first = true;
 
 	if (!ids.len) {
 		reply_err(c, 400, "no ids", "ask for ids=a,b,c");
 		return;
 	}
-
-	pv_open(&b, '{');
-	s = ids.buf;
-	end = ids.buf + ids.len;
-	while (s < end) {
-		const char *comma = memchr(s, ',', (size_t)(end - s));
-		size_t n = comma ? (size_t)(comma - s) : (size_t)(end - s);
-		char name[64];
-		const struct prov *p;
-		struct prov_buf v = { .buf = val, .cap = sizeof(val) };
-
-		if (n && n < sizeof(name)) {
-			memcpy(name, s, n);
-			name[n] = '\0';
-
-			p = prov_find(name);
-			if (!first)
-				pv_comma(&b);
-			first = false;
-			pv_key(&b, name);
-
-			if (!prov_present(p) || !p->read)
-				pv_null(&b);
-			else if (p->flags & PROV_SLOW)
-				pv_raw(&b,
-				       "{\"error\":\"slow: ask for it alone\"}");
-			else if (p->read(&v) || v.overflow)
-				pv_raw(&b, "{\"error\":\"unreadable\"}");
-			else
-				pv_raw(&b, val);
-		}
-		s = comma ? comma + 1 : end;
-	}
-	pv_close(&b, '}');
-
-	if (b.overflow) {
-		reply_err(c, 500, "reply too large", "ask for fewer ids");
-		return;
-	}
-	reply_json(c, 200, body);
+	value_getm(c, ids);
 }
 
 /*
@@ -693,6 +571,10 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		tls_accept(c);
 		return;
 	}
+	if (ev == MG_EV_WRITE) {
+		value_sent(c);
+		return;
+	}
 	/*
 	 * An upload is taken as its headers come, before its body; a request
 	 * over HTTP, while there is HTTPS, is sent on before its body too.
@@ -789,7 +671,7 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		else if (firmware_try(c, hm))
 			g_restart_at = time(NULL) + 1;
 	} else if (mg_match(hm->uri, mg_str("/api/schema"), NULL))
-		api_schema(c);
+		value_schema(c);
 	else if (mg_match(hm->uri, mg_str("/api/getm"), NULL))
 		api_getm(c, hm->query);
 	else if (mg_match(hm->uri, mg_str("/api/get/*"), caps))

@@ -5,6 +5,7 @@
 
 #include "prov.h"
 #include "providers.h"
+#include "value.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -1543,6 +1544,156 @@ static void test_growth(void)
 	      "a buffer of a fixed size keeps its size");
 }
 
+/* A provider of a string of @g_big_len bytes of JSON, quotes included. */
+static size_t g_big_len;
+
+static int big_read(struct prov_buf *out)
+{
+	static const char x[] = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+	size_t left = g_big_len - 2;
+
+	pv_raw(out, "\"");
+	while (left && !out->overflow) {
+		size_t n = left < sizeof(x) - 1 ? left : sizeof(x) - 1;
+
+		pv_raw(out, x + sizeof(x) - 1 - n);
+		left -= n;
+	}
+	pv_raw(out, "\"");
+	return 0;
+}
+
+static int broken_read(struct prov_buf *out)
+{
+	pv_raw(out, "{\"half\":");
+	return -EIO;
+}
+
+/* A connection of no socket: its send buffer is all a reply touches. */
+static struct mg_connection *conn_new(void)
+{
+	struct mg_connection *c = calloc(1, sizeof(*c));
+
+	if (c)
+		c->send.align = MG_IO_SIZE;
+	return c;
+}
+
+static void conn_free(struct mg_connection *c)
+{
+	mg_iobuf_free(&c->send);
+	free(c);
+}
+
+/*
+ * The reply that @c holds: its status, and its body, which must be as long
+ * as its Content-Length says; -1 for one that is not. The caller frees @body.
+ */
+static int reply_of(struct mg_connection *c, char **body)
+{
+	char *t = malloc(c->send.len + 1), *end, *cl;
+	int status = -1;
+
+	*body = NULL;
+	if (!t || !c->send.len)
+		goto out;
+	memcpy(t, c->send.buf, c->send.len);
+	t[c->send.len] = '\0';
+	end = strstr(t, "\r\n\r\n");
+	cl = strstr(t, "\r\nContent-Length: ");
+	if (strncmp(t, "HTTP/1.1 ", 9) || !end || !cl || cl > end ||
+	    strtoul(cl + 18, NULL, 10) != c->send.len - (size_t)(end + 4 - t))
+		goto out;
+	status = atoi(t + 9);
+	*body = strdup(end + 4);
+out:
+	free(t);
+	return status;
+}
+
+static void test_value_replies(void)
+{
+	static const struct prov big = { "big", "Test", "a long value", big_read, NULL, 0 };
+	static const struct prov broken = { "broken", "Test", "half a value", broken_read,
+					    NULL, 0 };
+	struct mg_connection *c = conn_new();
+	char *body = NULL;
+	int status;
+
+	puts("the values as replies");
+	if (!c)
+		return;
+
+	g_big_len = 300 * 1024;
+	value_get(c, &big, NULL, 0);
+	status = reply_of(c, &body);
+	check(status == 200 && body && strlen(body) == g_big_len + 21 &&
+		      !strncmp(body, "{\"id\":\"big\",\"value\":\"xxx", 24) &&
+		      !strcmp(body + strlen(body) - 3, "x\"}"),
+	      "a value larger than a buffer of before is served whole, its length as it is");
+	check(c->send.size < 2 * c->send.len,
+	      "and its send buffer is no more than twice what it holds");
+	free(body);
+	c->send.len = 0;
+	value_sent(c);
+	check(!c->send.buf && !c->send.size,
+	      "once the reply has gone, its send buffer goes back");
+
+	g_big_len = VALUE_MAX;
+	value_get(c, &big, NULL, 0);
+	status = reply_of(c, &body);
+	check(status == 200 && body && strlen(body) == VALUE_MAX + 21,
+	      "a value of the most a value may be is served whole");
+	free(body);
+	c->send.len = 0;
+	value_sent(c);
+
+	g_big_len = VALUE_MAX + 1;
+	value_get(c, &big, NULL, 0);
+	status = reply_of(c, &body);
+	check(status == 500 && body && strstr(body, "{\"error\":\"big\",") &&
+		      strstr(body, "\"detail\":\"the value is larger than 1310720 bytes\"}"),
+	      "one byte more is an error that says so, not a value cut short");
+	free(body);
+	c->send.len = 0;
+	value_sent(c);
+
+	value_get(c, &broken, NULL, 0);
+	status = reply_of(c, &body);
+	check(status == 500 && body && !strstr(body, "half") && strstr(body, "\"error\":\"broken\""),
+	      "a value that cannot be read is an error, and none of what it wrote goes");
+	free(body);
+	c->send.len = 0;
+
+	mg_http_reply(c, 200, "", "%s", "{}");
+	body = strndup((char *)c->send.buf, c->send.len);
+	value_get(c, &big, NULL, 0);
+	check(body && c->send.len > strlen(body) &&
+		      !memcmp(c->send.buf, body, strlen(body)) &&
+		      !memcmp(c->send.buf + strlen(body), "HTTP/1.1 500", 12),
+	      "a reply goes after one that waits to be sent, which it leaves as it was");
+	free(body);
+	c->send.len = 0;
+
+	value_getm(c, mg_str("uptime,omci,no_such_item"));
+	status = reply_of(c, &body);
+	check(status == 200 && body && well_formed(body) &&
+		      strstr(body, "{\"uptime\":{") && strstr(body, "\"up_s\":832.34") &&
+		      strstr(body, "\"omci\":{\"error\":\"slow: ask for it alone\"}") &&
+		      strstr(body, "\"no_such_item\":null}"),
+	      "several values are served together, a slow one and an unknown one in their place");
+	free(body);
+	c->send.len = 0;
+
+	value_schema(c);
+	status = reply_of(c, &body);
+	check(status == 200 && body && well_formed(body) &&
+		      strstr(body, "{\"id\":\"settings\",\"cat\":\"Mode\""),
+	      "the list of values is served");
+	free(body);
+	conn_free(c);
+}
+
 /* A file of the test tree: write it with @mode, or read it whole. */
 static void put(const char *path, const char *text, mode_t mode)
 {
@@ -2676,6 +2827,7 @@ int main(void)
 	test_optics();
 	test_writers();
 	test_growth();
+	test_value_replies();
 	test_settings();
 	test_firmware();
 	test_panel_values();
