@@ -1214,5 +1214,134 @@ check '"$MODE_SCRIPT" state >/dev/null'
 rm -f "$ONU_ROOT/run/onu-apply.lock"
 teardown
 
+echo "a connection with its address typed in, and a network out by it"
+setup
+conf IPOE1_KIND=static IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_MAC= IPOE1_FAMILY=ipv4 \
+	IPOE1_ADDRESS=192.0.2.10/24 IPOE1_GATEWAY=192.0.2.1 \
+	"IPOE1_DNS=198.51.100.53 2001:db8::53" IPOE1_ADDRESS6= IPOE1_GATEWAY6= IPOE1_PREFIX6= \
+	LAN1_CONN=ipoe:1 LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on LAN1_LEASE=3600
+"$MODE_SCRIPT" start 2>/dev/null
+# No account, and yet the stick holds the connection's VLAN itself.
+check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 420 ]'
+check 'logged "onu-nl link add vlan gem256 wan420 420" && logged "onu-nl link set wan420 mtu 1500"'
+check 'logged "onu-nl link set wan420 address 02:00:5e:00:53:01"'
+check 'has ipoe-1 "interface ipoe1: device=wan420 proto=static ipaddr=192.0.2.10/24"'
+check 'has ipoe-1 "route: interface=ipoe1 target=192.0.2.0/24 table=111"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=192.0.2.1 table=111"'
+check 'has ipoe-1 "rule: src=192.0.2.10/32 lookup=111"'
+# No session hands an address down: the network's connection is the way out.
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=192.0.2.1"'
+check 'has nets "rule: src=192.168.1.0/24 lookup=111"'
+check 'has nets "route: interface=net1 target=192.168.1.0/24 table=111"'
+check '! part nets | grep -q "interface=ses"'
+U=$ONU_ROOT/run/udhcpd-net1.conf
+check 'grep -qx "opt dns 198.51.100.53" "$U"'
+check 'grep -qx "lan net1 192.168.1.0/24" "$T/fw.conf" && grep -qx "wan gem256" "$T/fw.conf" &&
+	grep -qx "out wan420" "$T/fw.conf" && ! grep -qF "out ppp*" "$T/fw.conf"'
+# The operator's side is kept from the host side's networks.
+check 'logged "onu-nl clsact add wan420" && logged "onu-nl filter add wan420 pref 1 dst 169.254.0.0/16 drop"'
+"$MODE_SCRIPT" state >"$T/state" 2>/dev/null
+check 'grep -qx "ipoe.1.dev=wan420" "$T/state" && grep -qx "ipoe.1.gem=gem256" "$T/state" &&
+	grep -qx "ipoe.1.ipv4=192.0.2.10/24" "$T/state" && grep -qx "ipoe.1.router=192.0.2.1" "$T/state" &&
+	grep -qx "ipoe.1.dns=198.51.100.53 2001:db8::53" "$T/state" && ! grep -q "ipoe.1.lease" "$T/state"'
+# A sync with nothing changed gives netifd nothing again.
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check '! logged "onu-net set ipoe-1" && ! logged "onu-fw"'
+
+echo "the connection's address from DHCP"
+# The client gets its lease a moment after it starts, as the real one does.
+cat >"$T/bin/udhcpc" <<-EOF
+#!/bin/sh
+echo "udhcpc \$*" >>"\$LOG"
+while [ \$# -gt 0 ]; do
+	case \$1 in
+	-i) dev=\$2; shift ;;
+	-s) script=\$2; shift ;;
+	esac
+	shift
+done
+(
+	interface=\$dev "\$script" deconfig
+	"$REAL_SLEEP" 0.3
+	interface=\$dev ip=198.51.100.77 mask=24 router="198.51.100.1 198.51.100.2" \\
+		dns="198.51.100.53  198.51.100.54" lease=86400 "\$script" bound
+) >/dev/null 2>&1 &
+EOF
+printf '#!/bin/sh\necho "onu-call $*" >>"$LOG"\n' >"$ONU_ROOT/usr/lib/onu/onu-call"
+mkdir -p "$ONU_ROOT/usr/lib/onu"
+ln -s "$HERE/scripts/onu-dhcpc" "$ONU_ROOT/usr/lib/onu/onu-dhcpc"
+chmod +x "$T/bin/udhcpc" "$ONU_ROOT/usr/lib/onu/onu-call"
+echo "1000.25 99.0" >"$ONU_ROOT/proc/uptime"
+printf '%s\n' IPOE1_KIND=dhcp IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_FAMILY=ipv4 \
+	LAN1_CONN=ipoe:1 LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on \
+	LAN1_LEASE=3600 >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "connection 1 down" && logged "procd start udhcpc-ipoe1 .*onu-drop -c net_raw,net_bind_service dhcpc udhcpc -f -R -i wan420 -s .*/usr/lib/onu/onu-dhcpc"'
+check 'logged "^udhcpc -f -R -i wan420"'
+# Until the lease comes, the interface is up without an address.
+check 'has ipoe-1 "interface ipoe1: device=wan420 proto=none"'
+check '! part ipoe-1 | grep -q route'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	logged "onu-call dhcpc" && break
+	"$REAL_SLEEP" 0.1
+done
+check 'logged "onu-call dhcpc"'
+check '[ "$(cat "$ONU_ROOT/run/ipoe/1/ipv4")" = 198.51.100.77/24 ] &&
+	[ "$(cat "$ONU_ROOT/run/ipoe/1/router")" = 198.51.100.1 ] &&
+	[ "$(cat "$ONU_ROOT/run/ipoe/1/dns")" = "198.51.100.53 198.51.100.54" ] &&
+	[ "$(cat "$ONU_ROOT/run/ipoe/1/until")" = 87400 ]'
+# onu-act runs onu-apply for the call: the lease is put in place.
+"$MODE_SCRIPT" dhcpc 2>/dev/null
+check 'has ipoe-1 "interface ipoe1: device=wan420 proto=static ipaddr=198.51.100.77/24"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=198.51.100.1 table=111"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=198.51.100.1"'
+check 'grep -qx "opt dns 198.51.100.53 198.51.100.54" "$U"'
+echo "1100.75 99.0" >"$ONU_ROOT/proc/uptime"
+"$MODE_SCRIPT" state >"$T/state" 2>/dev/null
+check 'grep -qx "ipoe.1.ipv4=198.51.100.77/24" "$T/state" && grep -qx "ipoe.1.lease=86300" "$T/state"'
+# A lease renewed as it was moves its end, and tells no one.
+: >"$LOG"
+interface=wan420 ip=198.51.100.77 mask=24 router=198.51.100.1 dns="198.51.100.53 198.51.100.54" \
+	lease=600 "$HERE/scripts/onu-dhcpc" renew
+check '! logged "onu-call" && [ "$(cat "$ONU_ROOT/run/ipoe/1/until")" = 1700 ]'
+# The lease lost: the address goes.
+interface=wan420 "$HERE/scripts/onu-dhcpc" deconfig
+check 'logged "onu-call dhcpc" && [ ! -e "$ONU_ROOT/run/ipoe/1/ipv4" ]'
+"$MODE_SCRIPT" dhcpc 2>/dev/null
+check 'has ipoe-1 "interface ipoe1: device=wan420 proto=none"'
+# An interface that is no connection's is left alone.
+: >"$LOG"
+interface=wan410 ip=198.51.100.9 mask=24 "$HERE/scripts/onu-dhcpc" bound
+check '! logged "onu-call"'
+
+echo "a session beside the connection in its VLAN"
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+printf '%s\n' IPOE1_KIND=dhcp IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_FAMILY=ipv4 \
+	SESSION1_VLAN=420 SESSION1_FAMILY=ipv4 SESSION1_PASS=off >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+# They share the interface, which stays at Ethernet's MTU: the session keeps to 1492.
+check 'has ses1 "interface ses1: device=wan420 proto=pppoed session=1 family=ipv4 pass=0 defaultroute=0"'
+check '! logged "link set wan420 mtu 1508"'
+check 'grep -qx "out wan420" "$T/fw.conf" || [ ! -e "$ONU_ROOT/run/onu-fw.conf" ]'
+"$MODE_SCRIPT" state >"$T/state" 2>/dev/null
+check 'grep -qx "session.1.dev=wan420" "$T/state" && grep -qx "ipoe.1.dev=wan420" "$T/state"'
+
+echo "the connection gone"
+printf '%s\n' SESSION1_VLAN=420 SESSION1_FAMILY=ipv4 SESSION1_PASS=off >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "procd stop udhcpc-ipoe1" && logged "onu-net del ipoe-1" && [ ! -d "$ONU_ROOT/run/ipoe/1" ]'
+# The session comes up again, with its room for PPPoE.
+check 'logged "session 1 down" && logged "link set wan420 mtu 1508"'
+rm -f "$ONU_ROOT/run/onu-pppoe1"
+: >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ] && [ ! -e "$ONU_ROOT/run/network.d/ipoe-1" ]'
+teardown
+
 echo "test_onu_apply: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

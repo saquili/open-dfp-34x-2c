@@ -29,8 +29,10 @@
 #                      status daemon (state() below)
 #   onu-apply sync     follow what changed outside the settings: the GEM
 #                      ports and VLANs the OLT provisions, the host's IPv6
-#                      binding; omcid (-x) and dhcp6d (-x) run it as
-#                      "onu-apply omcid" and "onu-apply dhcp6d"
+#                      binding, an IPoE connection's DHCP lease; omcid (-x),
+#                      dhcp6d (-x) and the DHCP client's script run it as
+#                      "onu-apply omcid", "onu-apply dhcp6d" and
+#                      "onu-apply dhcpc"
 #
 # One onu-apply at a time changes the stick; the others wait for it.
 #
@@ -94,8 +96,25 @@
 # networks, their rules and routes, the part "nets"; the NAT through which the
 # networks go out, and the protection that keeps the internet's new
 # connections from them, is onu-fw's table of nf_tables (lans_fw()). When no
-# session hands an address down, the first network's session is the stick's
+# session hands an address down, the first network's connection is the stick's
 # own default route too (main_route()).
+#
+# A connection that takes its address as a router does, IPoE, K from 1 to 7,
+# runs in a VLAN of the PON, IPOEk_VLAN, on its GEM port as a session's, on
+# the interface wanVID, which it shares with the sessions in that VLAN, at
+# Ethernet's MTU. Its address is typed in, IPOEk_KIND=static, with its
+# gateway and name servers, or comes from the operator's DHCP server,
+# IPOEk_KIND=dhcp, by udhcpc, the procd instance udhcpc-ipoeK, which runs as
+# the account dhcpc and whose script, onu-dhcpc, writes what the lease
+# brings into /run/ipoe/K and has onu-apply follow it ("onu-apply dhcpc", by
+# onu-call). netifd holds the interface, ipoeK, with the address, the part
+# "ipoe-K": a table of the connection's own holds its default route, a rule
+# sends what comes from its address there, and the connection is the
+# stick's own default route when main_route() names it. A local network
+# goes out by it as by a session, LANn_CONN=ipoe:K. What it has is in
+# /run/ipoe/K: gem, dev, kind, and once it has an address ipv4, router,
+# dns, until (the end of a lease, in seconds of the uptime), ipv6 and
+# prefix. No DHCPv6 client runs for a connection by DHCP.
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -107,7 +126,9 @@ RUN=$ROOT/run
 CONF=$RUN/onu.conf
 IDENTITY=$RUN/onu-identity
 SESSIONS=$RUN/session
+IPOE_DIR=$RUN/ipoe
 MAX_SESSIONS=7
+MAX_IPOE=7
 MAX_LANS=8
 # The priorities of the filters on sfp and pon are the registry's
 # (omcid/target/tcprio.h): omcid's VLAN rules take those from VLAN_PREF up,
@@ -176,6 +197,13 @@ load() {
 		n=$((n + 1))
 	done
 	n=1
+	while [ $n -le $MAX_IPOE ]; do
+		eval "IPOE${n}_KIND= IPOE${n}_GEM= IPOE${n}_VLAN= IPOE${n}_MAC= IPOE${n}_FAMILY="
+		eval "IPOE${n}_ADDRESS= IPOE${n}_GATEWAY= IPOE${n}_DNS= IPOE${n}_ADDRESS6="
+		eval "IPOE${n}_GATEWAY6= IPOE${n}_PREFIX6="
+		n=$((n + 1))
+	done
+	n=1
 	while [ $n -le $MAX_LANS ]; do
 		eval "LAN${n}_CONN= LAN${n}_VLAN= LAN${n}_ADDRESS= LAN${n}_DHCP="
 		eval "LAN${n}_POOL_FROM= LAN${n}_POOL_TO= LAN${n}_LEASE="
@@ -224,6 +252,19 @@ load_file() {
 		LAN[1-8]_CONN | LAN[1-8]_VLAN | LAN[1-8]_ADDRESS | LAN[1-8]_DHCP | \
 			LAN[1-8]_POOL_FROM | LAN[1-8]_POOL_TO | LAN[1-8]_LEASE | \
 			LAN[1-8]_IPV6 | LAN[1-8]_IPV6_SUBNET) ;;
+		IPOE[1-7]_KIND | IPOE[1-7]_GEM | IPOE[1-7]_VLAN | IPOE[1-7]_MAC | \
+			IPOE[1-7]_FAMILY | IPOE[1-7]_ADDRESS | IPOE[1-7]_GATEWAY | \
+			IPOE[1-7]_ADDRESS6 | IPOE[1-7]_GATEWAY6 | IPOE[1-7]_PREFIX6) ;;
+		# Name servers, one blank apart.
+		IPOE[1-7]_DNS)
+			case $value in
+			*[!0-9A-Fa-f.:\ ]*) ;;
+			*)
+				eval "$key=\$value"
+				continue
+				;;
+			esac
+			;;
 		*) continue ;;
 		esac
 		case $value in
@@ -350,26 +391,37 @@ main_pd() {
 	done
 }
 
-# The session the stick's own IPv4 default route goes by: main_pass(), and
-# when no session hands an address down, the first a local network goes out
-# by. The stick reaches out by it, and the switch's engine, which routes by
-# the main table alone, finds a way out there for the networks' translated
-# frames, each of which leaves by the session its flow was translated for.
+# The connection the stick's own IPv4 default route goes by, pppoe:N or
+# ipoe:K: main_pass()'s session, and when no session hands an address down,
+# the connection the first local network goes out by. The stick reaches out
+# by it, and the switch's engine, which routes by the main table alone,
+# finds a way out there for the networks' translated frames, each of which
+# leaves by the connection its flow was translated for.
 main_route() {
 	mr=$(main_pass)
-	if [ -z "$mr" ]; then
-		for ml in $(lans); do
-			mr=$(lan_session "$ml")
-			break
-		done
+	if [ -n "$mr" ]; then
+		echo "pppoe:$mr"
+		return 0
 	fi
-	echo "$mr"
+	for ml in $(lans); do
+		lan_conn "$ml"
+		break
+	done
 }
 
 # The routing table of session $1, for what comes from the address or the
 # prefix it hands down.
 table_of() {
 	echo $((100 + $1))
+}
+
+# The routing table of the connection $1, pppoe:N or ipoe:K: a session's,
+# 101 to 107, or an IPoE connection's, 111 to 117.
+table_of_conn() {
+	case $1 in
+	pppoe:*) table_of "${1#pppoe:}" ;;
+	ipoe:*) echo $((110 + ${1#ipoe:})) ;;
+	esac
 }
 
 # The links to the host the sessions hand down by, one a line.
@@ -465,6 +517,9 @@ held_vlans() {
 		v=$(session_vlan "$n")
 		[ -n "$v" ] || return 1
 		out="$out $v"
+	done
+	for n in $(ipoes); do
+		out="$out $(ipoe_vlan "$n")"
 	done
 	echo $out | tr ' ' '\n' | sort -un
 }
@@ -691,7 +746,7 @@ session_brought() {
 		esac
 		# Its networks' devices get its name servers.
 		for bn in $(lans); do
-			[ "$(lan_session "$bn")" = "$1" ] && lan_dhcp "$bn"
+			[ "$(lan_conn "$bn")" = "pppoe:$1" ] && lan_dhcp "$bn"
 		done
 		log "session $1: IPv4 up on $dev"
 	fi
@@ -834,9 +889,12 @@ pass_lease_down() {
 # Room for PPPoE's 8 bytes of headers around a 1500-byte packet (RFC 4638) on
 # the PON port, the GEM interface $1 and the WAN interface $2, as far as each
 # takes it: pppoed asks the concentrator for 1500 bytes, and keeps to 1492
-# when the interface has no room or the concentrator does not agree.
+# when the interface has no room or the concentrator does not agree. A WAN
+# interface that an IPoE connection shares stays at Ethernet's 1500, which
+# the connection's packets keep to on the PON.
 pppoe_mtu() {
 	for mtu_dev in pon "$1" "$2"; do
+		[ "$mtu_dev" = "$2" ] && [ -n "$(ipoe_on_dev "$2")" ] && return 0
 		onu-nl link set "$mtu_dev" mtu 1508 2>/dev/null || return 0
 	done
 }
@@ -927,7 +985,7 @@ session_makings() {
 	if hands "$1" ipv4; then
 		mk_role=routed
 		[ "$1" = "$(main_pass)" ] && mk_role=pass
-	elif [ "$(family "$1")" != ipv6 ] && [ "$1" = "$(main_route)" ]; then
+	elif [ "$(family "$1")" != ipv6 ] && [ "pppoe:$1" = "$(main_route)" ]; then
 		mk_role=route
 	fi
 	if hands "$1" ipv6; then
@@ -936,14 +994,15 @@ session_makings() {
 	fi
 	mk_account=$(md5sum <"$RUN/onu-pppoe$1" 2>/dev/null)
 	echo "$2 $mk_dev $(family "$1") mac=$(setting "$1" MAC) $mk_role $mk_role6" \
-		"lan=$(down_vlan "$1") ${mk_account%% *}"
+		"lan=$(down_vlan "$1") ${mk_account%% *} ipoe=$(ipoe_on_dev "$mk_dev")"
 }
 
-# Whether a running session other than $1 is on the interface $2.
+# Whether a session or an IPoE connection that runs, other than the one of
+# the directory $1, is on the interface $2.
 dev_shared() {
-	for d in "$SESSIONS"/*/dev; do
+	for d in "$SESSIONS"/*/dev "$IPOE_DIR"/*/dev; do
 		[ -r "$d" ] || continue
-		[ "$d" = "$SESSIONS/$1/dev" ] && continue
+		[ "$d" = "$1/dev" ] && continue
 		[ "$(cat "$d")" = "$2" ] && return 0
 	done
 	return 1
@@ -970,7 +1029,7 @@ session_up() {
 	n=$1 gem=$2
 	dev=$(session_dev "$n" "$gem")
 	fam=$(family "$n")
-	if ! dev_shared "$n" "$dev" || [ ! -e "$NET/$dev" ]; then
+	if ! dev_shared "$SESSIONS/$n" "$dev" || [ ! -e "$NET/$dev" ]; then
 		onu-nl link set "$gem" up
 		if [ "$dev" != "$gem" ]; then
 			onu-nl link add vlan "$gem" "$dev" "$(session_vlan "$n")"
@@ -1002,7 +1061,7 @@ session_up() {
 		else
 			role=routed
 		fi
-	elif [ "$fam" != ipv6 ] && [ "$n" = "$(main_route)" ]; then
+	elif [ "$fam" != ipv6 ] && [ "pppoe:$n" = "$(main_route)" ]; then
 		route=1
 	fi
 	role6=none
@@ -1034,6 +1093,268 @@ gem_shared() {
 	return 1
 }
 
+# Setting $2 of IPoE connection $1.
+ipoe_setting() {
+	eval "echo \"\${IPOE$1_$2:-}\""
+}
+
+# The IPoE connections set up, by number, one a line: those with a kind.
+ipoes() {
+	for ik in 1 2 3 4 5 6 7; do
+		[ -n "$(ipoe_setting "$ik" KIND)" ] && echo "$ik"
+	done
+	return 0
+}
+
+# The VLAN IPoE connection $1 runs in on the PON side, translated as a
+# session's is (session_vlan()).
+ipoe_vlan() {
+	v=$(ipoe_setting "$1" VLAN)
+	[ -n "$v" ] || return 0
+	net=$(awk -v v="$v" '$1 == v { print $2; exit }' "$RUN/omcid/xlate" 2>/dev/null)
+	echo "${net:-$v}"
+}
+
+# The interface of IPoE connection $1: wanVID.
+ipoe_dev() {
+	echo "wan$(ipoe_vlan "$1")"
+}
+
+# The IPoE connection set up on the interface $1, if any.
+ipoe_on_dev() {
+	for iv in $(ipoes); do
+		if [ "$(ipoe_dev "$iv")" = "$1" ]; then
+			echo "$iv"
+			return 0
+		fi
+	done
+}
+
+# The GEM interface of IPoE connection $1, as a session's (session_gem()).
+ipoe_gem() {
+	g=$(ipoe_setting "$1" GEM)
+	v=$(ipoe_vlan "$1")
+	if { [ -z "$g" ] || [ "$g" = auto ]; } && [ -n "$v" ]; then
+		for id in $(awk -v v="$v" '$1 == v { print $2 }' \
+			"$RUN/omcid/gem-vlans" 2>/dev/null | sort -n); do
+			if [ -e "$NET/gem$id" ]; then
+				echo "gem$id"
+				return 0
+			fi
+		done
+	fi
+	gem_of "$g"
+}
+
+# Whether IPoE connection $1 carries the family $2, ipv4 or ipv6.
+ipoe_carries() {
+	case $(ipoe_setting "$1" FAMILY) in
+	both | "$2") return 0 ;;
+	'') [ "$2" = ipv4 ] ;;
+	*) return 1 ;;
+	esac
+}
+
+# What IPoE connection $1 on the GEM interface $2 is made of, one line: its
+# interface, kind, family and MAC address, what is typed in for a static
+# one, and whether it is the stick's own way out. ipoes_sync() takes it down
+# and up again when this changes. It is in /run/ipoe/K/makings.
+ipoe_makings() {
+	echo "$2 $(ipoe_dev "$1") $(ipoe_setting "$1" KIND) $(ipoe_setting "$1" FAMILY)" \
+		"mac=$(ipoe_setting "$1" MAC) route=$([ "ipoe:$1" = "$(main_route)" ] && echo 1)" \
+		"$(ipoe_setting "$1" ADDRESS) $(ipoe_setting "$1" GATEWAY)" \
+		"$(ipoe_setting "$1" ADDRESS6) $(ipoe_setting "$1" GATEWAY6)" \
+		"$(ipoe_setting "$1" PREFIX6) dns=$(ipoe_setting "$1" DNS | tr ' ' ,)"
+}
+
+# The first IPoE connection with a static IPv6 address, which has the
+# stick's own IPv6 default route when no session hands a prefix down.
+ipoe_main6() {
+	[ -z "$(main_pd)" ] || return 0
+	for i6 in $(ipoes); do
+		if [ "$(ipoe_setting "$i6" KIND)" = static ] && ipoe_carries "$i6" ipv6 &&
+			[ -n "$(ipoe_setting "$i6" ADDRESS6)" ]; then
+			echo "$i6"
+			return 0
+		fi
+	done
+}
+
+# IPoE connection $1 as netifd's part "ipoe-K": its interface, ipoeK, on its
+# device, with the address it has, of /run/ipoe/K, or none yet (protocol
+# "none", which brings the interface up for the DHCP client); its table
+# with its default route by the gateway and the route to its network; a
+# rule that sends what comes from its address there; and the stick's own
+# default route when main_route() names it. The text given last is kept in
+# /run/ipoe/K/net, and the same is not given again. What changed also gives
+# its networks' devices the name servers now.
+ipoe_net() {
+	d=$IPOE_DIR/$1
+	in_dev=$(cat "$d/dev" 2>/dev/null)
+	in_addr=$(cat "$d/ipv4" 2>/dev/null)
+	in_gw=$(cat "$d/router" 2>/dev/null)
+	in_addr6=$(cat "$d/ipv6" 2>/dev/null)
+	in_table=$(table_of_conn "ipoe:$1")
+	{
+		printf "config interface 'ipoe%s'\n\toption device '%s'\n" "$1" "$in_dev"
+		if [ -z "$in_addr$in_addr6" ]; then
+			printf "\toption proto 'none'\n\n"
+		else
+			printf "\toption proto 'static'\n"
+			[ -z "$in_addr" ] || printf "\toption ipaddr '%s'\n" "$in_addr"
+			[ -z "$in_addr6" ] || printf "\toption ip6addr '%s'\n" "$in_addr6"
+			printf "\n"
+		fi
+		if [ -n "$in_addr" ] && [ -n "$in_gw" ]; then
+			in_mask=$(len_mask "${in_addr#*/}")
+			printf "config route\n\toption interface 'ipoe%s'\n" "$1"
+			printf "\toption target '%s/%s'\n\toption table '%s'\n\n" \
+				"$(num_ip $(($(ip_num "${in_addr%/*}") & in_mask)))" "${in_addr#*/}" "$in_table"
+			printf "config route\n\toption interface 'ipoe%s'\n" "$1"
+			printf "\toption target '0.0.0.0/0'\n\toption gateway '%s'\n" "$in_gw"
+			printf "\toption table '%s'\n\n" "$in_table"
+			printf "config rule\n\toption src '%s/32'\n\toption lookup '%s'\n\n" \
+				"${in_addr%/*}" "$in_table"
+			if [ "ipoe:$1" = "$(main_route)" ]; then
+				printf "config route\n\toption interface 'ipoe%s'\n" "$1"
+				printf "\toption target '0.0.0.0/0'\n\toption gateway '%s'\n\n" "$in_gw"
+			fi
+		fi
+		in_gw6=$(ipoe_setting "$1" GATEWAY6)
+		if [ -n "$in_addr6" ] && [ -n "$in_gw6" ] && [ "$1" = "$(ipoe_main6)" ]; then
+			printf "config route6\n\toption interface 'ipoe%s'\n" "$1"
+			printf "\toption target '::/0'\n\toption gateway '%s'\n\n" "$in_gw6"
+		fi
+	} >"$d/net.new"
+	# The name servers are no part of netifd's, but of its networks' servers.
+	echo "# dns $(cat "$d/dns" 2>/dev/null)" >>"$d/net.new"
+	if [ -e "$d/net" ] && [ "$(cat "$d/net.new")" = "$(cat "$d/net")" ]; then
+		rm -f "$d/net.new"
+		return 0
+	fi
+	mv "$d/net.new" "$d/net"
+	onu-net set "ipoe-$1" <"$d/net" || log "connection $1: netifd was not given it"
+	for in_l in $(lans); do
+		[ "$(lan_conn "$in_l")" = "ipoe:$1" ] && lan_dhcp "$in_l"
+	done
+	return 0
+}
+
+# What a static IPoE connection $1 has, as typed in, in /run/ipoe/K: its
+# addresses, of the families it carries, its gateway and name servers.
+ipoe_static() {
+	d=$IPOE_DIR/$1
+	rm -f "$d/ipv4" "$d/router" "$d/dns" "$d/ipv6" "$d/prefix" "$d/until"
+	if ipoe_carries "$1" ipv4; then
+		echo "$(ipoe_setting "$1" ADDRESS)" >"$d/ipv4"
+		echo "$(ipoe_setting "$1" GATEWAY)" >"$d/router"
+	fi
+	if ipoe_carries "$1" ipv6; then
+		echo "$(ipoe_setting "$1" ADDRESS6)" >"$d/ipv6"
+		[ -z "$(ipoe_setting "$1" PREFIX6)" ] || ipoe_setting "$1" PREFIX6 >"$d/prefix"
+	fi
+	[ -z "$(ipoe_setting "$1" DNS)" ] || ipoe_setting "$1" DNS >"$d/dns"
+}
+
+# IPoE connection $1 up on the GEM interface $2: its interface, made unless a
+# session runs on it already, at Ethernet's MTU (a session beside it keeps
+# to 1492), its address typed in, or its DHCP client, which runs as the
+# account dhcpc with the powers of its raw socket and its port, and its
+# part of netifd. The operator's side is kept from the host side's networks
+# as a session's is (guard()).
+ipoe_up() {
+	k=$1 gem=$2
+	dev=$(ipoe_dev "$k")
+	if ! dev_shared "$IPOE_DIR/$k" "$dev" || [ ! -e "$NET/$dev" ]; then
+		onu-nl link set "$gem" up
+		onu-nl link add vlan "$gem" "$dev" "$(ipoe_vlan "$k")"
+		mac=$(ipoe_setting "$k" MAC)
+		[ -n "$mac" ] || mac=$(pon_mac)
+		if [ -n "$mac" ]; then
+			onu-nl link set "$dev" address "$mac" ||
+				log "connection $k: the interface did not take its MAC address"
+		fi
+		onu-nl link set "$dev" up
+	fi
+	onu-nl link set "$dev" mtu 1500 2>/dev/null
+	d=$IPOE_DIR/$k
+	mkdir -p "$d"
+	# The DHCP client's script writes what the lease brings here, as the
+	# account dhcpc of the group onu.
+	chown :onu "$d" && chmod 2770 "$d" ||
+		log "connection $k: its directory is not the group onu's"
+	echo "$gem" >"$d/gem"
+	echo "$dev" >"$d/dev"
+	ipoe_setting "$k" KIND >"$d/kind"
+	(umask 077 && ipoe_makings "$k" "$gem" >"$d/makings")
+	if [ "$(ipoe_setting "$k" KIND)" = static ]; then
+		ipoe_static "$k"
+	elif ipoe_carries "$k" ipv4; then
+		svc_start "udhcpc-ipoe$k" -- "$DROP" -c net_raw,net_bind_service dhcpc \
+			udhcpc -f -R -i "$dev" -s "$LIB/onu-dhcpc"
+	fi
+	ipoe_net "$k"
+	guard "$dev"
+	log "connection $k on $dev ($(ipoe_setting "$k" KIND)), GEM port ${gem#gem}"
+}
+
+# IPoE connection $1 down: its DHCP client, which gives its address back,
+# its part of netifd, and its interface when no session is on it.
+ipoe_down() {
+	d=$IPOE_DIR/$1
+	[ -r "$d/dev" ] || return 0
+	read -r down_dev <"$d/dev"
+	svc_stop "udhcpc-ipoe$1"
+	onu-net del "ipoe-$1" || log "connection $1: netifd still has it"
+	dev_shared "$d" "$down_dev" || onu-nl link del "$down_dev" 2>/dev/null
+	rm -rf "${IPOE_DIR:?}/$1"
+	log "connection $1 down"
+	return 0
+}
+
+ipoes_down() {
+	for d in "$IPOE_DIR"/*; do
+		[ -d "$d" ] && ipoe_down "${d##*/}"
+	done
+	return 0
+}
+
+# The IPoE connections follow their settings and their GEM ports as the
+# sessions do (sessions_sync()), and the address a lease brought: one whose
+# makings changed, or whose interface is gone, goes down and up again; one
+# no longer set up goes; the others are given what their DHCP client wrote.
+ipoes_sync() {
+	want=" $(ipoes | tr '\n' ' ')"
+	k=1
+	while [ $k -le $MAX_IPOE ]; do
+		cur= dev=
+		[ -r "$IPOE_DIR/$k/gem" ] && read -r cur <"$IPOE_DIR/$k/gem"
+		[ -r "$IPOE_DIR/$k/dev" ] && read -r dev <"$IPOE_DIR/$k/dev"
+		case $want in
+		*" $k "*)
+			gem=$(ipoe_gem "$k")
+			if [ -n "$gem" ] && { [ "$gem" != "$cur" ] ||
+				[ "$(ipoe_dev "$k")" != "$dev" ] ||
+				{ [ -n "$cur" ] && [ ! -e "$NET/$dev" ]; } ||
+				[ "$(ipoe_makings "$k" "$gem")" != \
+					"$(cat "$IPOE_DIR/$k/makings" 2>/dev/null)" ]; }; then
+				[ -n "$cur" ] && ipoe_down "$k"
+				ipoe_up "$k" "$gem"
+			elif [ -z "$gem" ] && [ -n "$cur" ]; then
+				log "connection $k: its GEM port is gone"
+				ipoe_down "$k"
+			elif [ -n "$cur" ]; then
+				ipoe_net "$k"
+			fi
+			;;
+		*)
+			[ -n "$cur" ] && ipoe_down "$k"
+			;;
+		esac
+		k=$((k + 1))
+	done
+}
+
 # Session $1 down: its client, which ends the session with the concentrator,
 # and its interface when no other session is on it. Its names are its own:
 # sessions_sync() holds the GEM port it goes up on next.
@@ -1044,7 +1365,7 @@ session_down() {
 	onu-net del "ses$1" || log "session $1: netifd still has it"
 	svc_stop "dhcp6d$1"
 	pass_lease_down "$1"
-	if ! dev_shared "$1" "$down_dev"; then
+	if ! dev_shared "$SESSIONS/$1" "$down_dev"; then
 		[ "$down_dev" != "$down_gem" ] && onu-nl link del "$down_dev" 2>/dev/null
 		# What pppoe_mtu() raised goes back to Ethernet's MTU, the PON port
 		# last, once no session is on the GEM port.
@@ -1129,7 +1450,13 @@ sessions_sync() {
 		esac
 		n=$((n + 1))
 	done
-	first=$(cat "$SESSIONS"/*/gem 2>/dev/null | head -n 1)
+	pd_keep
+}
+
+# The frames of the other GEM ports handed to the GEM interfaces of the
+# sessions and the IPoE connections (feeds_sync()).
+feeds_all() {
+	first=$(cat "$SESSIONS"/*/gem "$IPOE_DIR"/*/gem 2>/dev/null | head -n 1)
 	if [ -z "$first" ]; then
 		feeds_down
 	elif held_vlans >/dev/null; then
@@ -1139,19 +1466,29 @@ sessions_sync() {
 			read -r g <"$d/gem"
 			pairs="$pairs $(session_vlan "${d##*/}"):$g"
 		done
+		for d in "$IPOE_DIR"/*; do
+			[ -r "$d/gem" ] || continue
+			read -r g <"$d/gem"
+			pairs="$pairs $(ipoe_vlan "${d##*/}"):$g"
+		done
 		feeds_sync "$first" $(echo $pairs | tr ' ' '\n' | sort -u)
 	else
 		feeds_sync "$first"
 	fi
-	pd_keep
 }
 
-# What changed outside the settings, followed: with accounts the sessions,
-# without them omcid alone. Run twice on the same facts, it changes nothing.
+# What changed outside the settings, followed: with accounts or IPoE
+# connections those, without them omcid alone. The IPoE connections come
+# first: one that leaves a session's VLAN lets the session that goes down
+# and up again for it take its interface's room for PPPoE again. Run twice
+# on the same facts, it changes nothing.
 sync_all() {
 	[ "$(cat "$RUN/onu-mode" 2>/dev/null)" = passthrough ] || return 0
+	omcid_sync "$(held_want)"
+	ipoes_sync
 	sessions_sync
-	# The sessions' GEM ports, which the OLT may have moved, carry the
+	feeds_all
+	# The connections' GEM ports, which the OLT may have moved, carry the
 	# networks' flows.
 	lans_fw
 }
@@ -1205,10 +1542,9 @@ lan_if() {
 	fi
 }
 
-# The session network $1 goes out by.
-lan_session() {
-	ls_c=$(lan_setting "$1" CONN)
-	echo "${ls_c#pppoe:}"
+# The connection network $1 goes out by: pppoe:N or ipoe:K.
+lan_conn() {
+	lan_setting "$1" CONN
 }
 
 # The address a.b.c.d $1 as a number, and the number $1 as an address.
@@ -1238,9 +1574,10 @@ lan_net() {
 # The local networks as netifd's part "nets": each one's interface, a VLAN on
 # the host link or the host link itself, with the stick's address in it and
 # a strict reverse-path check, and a rule that sends what comes from the
-# network to its session's table; in the table of each session that networks
-# go out by, its default route and the routes to all the networks. Without
-# networks the part goes.
+# network to its connection's table; in the table of each connection that
+# networks go out by, the routes to all the networks, and a session's
+# default route (an IPoE connection's is its own part's, ipoe_net()).
+# Without networks the part goes.
 lans_net() {
 	ln_all=$(lans)
 	if [ -z "$ln_all" ]; then
@@ -1259,15 +1596,20 @@ lans_net() {
 				"$ln" "$ln_if"
 			printf "\toption ipaddr '%s'\n\n" "$(lan_setting "$ln" ADDRESS)"
 			printf "config rule\n\toption src '%s'\n\toption lookup '%s'\n\n" \
-				"$(lan_net "$ln")" "$(table_of "$(lan_session "$ln")")"
+				"$(lan_net "$ln")" "$(table_of_conn "$(lan_conn "$ln")")"
 		done
-		for ls in $(for ln in $ln_all; do lan_session "$ln"; done | sort -u); do
-			printf "config route\n\toption interface 'ses%s'\n" "$ls"
-			printf "\toption target '0.0.0.0/0'\n\toption table '%s'\n\n" "$(table_of "$ls")"
+		for lc in $(for ln in $ln_all; do lan_conn "$ln"; done | sort -u); do
+			case $lc in
+			pppoe:*)
+				printf "config route\n\toption interface 'ses%s'\n" "${lc#pppoe:}"
+				printf "\toption target '0.0.0.0/0'\n\toption table '%s'\n\n" \
+					"$(table_of_conn "$lc")"
+				;;
+			esac
 			for ln in $ln_all; do
 				printf "config route\n\toption interface 'net%s'\n" "$ln"
 				printf "\toption target '%s'\n\toption table '%s'\n\n" \
-					"$(lan_net "$ln")" "$(table_of "$ls")"
+					"$(lan_net "$ln")" "$(table_of_conn "$lc")"
 			done
 		done
 	} | onu-net set nets || log "netifd was not given the local networks"
@@ -1275,9 +1617,9 @@ lans_net() {
 
 # Network $1's DHCP server, when its DHCP is on: the addresses of its pool,
 # all of the network's but its first and last when none is given (the server
-# never leases its own), the stick as the router, the session's name servers
-# once the session brought them, the lease's time, and the fixed address of
-# each of its devices. It writes its leases every ten seconds, so that the
+# never leases its own), the stick as the router, the IPv4 name servers of
+# its connection once it has them, the lease's time, and the fixed address
+# of each of its devices. It writes its leases every ten seconds, so that the
 # status daemon shows a device soon.
 lan_dhcp() {
 	svc_stop "udhcpd-net$1"
@@ -1294,7 +1636,14 @@ lan_dhcp() {
 	[ -n "$ld_to" ] || ld_to=$(num_ip $((ld_net + (~ld_mask & 0xffffffff) - 1)))
 	ld_count=$(($(ip_num "$ld_to") - $(ip_num "$ld_from") + 1))
 	[ "$ld_count" -le 512 ] || ld_count=512
-	ld_dns=$(cat "$SESSIONS/$(lan_session "$1")/dns" 2>/dev/null)
+	ld_c=$(lan_conn "$1")
+	case $ld_c in
+	pppoe:*) ld_dns=$(cat "$SESSIONS/${ld_c#pppoe:}/dns" 2>/dev/null) ;;
+	# udhcpd gives IPv4 name servers alone.
+	*) ld_dns=$(cat "$IPOE_DIR/${ld_c#ipoe:}/dns" 2>/dev/null | tr ' ' '\n' | grep -v : | tr '\n' ' ') ;;
+	esac
+	# One blank apart, without one at the end.
+	ld_dns=$(echo $ld_dns)
 	{
 		echo "interface $(lan_if "$1")"
 		echo "start $ld_from"
@@ -1345,8 +1694,10 @@ fw_clear() {
 
 # The NAT the local networks go out through, and the protection that keeps
 # the internet's new connections from them, as onu-fw's table: each
-# network's interface and addresses, and the GEM interface of each session
-# they go out by, whose flows the switch carries. Without networks the
+# network's interface and addresses, the GEM interface of each connection
+# they go out by, whose flows the switch carries, and every way out from
+# the operator's side, the sessions' interfaces and each IPoE connection's,
+# by which no new connection comes in to a network. Without networks the
 # table goes.
 lans_fw() {
 	lf_all=$(lans)
@@ -1358,12 +1709,18 @@ lans_fw() {
 		for lf in $lf_all; do
 			echo "lan $(lan_if "$lf") $(lan_net "$lf")"
 		done
-		for lf in $(for ln in $lf_all; do lan_session "$ln"; done | sort -u); do
-			lf_gem=$(cat "$SESSIONS/$lf/gem" 2>/dev/null)
+		for lf in $(for ln in $lf_all; do lan_conn "$ln"; done | sort -u); do
+			case $lf in
+			pppoe:*) lf_gem=$(cat "$SESSIONS/${lf#pppoe:}/gem" 2>/dev/null) ;;
+			*) lf_gem=$(cat "$IPOE_DIR/${lf#ipoe:}/gem" 2>/dev/null) ;;
+			esac
 			[ -n "$lf_gem" ] && echo "wan $lf_gem"
 		done
-		# The sessions' interfaces, pppN, by which the networks go out.
-		echo "out ppp*"
+		# The sessions' interfaces, pppN, and the IPoE connections'.
+		[ -z "$(sessions)" ] || echo "out ppp*"
+		for lf in $(ipoes); do
+			[ -r "$IPOE_DIR/$lf/dev" ] && echo "out $(cat "$IPOE_DIR/$lf/dev")"
+		done
 	} >"$RUN/onu-fw.conf.new"
 	# What onu-fw holds already is not put in place again.
 	if [ -e "$RUN/onu-fw.conf" ] &&
@@ -1433,6 +1790,7 @@ links_net() {
 
 pass_down() {
 	lans_down
+	ipoes_down
 	sessions_down
 	links_net
 	rm -f "$RUN/onu-lan" "$RUN/onu-pass" "$RUN/onu-pass-proxy"
@@ -1474,6 +1832,7 @@ reidentify() {
 	# once the OLT provisions the new identity's GEM ports (sync).
 	if [ "$(cat "$RUN/onu-mode" 2>/dev/null)" = passthrough ]; then
 		load
+		ipoes_down
 		sessions_down
 	fi
 	onu-nl link set pon down
@@ -1501,11 +1860,11 @@ reidentify() {
 }
 
 # The settings of $CONF, and the shape they make, which no setting chooses:
-# an account makes the stick hold its sessions, and none leaves the OLT's
-# bridge.
+# an account or an IPoE connection makes the stick hold its connections,
+# and none leaves the OLT's bridge.
 load_mode() {
 	load
-	if [ -n "$(sessions)" ]; then
+	if [ -n "$(sessions)$(ipoes)" ]; then
 		MODE=passthrough
 	else
 		MODE=bridge
@@ -1636,7 +1995,9 @@ expire() {
 # which asks for them through onu-act and reads no file of /run itself: the
 # mode, the name servers, the address handed to the router and where, what
 # became of the settings in the store, each session's facts (session.N.dev,
-# gem, hands, ipv6, lan, gateway), and when each change on trial goes back
+# gem, hands, ipv6, lan, gateway), each IPoE connection's (ipoe.K.dev, gem,
+# ipv4, router, dns, ipv6, prefix, and lease, the seconds left of a DHCP
+# lease), and when each change on trial goes back
 # (trial.NAME, and trial.mgmt.address). A fact that is not there is left out.
 # This is the one place that names these files for a reader, and the lines are
 # the contract: the files themselves may change under it.
@@ -1662,6 +2023,17 @@ state() {
 			state_line "session.$st_n.$st_f" "$SESSIONS/$st_n/$st_f"
 		done
 		st_n=$((st_n + 1))
+	done
+	st_up=$(uptime_s)
+	for st_d in "$IPOE_DIR"/*; do
+		[ -r "$st_d/dev" ] || continue
+		for st_f in dev gem ipv4 router dns ipv6 prefix; do
+			state_line "ipoe.${st_d##*/}.$st_f" "$st_d/$st_f"
+		done
+		st_until=
+		[ -r "$st_d/until" ] && read -r st_until <"$st_d/until"
+		[ -n "$st_until" ] && [ "$st_until" -gt "$st_up" ] 2>/dev/null &&
+			echo "ipoe.${st_d##*/}.lease=$((st_until - st_up))"
 	done
 	# onu-change status: "NAME UNTIL", and for mgmt "NAME UNTIL ADDRESS".
 	onu-change status 2>/dev/null | while read -r st_name st_until st_addr; do
@@ -1741,7 +2113,7 @@ state)
 	state
 	exit 0
 	;;
-sync | omcid | dhcp6d)
+sync | omcid | dhcp6d | dhcpc)
 	# A change told while another waits for the lock is that one's too:
 	# at most one waits, and it reads everything once it holds the lock.
 	take "$AGAIN" || exit 0
@@ -1758,10 +2130,13 @@ guard)
 	for d in "$SESSIONS"/*; do
 		[ -r "$d/ppp" ] && [ -e "$d/up" ] && guard "$(cat "$d/ppp")"
 	done
+	for d in "$IPOE_DIR"/*; do
+		[ -r "$d/dev" ] && guard "$(cat "$d/dev")"
+	done
 	exit 0
 	;;
 *)
-	echo "usage: onu-apply start|reload|try|confirm|revert|stop|identity|reidentify|status|state|sync|guard" >&2
+	echo "usage: onu-apply start|reload|try|confirm|revert|stop|identity|reidentify|status|state|sync|guard|dhcpc" >&2
 	exit 2
 	;;
 esac

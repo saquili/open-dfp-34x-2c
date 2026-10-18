@@ -11,7 +11,7 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 programs run, and they are in ``/usr/lib/onu``, out of a person's way (ADR
 0015): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``,
 ``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call``,
-``onu-fw`` and ``onu-config.sh``. A script that runs one of them finds it there, and names it
+``onu-fw``, ``onu-dhcpc`` and ``onu-config.sh``. A script that runs one of them finds it there, and names it
 by its whole path where procd starts it.
 
 ``ponid``
@@ -532,9 +532,21 @@ by its whole path where procd starts it.
    It prints what the method's program wrote and exits with its status; a
    method run in the background answers at once with 0. The programs that tell
    ``onu-apply`` of a change they publish run it with ``-x``, and it gets their
-   name as the method (``omcid``, ``dhcp6d``): each is the method that runs
-   ``onu-apply`` for that name, and ubusd's list lets each program call its own
-   and no other (``tests/test_acl.py`` reads the lists).
+   name as the method (``omcid``, ``dhcp6d``), and so does ``onu-dhcpc``
+   (``dhcpc``): each is the method that runs ``onu-apply`` for that name, and
+   ubusd's list lets each program call its own and no other
+   (``tests/test_acl.py`` reads the lists; the account ``dhcpc``'s is
+   ``acl/dhcpc.json``).
+
+``onu-dhcpc``
+   the script of BusyBox's ``udhcpc``, the DHCP client of an IPoE connection
+   whose address comes from the operator's DHCP server. ``onu-apply`` starts
+   ``udhcpc`` on the connection's interface as the account ``dhcpc``, with the
+   powers of its raw socket and its port; for each event the script writes
+   what the lease brings into the connection's directory, ``/run/ipoe/K``
+   (``ipv4``, ``router``, ``dns``, and ``until``, the lease's end in seconds of
+   the uptime), and when the address, the gateway or the name servers changed
+   has ``onu-apply`` put them in place through ``onu-call dhcpc``.
 
 ``onu-fw``
    puts the stick's own table of nf_tables, ``inet onu``, in place for the
@@ -544,13 +556,15 @@ by its whole path where procd starts it.
       onu-fw clear
 
    The table is the NAT the networks go out through, behind the address of
-   the PPPoE session each goes out by, a flowtable that hands their TCP and
-   UDP flows to the switch, and the protection that keeps the sessions' new
-   connections out of the networks; ``src/fwmsg.h`` shows it as nft would.
-   ``onu-apply`` writes the file, ``/run/onu-fw.conf``: a line ``lan IFNAME
-   ADDRESS/LEN`` for each network, a line ``wan IFNAME`` for the GEM interface
-   of each session the networks go out by, and ``offload off`` for none of
-   the flowtable. The kernel takes the table whole or not at all, in place of
+   the connection each goes out by, a flowtable that hands their TCP and UDP
+   flows to the switch, and the protection that keeps new connections from
+   the operator's side out of the networks; ``src/fwmsg.h`` shows it as nft
+   would. ``onu-apply`` writes the file, ``/run/onu-fw.conf``: a line ``lan
+   IFNAME ADDRESS/LEN`` for each network, a line ``out IFNAME`` for each
+   interface of the operator's side, ``out ppp*`` for the sessions' and the
+   interface of each IPoE connection, a line ``wan IFNAME`` for the GEM
+   interface of each connection the networks go out by, and ``offload off``
+   for none of the flowtable. The kernel takes the table whole or not at all, in place of
    the one there was; when it refuses the flowtable, as one whose devices
    carry no flow in hardware does, the table goes in without it, and the CPU
    carries the flows. ``tests/test_onu_fw.sh`` reads the table back with nft
