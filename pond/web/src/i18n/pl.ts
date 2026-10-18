@@ -579,6 +579,8 @@ export const pl: Dictionary = {
     intPort: "Port w urządzeniu",
     intHint: "Puste: ten sam. Przy zakresie to pierwszy port, kolejne idą za nim.",
     intBad: "Port w urządzeniu to liczba od 1 do 65535, a cały zakres musi się w nich zmieścić.",
+    movedFull:
+      "Z tym zakresy przeniesione na inne porty przeniosłyby {n} portów, a wkładka mieści {max} (TCP i UDP liczą się osobno).",
     device: "Urządzenie",
     devicePick: "Wybierz urządzenie",
     deviceOther: "Wybierz urządzenie z sieci połączenia {name}.",

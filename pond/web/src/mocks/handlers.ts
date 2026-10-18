@@ -18,6 +18,7 @@ import type {
   Settings,
   SfpLane,
 } from "../api/types";
+import { MAX_MOVED, moved } from "../lib/ports";
 import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
 import { conversation } from "./conversation";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
@@ -998,6 +999,16 @@ export const handlers = [
           detail: `ports ${clash.ext_from}-${clash.ext_to} are forwarded already`,
         },
         { status: 409 },
+      );
+    /* The ranges moved to other ports move as many ports as the stick's table maps, at most. */
+    const all = list.filter((y) => y.id !== id).reduce((n, y) => n + moved(y), 0) + moved(x);
+    if (all > MAX_MOVED)
+      return HttpResponse.json(
+        {
+          error: "refused",
+          detail: `forward ${id}: with it, ranges moved to other ports move ${all} ports, more than ${MAX_MOVED} (TCP and UDP count apart)`,
+        },
+        { status: 400 },
       );
     pin(x.lan, x.mac);
     settings.forwards = [...list.filter((y) => y.id !== id), x];

@@ -580,6 +580,8 @@ export const en = {
     intPort: "Port on the device",
     intHint: "Empty: the same. For a range it is the first port, the others follow.",
     intBad: "The port on the device is a number from 1 to 65535, and the whole range must fit.",
+    movedFull:
+      "With this one, ranges moved to other ports would move {n} ports; the stick holds {max} (TCP and UDP count apart).",
     device: "Device",
     devicePick: "Choose a device",
     deviceOther: "Choose a device of a network of {name}.",

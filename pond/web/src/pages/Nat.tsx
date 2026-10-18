@@ -25,7 +25,7 @@ import { Field, SaveState, useChangeState } from "../components/Field";
 import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
 import { Dot, NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
-import { ports, readPorts } from "../lib/ports";
+import { MAX_MOVED, moved, ports, readPorts } from "../lib/ports";
 import { upTo, z } from "../lib/schemas";
 import { dmzs, forwards, MAX_FORWARDS, served } from "../lib/state";
 import type { Conn } from "./internet/conns";
@@ -217,6 +217,17 @@ function ForwardForm({
         const int = v.int.trim() ? Number(v.int) : ext.from;
         if (!/^\d*$/.test(v.int.trim()) || int < 1 || int + (ext.to - ext.from) > 65535)
           fail("int", t("nat.intBad"));
+        /* The ports the ranges moved to other ports move, this one's with them. */
+        const move =
+          others.reduce((n, f) => n + moved(f), 0) +
+          moved({
+            proto: v.proto,
+            ext_from: ext.from,
+            ext_to: ext.to,
+            int_port: int,
+            on: v.on === "on",
+          });
+        if (move > MAX_MOVED) fail("int", t("nat.movedFull", { n: move, max: MAX_MOVED }));
         /* The device is in a network of the connection. */
         const ids = idsOf(nets, v.conn);
         const dev = readDev(v.dev);
