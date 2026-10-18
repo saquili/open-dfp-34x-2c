@@ -118,6 +118,17 @@
 # end of a lease, in seconds of the uptime), ipv6 and prefix. No DHCPv6
 # client runs for a connection by DHCP.
 #
+# A forward, FORWARDk ("CONN/PROTO/PORTS/L/MAC/PORT/ON"), sends what comes in
+# new by the connection CONN to its IPv4 address, of TCP, UDP or both, to a
+# port or a range of ports, to the device MAC of network L at its fixed
+# address: a port to the port PORT, a range to the same ports; one with ON
+# off is kept and not in force. A connection's DMZ, DMZk ("CONN/L/MAC"),
+# takes what no forward takes, but ICMP and DHCP's answers, which stay with
+# the stick. They are lines of onu-fw's table (forwards_fw()), by the
+# connection's interface and its address there while it has one: a
+# session's once its IPv4 is up, an IPoE connection's while it has an
+# address.
+#
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
 
@@ -250,7 +261,8 @@ load_file() {
 		SESSION[1-7]_GEM | SESSION[1-7]_VLAN | SESSION[1-7]_MAC | \
 			SESSION[1-7]_FAMILY | SESSION[1-7]_PASS | SESSION[1-7]_HOST_VLAN) ;;
 		# A network's name is for people; its fixed addresses are read
-		# where they are needed (lan_dhcp()).
+		# where they are needed (lan_dhcp()), and so are the forwards
+		# and the DMZs (forwards_fw()).
 		LAN[1-8]_CONN | LAN[1-8]_VLAN | LAN[1-8]_ADDRESS | LAN[1-8]_DHCP | \
 			LAN[1-8]_POOL_FROM | LAN[1-8]_POOL_TO | LAN[1-8]_LEASE | \
 			LAN[1-8]_IPV6 | LAN[1-8]_IPV6_SUBNET) ;;
@@ -746,10 +758,12 @@ session_brought() {
 		case $role in
 		pass | routed) pass_lease "$1" "$addr" "$dev" "$(cat "$d/peer" 2>/dev/null)" ;;
 		esac
-		# Its networks' devices get its name servers.
+		# Its networks' devices get its name servers, and what is forwarded
+		# to them comes in by its interface, to its address.
 		for bn in $(lans); do
 			[ "$(lan_conn "$bn")" = "pppoe:$1" ] && lan_dhcp "$bn"
 		done
+		lans_fw
 		log "session $1: IPv4 up on $dev"
 	fi
 	if [ -s "$d/ipv6" ] && [ "$role6" = pd ] && [ ! -e "$SVC_DIR/dhcp6d$1" ]; then
@@ -771,6 +785,9 @@ session_lost() {
 	pass | routed) pass_lease_down "$1" ;;
 	esac
 	rm -f "$d/up"
+	# Its forwards go with its interface, whose name the next session to
+	# come up may take.
+	lans_fw
 	return 0
 }
 
@@ -1722,13 +1739,70 @@ fw_clear() {
 	rm -f "$RUN/onu-fw.conf"
 }
 
+# The interface of each connection that has an IPv4 address, and the address,
+# "pppoe:N IFNAME ADDR" or "ipoe:K IFNAME ADDR", a line each: a session's
+# once onu-apply took its address (session_brought()), its interface pppN,
+# which the kernel names as it comes up; an IPoE connection's while it has
+# one, typed in or from a lease.
+conns_in() {
+	for ci_d in "$SESSIONS"/*; do
+		[ -r "$ci_d/ppp" ] && [ -s "$ci_d/up" ] || continue
+		echo "pppoe:${ci_d##*/} $(cat "$ci_d/ppp") $(cat "$ci_d/up")"
+	done
+	for ci_d in "$IPOE_DIR"/*; do
+		[ -r "$ci_d/dev" ] && [ -s "$ci_d/ipv4" ] || continue
+		ci_a=$(cat "$ci_d/ipv4")
+		echo "ipoe:${ci_d##*/} $(cat "$ci_d/dev") ${ci_a%/*}"
+	done
+	return 0
+}
+
+# The forwards in force, FORWARDk ("CONN/PROTO/PORTS/L/MAC/PORT/ON"), and
+# the DMZs, DMZk ("CONN/L/MAC"), as lines of onu-fw's table: each comes in
+# by its connection's interface to the connection's address there, while it
+# has one, and goes to its device's fixed address, FIXEDk ("L/MAC/IP"); a
+# forward of both protocols is one of each. One awk reads them all, as a
+# forward each would take a few programs of its own.
+forwards_fw() {
+	awk -F'[=/]' -v conns="$(conns_in)" '
+		BEGIN {
+			n = split(conns, c, "\n")
+			for (i = 1; i <= n; i++)
+				if (split(c[i], w, " ") == 3)
+					at[w[1]] = w[2] " " w[3]
+		}
+		/^FIXED[0-9]+=./ { ip[$2 "/" tolower($3)] = $4 }
+		/^FORWARD[0-9]+=./ { fwd[++nf] = $0 }
+		/^DMZ[0-9]+=./ { dmz[++nd] = $0 }
+		END {
+			for (i = 1; i <= nf; i++) {
+				split(fwd[i], f, "[=/]")
+				dev = ip[f[5] "/" tolower(f[6])]
+				if (f[8] != "on" || !(f[2] in at) || dev == "")
+					continue
+				if (f[3] != "udp")
+					print "fwd " at[f[2]] " tcp " f[4] " " dev " " f[7]
+				if (f[3] != "tcp")
+					print "fwd " at[f[2]] " udp " f[4] " " dev " " f[7]
+			}
+			for (i = 1; i <= nd; i++) {
+				split(dmz[i], f, "[=/]")
+				dev = ip[f[3] "/" tolower(f[4])]
+				if ((f[2] in at) && dev != "")
+					print "dmz " at[f[2]] " " dev
+			}
+		}' "$CONF" 2>/dev/null
+}
+
 # The NAT the local networks go out through, and the protection that keeps
 # the internet's new connections from them, as onu-fw's table: each
 # network's interface and addresses, the GEM interface of each connection
 # they go out by, whose flows the switch carries, and every way out from
 # the operator's side, the sessions' interfaces and each IPoE connection's,
-# by which no new connection comes in to a network. Without networks the
-# table goes.
+# by which no new connection comes in to a network but what a forward or a
+# DMZ takes (forwards_fw()). Without networks the table goes. It runs again
+# when a session's address comes or goes, and at each sync, which follows
+# an IPoE connection's lease.
 lans_fw() {
 	lf_all=$(lans)
 	if [ -z "$lf_all" ]; then
@@ -1751,6 +1825,7 @@ lans_fw() {
 		for lf in $(ipoes); do
 			[ -r "$IPOE_DIR/$lf/dev" ] && echo "out $(cat "$IPOE_DIR/$lf/dev")"
 		done
+		forwards_fw
 	} >"$RUN/onu-fw.conf.new"
 	# What onu-fw holds already is not put in place again.
 	if [ -e "$RUN/onu-fw.conf" ] &&

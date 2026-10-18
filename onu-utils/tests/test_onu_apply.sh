@@ -239,6 +239,77 @@ check 'logged "l3_ttl_decrement false"'
 check 'logged "session 1 down" && has ses1 "interface ses1: device=wan410 proto=pppoed session=1 family=ipv4 pass=0 defaultroute=0"'
 teardown
 
+echo "ports forwarded to a network's devices, and a DMZ, by a session while it is up"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+# onu-fw's stand-in keeps each table it is given, one after another.
+printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf" && { cat "$2"; echo --; } >>"%s/fw.all"\nexit 0\n' \
+	"$T" "$T" >"$T/bin/onu-fw"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 \
+	LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on LAN1_LEASE=3600 \
+	FIXED1=1/00:00:5e:00:53:a1/192.168.1.10 FIXED2=1/00:00:5e:00:53:a2/192.168.1.20 \
+	FORWARD1=pppoe:1/tcp/8080/1/00:00:5e:00:53:a1/80/on FORWARD1_NAME=Serwer \
+	FORWARD2=pppoe:1/both/6000-6010/1/00:00:5e:00:53:a1/6000/on \
+	FORWARD3=pppoe:1/udp/3074/1/00:00:5e:00:53:a1/3074/off \
+	DMZ1=pppoe:1/1/00:00:5E:00:53:A2
+echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" sync 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	logged "IPv4 up on ppp0" && break
+	"$REAL_SLEEP" 0.2
+done
+# Before the session has its address there is nothing to come in to.
+check 'grep -qx "lan net1 192.168.1.0/24" "$T/fw.all" &&
+	[ "$(sed -n "1,/^--$/p" "$T/fw.all" | grep -c "^fwd\|^dmz")" -eq 0 ]'
+# Once it is up, each forward in force by its interface to its address, both
+# protocols one of each, to the device's fixed address, and the DMZ after them.
+F=$T/fw.conf
+check 'grep -qx "fwd ppp0 192.0.2.2 tcp 8080 192.168.1.10 80" "$F"'
+check 'grep -qx "fwd ppp0 192.0.2.2 tcp 6000-6010 192.168.1.10 6000" "$F" &&
+	grep -qx "fwd ppp0 192.0.2.2 udp 6000-6010 192.168.1.10 6000" "$F"'
+check '! grep -q 3074 "$F"'
+check 'grep -qx "dmz ppp0 192.0.2.2 192.168.1.20" "$F"'
+check '[ "$(grep -n "^dmz" "$F" | cut -d: -f1)" -gt "$(grep -n "^fwd" "$F" | tail -n 1 | cut -d: -f1)" ]'
+# The session ends after two seconds and comes up again (pppoed's stand-in):
+# its forwards go with it, and come back with it.
+cycled() {
+	awk '/^--$/ { s = s (f ? 1 : 0); f = 0; next } /^fwd ppp0/ { f = 1 } END { print s }' \
+		"$T/fw.all" | grep -q 101
+}
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+	cycled && break
+	"$REAL_SLEEP" 0.2
+done
+check 'cycled'
+# Without the DMZ and with the forwards off, only the network's NAT is left.
+sed -i.bak -e "s|/on$|/off|" -e "/^DMZ1=/d" "$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-fw apply" && grep -qx "lan net1 192.168.1.0/24" "$F" && ! grep -q "^fwd\|^dmz" "$F"'
+teardown
+
+echo "ports forwarded and a DMZ by a connection with its address typed in"
+setup
+conf IPOE1_KIND=static IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_FAMILY=ipv4 \
+	IPOE1_ADDRESS=192.0.2.10/24 IPOE1_GATEWAY=192.0.2.1 \
+	LAN1_CONN=ipoe:1 LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on LAN1_LEASE=3600 \
+	FIXED1=1/00:00:5e:00:53:a1/192.168.1.10 FIXED2=1/00:00:5e:00:53:a2/192.168.1.20 \
+	FORWARD7=ipoe:1/udp/51820/1/00:00:5e:00:53:a1/51820/on \
+	FORWARD8=ipoe:1/tcp/443/1/00:00:5e:00:53:a9/443/on \
+	DMZ3=ipoe:1/1/00:00:5e:00:53:a2
+"$MODE_SCRIPT" start 2>/dev/null
+F=$T/fw.conf
+check 'grep -qx "out wan420" "$F" && grep -qx "fwd wan420 192.0.2.10 udp 51820 192.168.1.10 51820" "$F"'
+check 'grep -qx "dmz wan420 192.0.2.10 192.168.1.20" "$F"'
+# A device without a fixed address, which onu-config refuses, has nothing.
+check '[ "$(grep -c "^fwd" "$F")" -eq 1 ]'
+# A sync with nothing changed puts nothing in place again.
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check '! logged "^onu-fw"'
+teardown
+
 echo "a PPPoE session without name servers"
 setup
 printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
