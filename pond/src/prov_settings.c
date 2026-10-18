@@ -30,6 +30,12 @@
  * them; the devices from udhcpd's lease file of each network,
  * /run/udhcpd-netN.leases, which onu-apply names so. The panel's writes of
  * a network and of a fixed address become the keys of the store here.
+ *
+ * So are the connections that take their address as a router does, IPOEn_*
+ * (IPoE: an address typed in, or one from the operator's DHCP server), each
+ * with what onu-apply says it brought up (ipoe.N.* of onu-apply state). A
+ * connection or a session removed takes the networks that go out by it
+ * with it, and their fixed addresses.
  */
 
 #define _GNU_SOURCE
@@ -48,6 +54,9 @@
 #include <time.h>
 
 #define SESSIONS 7
+/* The IPoE connections, and the connections of every kind together. */
+#define IPOE 7
+#define CONNS 7
 /* A whole set of settings, as much as the configuration store holds. */
 #define TEXT_MAX 65536
 #define VALUE_MAX 64
@@ -351,6 +360,111 @@ static void state_of(char *out, size_t cap)
 		out[0] = '\0';
 }
 
+/* Whether IPoE connection @n is set up in @text: it has a kind. */
+static bool ipoe_on(const char *text, int n)
+{
+	char k[32], v[VALUE_MAX];
+
+	snprintf(k, sizeof(k), "IPOE%d_KIND", n);
+	return line_value(text, k, v, sizeof(v)) && *v;
+}
+
+/* The connections of @text, of every kind: sessions with an account and IPoE. */
+static int conns_of(const char *text, const struct account acct[SESSIONS])
+{
+	int n = 0;
+
+	for (int i = 0; i < SESSIONS; i++)
+		n += *acct[i].user != '\0';
+	for (int i = 1; i <= IPOE; i++)
+		n += ipoe_on(text, i);
+	return n;
+}
+
+/* A key of IPoE connection @n and its value, as a member of an object. */
+static void pv_ipoe_field(struct prov_buf *out, const char *text, int n,
+			  const char *key, const char *member)
+{
+	char k[32], v[NAME_MAX];
+
+	snprintf(k, sizeof(k), "IPOE%d_%s", n, key);
+	pv_comma(out);
+	pv_key(out, member);
+	pv_str(out, line_value(text, k, v, sizeof(v)) ? v : "");
+}
+
+/* A fact of IPoE connection @n that onu-apply says in @st, as a member. */
+static void pv_ipoe_fact(struct prov_buf *out, const char *st, int n,
+			 const char *fact, const char *member)
+{
+	char key[48];
+
+	snprintf(key, sizeof(key), "ipoe.%d.%s", n, fact);
+	pv_comma(out);
+	pv_key(out, member);
+	pv_fact(out, st, key);
+}
+
+/*
+ * The IPoE connections, each with its settings of @text and what onu-apply
+ * brought up for it, which it says in @st: its interfaces, the addresses in
+ * effect, the gateway and the name servers, and the seconds left of a DHCP
+ * lease. It is up while it has an address.
+ */
+static void pv_ipoe(struct prov_buf *out, const char *text, const char *st)
+{
+	char key[48], v[VALUE_MAX];
+	bool first = true;
+
+	pv_open(out, '[');
+	for (int n = 1; n <= IPOE; n++) {
+		bool up;
+
+		if (!ipoe_on(text, n))
+			continue;
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "id");
+		pv_num(out, n);
+		pv_ipoe_field(out, text, n, "KIND", "kind");
+		pv_ipoe_field(out, text, n, "VLAN", "vlan");
+		pv_ipoe_field(out, text, n, "GEM", "gem");
+		pv_ipoe_field(out, text, n, "MAC", "mac");
+		pv_ipoe_field(out, text, n, "FAMILY", "family");
+		pv_ipoe_field(out, text, n, "ADDRESS", "address");
+		pv_ipoe_field(out, text, n, "GATEWAY", "gateway");
+		pv_ipoe_field(out, text, n, "DNS", "dns");
+		pv_ipoe_field(out, text, n, "ADDRESS6", "address6");
+		pv_ipoe_field(out, text, n, "GATEWAY6", "gateway6");
+		pv_ipoe_field(out, text, n, "PREFIX6", "prefix6");
+		pv_ipoe_fact(out, st, n, "dev", "dev");
+		pv_ipoe_fact(out, st, n, "gem", "gem_dev");
+		snprintf(key, sizeof(key), "ipoe.%d.ipv4", n);
+		up = line_value(st, key, v, sizeof(v));
+		snprintf(key, sizeof(key), "ipoe.%d.ipv6", n);
+		up = up || line_value(st, key, v, sizeof(v));
+		pv_comma(out);
+		pv_key(out, "up");
+		pv_bool(out, up);
+		pv_ipoe_fact(out, st, n, "ipv4", "ipv4");
+		pv_ipoe_fact(out, st, n, "router", "router");
+		pv_ipoe_fact(out, st, n, "dns", "dns_now");
+		pv_ipoe_fact(out, st, n, "ipv6", "ipv6");
+		pv_ipoe_fact(out, st, n, "prefix", "prefix");
+		snprintf(key, sizeof(key), "ipoe.%d.lease", n);
+		pv_comma(out);
+		pv_key(out, "lease");
+		if (line_value(st, key, v, sizeof(v)))
+			pv_num(out, strtol(v, NULL, 10));
+		else
+			pv_null(out);
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
 /* A key of network @n and its value, as a member of an object. */
 static void pv_lan_field(struct prov_buf *out, const char *text, int n,
 			 const char *key, const char *member)
@@ -560,6 +674,7 @@ int prov_settings(struct prov_buf *out)
 		size_t klen;
 
 		if (!eq || !strncmp(p, "SESSION", 7) || !strncmp(p, "FIXED", 5) ||
+		    !strncmp(p, "IPOE", 4) ||
 		    (!strncmp(p, "LAN", 3) && p[3] >= '1' && p[3] <= '9'))
 			continue;
 		klen = (size_t)(eq - p);
@@ -578,6 +693,9 @@ int prov_settings(struct prov_buf *out)
 
 	pv_key(out, "sessions");
 	pv_sessions(out, acct, text, st);
+	pv_comma(out);
+	pv_key(out, "ipoe");
+	pv_ipoe(out, text, st);
 	pv_comma(out);
 
 	pv_key(out, "lans");
@@ -732,16 +850,48 @@ static const char *line_value(const char *text, const char *key, char *out,
 }
 
 /*
+ * Network @n removed in @change, which holds @len bytes of @cap: LANn_CONN
+ * empty, and the fixed addresses in it gone with it, of the settings @text.
+ */
+static void lan_drop(const char *text, int n, char *change, size_t cap, size_t *len)
+{
+	char mac[18], ip[16];
+
+	append(change, cap, len, "LAN%d_CONN=\n", n);
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int f, lan;
+
+		if (fixed_of(p, &f, &lan, mac, ip) && lan == n)
+			append(change, cap, len, "FIXED%d=\n", f);
+	}
+}
+
+/* The networks that go out by the connection @conn, "pppoe:N" or "ipoe:N", removed. */
+static void lans_drop(const char *text, const char *conn, char *change, size_t cap,
+		      size_t *len)
+{
+	char k[32], v[VALUE_MAX];
+
+	for (int n = 1; n <= LANS; n++) {
+		snprintf(k, sizeof(k), "LAN%d_CONN", n);
+		if (line_value(text, k, v, sizeof(v)) && !strcmp(v, conn))
+			lan_drop(text, n, change, cap, len);
+	}
+}
+
+/*
  * A session of the stick's own: ID, 1 to 7, or none for the first free one;
  * USER and SECRET, its account, an empty USER removing the session (an
  * absent SECRET keeps the one there is); VLAN, MAC, GEM, FAMILY, PASS and
  * HOST_VLAN. onu-config judges them, and takes over the WAN's settings of before,
- * which the first session took when it had none of its own.
+ * which the first session took when it had none of its own. A session
+ * removed takes the networks that go out by it with it. Sessions and the
+ * IPoE connections are seven at most together.
  */
 int prov_session_write(const char *val, char *err, size_t errcap,
 		       prov_done done, void *ctx)
 {
-	static char text[TEXT_MAX];
+	static char text[TEXT_MAX], change[TEXT_MAX];
 	char id[VALUE_MAX], user[USER_MAX + 2], secret[SECRET_MAX + 2],
 		vlan[VALUE_MAX], mac[VALUE_MAX], gem[VALUE_MAX], fam[VALUE_MAX],
 		pass[VALUE_MAX], host[VALUE_MAX];
@@ -783,6 +933,11 @@ int prov_session_write(const char *val, char *err, size_t errcap,
 			explicit_bzero(acct, sizeof(acct));
 			return -EINVAL;
 		}
+		if (conns_of(text, acct) >= CONNS) {
+			snprintf(err, errcap, "all %d connections are taken", CONNS);
+			explicit_bzero(acct, sizeof(acct));
+			return -EINVAL;
+		}
 	}
 	if (!*acct[n - 1].user && (!u || !*u)) {
 		snprintf(err, errcap, "session %d has no account", n);
@@ -791,32 +946,35 @@ int prov_session_write(const char *val, char *err, size_t errcap,
 	}
 	explicit_bzero(acct, sizeof(acct));
 
+	change[0] = '\0';
 	if (u && !*u) {
-		append(text, sizeof(text), &len, "PPPOE%d_USER=\n", n);
+		char conn[16];
+
+		append(change, sizeof(change), &len, "PPPOE%d_USER=\n", n);
+		snprintf(conn, sizeof(conn), "pppoe:%d", n);
+		lans_drop(text, conn, change, sizeof(change), &len);
 	} else {
 		if (u)
-			append(text, sizeof(text), &len, "PPPOE%d_USER=%s\n", n, u);
+			append(change, sizeof(change), &len, "PPPOE%d_USER=%s\n", n, u);
 		if (sec && *sec)
-			append(text, sizeof(text), &len, "PPPOE%d_SECRET=%s\n", n, sec);
+			append(change, sizeof(change), &len, "PPPOE%d_SECRET=%s\n", n, sec);
 		if (v)
-			append(text, sizeof(text), &len, "SESSION%d_VLAN=%s\n", n, v);
+			append(change, sizeof(change), &len, "SESSION%d_VLAN=%s\n", n, v);
 		if (m)
-			append(text, sizeof(text), &len, "SESSION%d_MAC=%s\n", n, m);
+			append(change, sizeof(change), &len, "SESSION%d_MAC=%s\n", n, m);
 		if (g)
-			append(text, sizeof(text), &len, "SESSION%d_GEM=%s\n", n, g);
+			append(change, sizeof(change), &len, "SESSION%d_GEM=%s\n", n, g);
 		if (f)
-			append(text, sizeof(text), &len, "SESSION%d_FAMILY=%s\n", n, f);
+			append(change, sizeof(change), &len, "SESSION%d_FAMILY=%s\n", n, f);
 		if (p)
-			append(text, sizeof(text), &len, "SESSION%d_PASS=%s\n", n, p);
+			append(change, sizeof(change), &len, "SESSION%d_PASS=%s\n", n, p);
 		if (h)
-			append(text, sizeof(text), &len, "SESSION%d_HOST_VLAN=%s\n", n, h);
+			append(change, sizeof(change), &len, "SESSION%d_HOST_VLAN=%s\n", n, h);
 	}
-	if (!len)
-		text[0] = '\0';
 
-	rc = prov_settings_write(text, err, errcap, done, ctx);
+	rc = prov_settings_write(change, err, errcap, done, ctx);
 	explicit_bzero(secret, sizeof(secret));
-	explicit_bzero(text, sizeof(text));
+	explicit_bzero(change, sizeof(change));
 	return rc;
 }
 
@@ -874,15 +1032,7 @@ int prov_lan_write(const char *val, char *err, size_t errcap, prov_done done,
 	change[0] = '\0';
 	if (conn && !*conn) {
 		/* The network goes, and the fixed addresses in it with it. */
-		char mac[18], ip[16];
-
-		append(change, sizeof(change), &len, "LAN%d_CONN=\n", n);
-		for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
-			int f, lan;
-
-			if (fixed_of(p, &f, &lan, mac, ip) && lan == n)
-				append(change, sizeof(change), &len, "FIXED%d=\n", f);
-		}
+		lan_drop(text, n, change, sizeof(change), &len);
 	} else {
 		if (conn)
 			append(change, sizeof(change), &len, "LAN%d_CONN=%s\n", n, conn);
@@ -899,6 +1049,100 @@ int prov_lan_set(const char *val, char *err, size_t errcap)
 	struct prov_wait w = { .err = err, .errcap = errcap };
 
 	return prov_wait(prov_lan_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * A connection that takes its address as a router does: ID, 1 to 7, or none
+ * for the first free one; KIND, static or dhcp, empty to remove it with the
+ * networks that go out by it; VLAN, GEM, MAC and FAMILY; and for a static
+ * one ADDRESS, GATEWAY, DNS (apart by blanks or commas), ADDRESS6, GATEWAY6
+ * and PREFIX6, which a connection by DHCP has none of. Sessions and these
+ * connections are seven at most together. onu-config judges them.
+ */
+int prov_ipoe_write(const char *val, char *err, size_t errcap, prov_done done,
+		    void *ctx)
+{
+	static const char *const keys[] = { "VLAN", "GEM", "MAC", "FAMILY" };
+	static const char *const typed[] = {
+		"ADDRESS", "GATEWAY", "DNS", "ADDRESS6", "GATEWAY6", "PREFIX6",
+	};
+	static char text[TEXT_MAX], change[TEXT_MAX];
+	char id[VALUE_MAX], kind[VALUE_MAX], v[NAME_MAX], dns[NAME_MAX];
+	const char *i = line_value(val, "ID", id, sizeof(id));
+	const char *k = line_value(val, "KIND", kind, sizeof(kind));
+	bool dhcp = k && !strcmp(k, "dhcp");
+	struct account acct[SESSIONS];
+	size_t len = 0;
+	int n = 0, conns, rc;
+
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	if (i) {
+		if (strlen(i) != 1 || *i < '1' || *i > '0' + IPOE) {
+			snprintf(err, errcap, "ID: 1 to %d", IPOE);
+			return -EINVAL;
+		}
+		n = *i - '0';
+	}
+	change[0] = '\0';
+	if (n && k && !*k) {
+		char conn[16];
+
+		append(change, sizeof(change), &len, "IPOE%d_KIND=\n", n);
+		snprintf(conn, sizeof(conn), "ipoe:%d", n);
+		lans_drop(text, conn, change, sizeof(change), &len);
+		return prov_settings_write(change, err, errcap, done, ctx);
+	}
+	if (!n || !ipoe_on(text, n)) {
+		if (!k || !*k) {
+			snprintf(err, errcap, "a new connection needs KIND");
+			return -EINVAL;
+		}
+		accounts_of(text, acct);
+		conns = conns_of(text, acct);
+		explicit_bzero(acct, sizeof(acct));
+		for (int m = 1; m <= IPOE && !n; m++)
+			if (!ipoe_on(text, m))
+				n = m;
+		if (!n || conns >= CONNS) {
+			snprintf(err, errcap, "all %d connections are taken", CONNS);
+			return -EINVAL;
+		}
+	}
+	if (k)
+		append(change, sizeof(change), &len, "IPOE%d_KIND=%s\n", n, k);
+	for (size_t j = 0; j < ARRAY_SIZE(keys); j++)
+		if (line_value(val, keys[j], v, sizeof(v)))
+			append(change, sizeof(change), &len, "IPOE%d_%s=%s\n", n, keys[j], v);
+	for (size_t j = 0; j < ARRAY_SIZE(typed); j++) {
+		if (dhcp)
+			v[0] = '\0';
+		else if (!line_value(val, typed[j], v, sizeof(v)))
+			continue;
+		/* The name servers one blank apart, as the settings keep them. */
+		if (!strcmp(typed[j], "DNS")) {
+			size_t w = 0;
+
+			dns[0] = '\0';
+			for (char *t = strtok(v, " ,\t"); t && w < sizeof(dns);
+			     t = strtok(NULL, " ,\t"))
+				w += (size_t)snprintf(dns + w, sizeof(dns) - w, "%s%s",
+						      w ? " " : "", t);
+			memcpy(v, dns, sizeof(v));
+		}
+		append(change, sizeof(change), &len, "IPOE%d_%s=%s\n", n, typed[j], v);
+	}
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_ipoe_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_ipoe_write(val, err, errcap, prov_waited, &w), &w);
 }
 
 /*

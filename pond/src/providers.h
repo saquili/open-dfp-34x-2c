@@ -54,6 +54,9 @@ int prov_network(struct prov_buf *out);
 int prov_lan_write(const char *val, char *err, size_t errcap, prov_done done,
 		   void *ctx);
 int prov_lan_set(const char *val, char *err, size_t errcap);
+int prov_ipoe_write(const char *val, char *err, size_t errcap, prov_done done,
+		    void *ctx);
+int prov_ipoe_set(const char *val, char *err, size_t errcap);
 int prov_fixed_write(const char *val, char *err, size_t errcap,
 		     prov_done done, void *ctx);
 int prov_fixed_set(const char *val, char *err, size_t errcap);

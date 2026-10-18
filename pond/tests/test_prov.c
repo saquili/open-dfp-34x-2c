@@ -2052,6 +2052,118 @@ static void test_lans(void)
 	unsetenv("POND_ONU_APPLY");
 }
 
+static void test_ipoe(void)
+{
+	static char buf[16384];
+	char file[512], err[256], stub[512];
+	const char *s;
+	int rc;
+
+	puts("the connections that take their address as a router does");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		char path[32];
+
+		snprintf(path, sizeof(path), "/run/onu-pppoe%d", n);
+		unlink(prov_path(path, file, sizeof(file)));
+	}
+	s = settled(buf, sizeof(buf));
+	check(strstr(s, "\"ipoe\":[]") != NULL,
+	      "a stick without connections serves them as an empty list: the panel's page is there");
+
+	check(prov_ipoe_set("VLAN=420\n", err, sizeof(err)) == -EINVAL && strstr(err, "needs KIND"),
+	      "a new connection needs a kind");
+	rc = prov_ipoe_set("KIND=static\nVLAN=420\nGEM=auto\nMAC=\nFAMILY=ipv4\n"
+			   "ADDRESS=192.0.2.10/24\nGATEWAY=192.0.2.1\n"
+			   "DNS=198.51.100.53, 198.51.100.54\nADDRESS6=\nGATEWAY6=\nPREFIX6=\n",
+			   err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "IPOE1_KIND=static") &&
+		      file_has("/run/onu.conf", "IPOE1_DNS=198.51.100.53 198.51.100.54") &&
+		      strstr(s, "\"ipoe\":[{\"id\":1,\"kind\":\"static\",\"vlan\":\"420\","
+				"\"gem\":\"auto\",\"mac\":\"\",\"family\":\"ipv4\","
+				"\"address\":\"192.0.2.10/24\",\"gateway\":\"192.0.2.1\","
+				"\"dns\":\"198.51.100.53 198.51.100.54\",\"address6\":\"\","
+				"\"gateway6\":\"\",\"prefix6\":\"\",\"dev\":null,\"gem_dev\":null,"
+				"\"up\":false,\"ipv4\":null,\"router\":null,\"dns_now\":null,"
+				"\"ipv6\":null,\"prefix\":null,\"lease\":null}]"),
+	      "a static connection is taken, its name servers one blank apart, and served as the panel reads it");
+	check(!strstr(s, "\"IPOE1_KIND\""), "and not again among the other settings");
+	check(prov_ipoe_set("KIND=dhcp\nVLAN=420\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "connections 1 and 2 are in one VLAN"),
+	      "a second connection in its VLAN is refused, as onu-config judges it");
+	check(prov_ipoe_set("ID=1\nGATEWAY=198.51.100.1\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "gateway"),
+	      "a gateway out of its network is refused");
+
+	rc = prov_ipoe_set("ID=1\nKIND=dhcp\nVLAN=420\nFAMILY=both\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "IPOE1_KIND=dhcp") &&
+		      !file_has("/run/onu.conf", "192.0.2.10") &&
+		      strstr(s, "\"kind\":\"dhcp\",\"vlan\":\"420\",\"gem\":\"auto\",\"mac\":\"\","
+				"\"family\":\"both\",\"address\":\"\""),
+	      "a connection by DHCP keeps none of the addresses typed in for it");
+
+	rc = prov_lan_set("CONN=ipoe:1\nVLAN=20\nADDRESS=192.168.2.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "LAN1_CONN=ipoe:1") &&
+		      strstr(s, "\"conn\":\"ipoe:1\""),
+	      "a network goes out by a connection");
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a1\nIP=192.168.2.10\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0, "a device of it has a fixed address");
+
+	/* Six connections more: the seventh is the last one. */
+	rc = prov_session_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\nPASS=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0, "a session beside the connection");
+	for (int n = 2; n <= 6; n++) {
+		char line[64];
+
+		snprintf(line, sizeof(line), "KIND=dhcp\nVLAN=%d\n", 900 + n);
+		rc |= prov_ipoe_set(line, err, sizeof(err));
+		s = settled(buf, sizeof(buf));
+	}
+	check(rc == 0 && file_has("/run/onu.conf", "IPOE6_KIND=dhcp"),
+	      "connections up to the seventh are taken");
+	check(prov_ipoe_set("KIND=dhcp\nVLAN=999\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "all 7 connections are taken"),
+	      "an eighth connection is refused");
+	check(prov_session_set("USER=other@example.net\nSECRET=example-secret\nVLAN=36\nPASS=off\n",
+			       err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "all 7 connections are taken"),
+	      "and so is a session that would be the eighth");
+
+	rc = prov_ipoe_set("ID=1\nKIND=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "IPOE1_") && !file_has("/run/onu.conf", "LAN1_") &&
+		      !file_has("/run/onu.conf", "FIXED") && strstr(s, "\"lans\":[]"),
+	      "a connection removed takes the networks that go out by it with it");
+
+	rc = prov_lan_set("CONN=pppoe:1\nADDRESS=192.168.3.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "LAN1_CONN=pppoe:1"), "a network out by the session");
+	rc = prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "LAN1_") && strstr(s, "\"lans\":[]"),
+	      "and so does a session removed");
+	for (int n = 2; n <= 6; n++) {
+		char line[32];
+
+		snprintf(line, sizeof(line), "ID=%d\nKIND=\n", n);
+		prov_ipoe_set(line, err, sizeof(err));
+		s = settled(buf, sizeof(buf));
+	}
+	s = settled(buf, sizeof(buf));
+	(void)s;
+	unsetenv("POND_ONU_APPLY");
+}
+
 /* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
 static const char update_stub[] =
 	"#!/bin/sh\n"
@@ -2407,6 +2519,7 @@ int main(void)
 	test_firmware();
 	test_panel_values();
 	test_lans();
+	test_ipoe();
 	test_omci();
 	test_omci_frames();
 	test_system();

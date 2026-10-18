@@ -238,8 +238,26 @@ wrong sign-in, 429 while sign-ins are stopped.
   ``HOST_VLAN``, the VLAN of the host link it hands down in (nothing for the
   session's own VLAN, ``untagged`` for none). With an account the stick holds
   the session, and in each VLAN towards the host the first that hands down and
-  carries IPv4 hands its address to the router; ``USER=`` removes it. The
-  panel names no mode: without accounts the router dials through the stick.
+  carries IPv4 hands its address to the router; ``USER=`` removes it, with
+  the local networks that go out by it. The panel names no mode: without
+  accounts the router dials through the stick.
+* ``ipoe``: a connection that takes its address as a router does: ``ID``
+  (none for the first free one), ``KIND`` (``static``, an address typed in,
+  or ``dhcp``, one from the operator's DHCP server; empty removes it, with
+  the local networks that go out by it), ``VLAN``, ``GEM``, ``MAC``,
+  ``FAMILY``, and for a static one ``ADDRESS`` (with its prefix length),
+  ``GATEWAY``, ``DNS`` (apart by blanks or commas), ``ADDRESS6``,
+  ``GATEWAY6`` and ``PREFIX6``, which one by DHCP has none of. Sessions and
+  these connections are seven at most together. A read gives each, as
+  ``ipoe`` beside the sessions, with what ``onu-apply state`` says it brought
+  up: its interfaces, the addresses in effect, the gateway, the name servers
+  and the seconds left of a DHCP lease.
+* ``lan``: a local network the stick routes out by a connection, ``CONN``
+  (``pppoe:N`` or ``ipoe:N``; empty removes the network with its fixed
+  addresses), ``ID``, ``NAME``, ``VLAN``, ``ADDRESS``, ``DHCP``,
+  ``POOL_FROM``, ``POOL_TO``, ``LEASE``, ``IPV6`` and ``IPV6_SUBNET``; and
+  ``fixed``, a device's fixed address in one, ``LAN``, ``MAC``, ``IP`` (empty
+  removes it) and ``NAME``.
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
   ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION``,
