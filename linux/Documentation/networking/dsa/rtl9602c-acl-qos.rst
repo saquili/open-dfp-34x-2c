@@ -800,6 +800,25 @@ to an ACL rule.
        with the entries ordered, the one of priority 10 decided over the one of
        20 in both orders of adding, for drop over trap and for trap over
        drop.
+   * - The IPv4 fields, the IP protocol, MAC addresses and the ports of the
+       field selectors match frames that carry an 802.1Q tag as they match
+       untagged ones, and frames from the PON's GEM ports alike. A port's mask
+       applies as for any field. Counted by ``pass`` rules: on ``sfp``, from a
+       host in VLAN 410, ``src_ip`` with ``ip_proto icmp`` 5 of 5 echo
+       requests, ``src_mac`` with ``ip_proto udp`` 2590 of 2590 datagrams, and
+       ``ip_proto tcp dst_port 5200/0xfffe`` 404,951 frames against 404,931
+       TCP segments sent to port 5201; on ``pon``, from an IPoE service in
+       VLAN 2002, ``src_ip`` with ``ip_proto icmp`` 5 of 5 echo replies.
+     - M
+     - ``tc -s filter show`` against the hosts' own counts (``ping``, iperf3,
+       ``nstat``), traffic routed by the stick both ways.
+   * - The IPv4 fields do not reach into a PPPoE session frame: they hold no
+       IPv4 addresses for one, so a rule on them misses the IPv4 that a PPPoE
+       session carries.
+     - M
+     - On ``pon``, ``src_ip 203.0.113.1 ip_proto icmp`` counted none of 20 echo
+       replies that the concentrator sent over a PPPoE session in VLAN 2001,
+       while ``protocol ppp_ses`` counted 50 frames over the same time.
 
 Rules of the driver's own
 -------------------------
