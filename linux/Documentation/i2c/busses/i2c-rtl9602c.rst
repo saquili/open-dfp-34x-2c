@@ -190,10 +190,12 @@ is read, in these steps:
 4. Write ``RTL9602C_I2C_CMD_START`` to ``RTL9602C_I2C_CMD`` for a read, and
    ``RTL9602C_I2C_CMD_START`` with ``RTL9602C_I2C_CMD_WRITE`` for a write.
    Purpose: start the transfer. (M)
-5. Poll ``RTL9602C_I2C_CMD`` until ``RTL9602C_I2C_CMD_BUSY`` is clear: at most
-   2000 polls 1 us apart, else fail with ``-ETIMEDOUT``. Purpose: wait for the
-   transfer. The bound is the driver's; a one-byte read at 100 kHz takes about
-   460 us. (T)
+5. Poll ``RTL9602C_I2C_CMD`` until ``RTL9602C_I2C_CMD_BUSY`` is clear, 1 us
+   apart for up to 2 ms (``read_poll_timeout_atomic()``), else fail with
+   ``-ETIMEDOUT``. Purpose: wait for the transfer. The bound is the driver's; a
+   one-byte read at 100 kHz takes about 460 us. The wait does not sleep: the
+   board's kernel has no high resolution timers, and a sleep would last at
+   least a tick, 4 ms at its 250 Hz. (T)
 6. If ``RTL9602C_I2C_CMD_NACK`` is set, fail with ``-ENXIO``. Purpose: the
    device did not acknowledge. (M)
 7. For a read, the byte is the low 8 bits of ``RTL9602C_I2C_RX_DATA``; for a

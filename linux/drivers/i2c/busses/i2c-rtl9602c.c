@@ -19,10 +19,10 @@
 
 #include <linux/auxiliary_bus.h>
 #include <linux/bitfield.h>
-#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/platform_data/i2c-rtl9602c.h>
 
@@ -52,8 +52,9 @@
 /* 100 kHz, from the clock the divider counts */
 #define RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ	311
 
-/* Poll BUSY up to this many times, 1 us apart: a byte at 100 kHz is 460 us. */
-#define RTL9602C_I2C_POLLS		2000
+/* Poll BUSY 1 us apart for up to 2 ms: a byte at 100 kHz is 460 us. */
+#define RTL9602C_I2C_POLL_US		1
+#define RTL9602C_I2C_TIMEOUT_US		2000
 
 /**
  * struct rtl9602c_i2c - the master
@@ -83,19 +84,17 @@ static void rtl9602c_i2c_rmw(struct rtl9602c_i2c *i2c, u32 off, u32 clr, u32 set
 
 /*
  * BUSY is set while a transfer runs. The last command word read, with its
- * NACK bit, is left in @cmd.
+ * NACK bit, is left in @cmd. The wait does not sleep: without high
+ * resolution timers, as in the board's configuration, a sleep lasts at
+ * least a tick, 4 ms at 250 Hz, where a transfer takes about half a
+ * millisecond.
  */
 static int rtl9602c_i2c_wait(struct rtl9602c_i2c *i2c, u32 *cmd)
 {
-	int i;
-
-	for (i = 0; i < RTL9602C_I2C_POLLS; i++) {
-		*cmd = rtl9602c_i2c_r(i2c, RTL9602C_I2C_CMD);
-		if (!(*cmd & RTL9602C_I2C_CMD_BUSY))
-			return 0;
-		udelay(1);
-	}
-	return -ETIMEDOUT;
+	return read_poll_timeout_atomic(rtl9602c_i2c_r, *cmd,
+					!(*cmd & RTL9602C_I2C_CMD_BUSY),
+					RTL9602C_I2C_POLL_US, RTL9602C_I2C_TIMEOUT_US,
+					false, i2c, RTL9602C_I2C_CMD);
 }
 
 /*
