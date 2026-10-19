@@ -11,7 +11,7 @@ what it does not, and what a person with a stick on a bench does. The facts are
 tagged as the provenance policy asks (``docs/policy/provenance.rst``): M,
 measured on the board; T, tested by function; P, a public standard, with its
 clause; I, inferred and not verified. The kernel pages hold the detail:
-``linux/Documentation/networking/device_drivers/pon/rtl9602c-optics.rst`` for
+``linux/Documentation/networking/device_drivers/pon/gn25l95.rst`` for
 the laser driver and its line, ``rtl9602c-gpon.rst`` for the activation states.
 
 The two harms
@@ -21,7 +21,7 @@ The two harms
 the open cage of a stick that is powered and connected can emit it. The
 stick's own measurement of one burst in operation read a bias of 7 mA to 8 mA
 and a transmitted power of 1672 uW to 1682 uW, about +2.2 dBm (M: the hwmon
-device ``rtl9602c_optics``, ``curr1_input`` and ``power1_input``, on the
+device ``gn25l95``, ``curr1_input`` and ``power1_input``, on the
 DFP-34X-2C3 in O5 on a lab OLT, 2026-10-12). Never look into the cage, a
 connector or a fibre. Keep the caps on whatever is not connected. The
 DFP-34X-2C2 and the DFP-34X-2C3 are one stick, the 2C2 with a UPC optical
@@ -53,7 +53,7 @@ silence an ONU for good with the emergency stop.
    and in O7, on a deactivation and when the interface goes down (M: with the
    ONU in O5 the line driven high by hand took the module's bias from 7 mA to 0
    and its transmitted power from 1677 uW to 0 within a second;
-   ``rtl9602c-optics.rst``, "TX_DISABLE").
+   ``gn25l95.rst``, "TX_DISABLE").
 2. **The burst enable.** With the line released the laser still does not emit
    continuously: the GPON MAC keys each burst, and only inside the allocations
    the OLT grants (M: ``rtl9602c-gpon.rst``, the TX_DISABLE row of the state
@@ -86,29 +86,33 @@ there outlives the image that wrote it, and the controls it could remove
 protect the other ONUs of the PON. The system therefore writes the module as
 little as it can:
 
-* The driver writes only a module whose header reads ``ODI`` and
-  ``DFP-34X-2C``, the module it was measured on. For any other it behaves as the
-  read-only build: no write to the module, and no transmit power level
-  (``rtl9602c-optics.rst``, "The modules the driver writes"). Whether the part
+* The module is written only when its header reads ``ODI`` and
+  ``DFP-34X-2C``, the module the driver was measured on: the switch driver
+  identifies it, and the module's bus passes writes on only then. For any other
+  it behaves as the read-only build: no write to the module, and no transmit
+  power level
+  (``gn25l95.rst``, "The modules the driver writes"). Whether the part
   of an unlisted module is the same laser driver is not known (I: a module of
   the same name with another laser driver would be written as this one).
 * At each bring-up it writes registers of the part, not its EEPROM. It reads
   the persistence control first and, if register changes would reach the
   EEPROM, logs ``EEPROM updates are enabled`` and writes no table byte (M:
-  ``rtl9602c-optics.rst``, "The modulation hold"). The one byte the module
+  ``gn25l95.rst``, "The modulation hold"). The one byte the module
   would keep is the page select, which holds the page the driver wants on this
   board, so a bring-up writes nothing that stays.
 * The entry that stores bytes in the EEPROM, ``t2write``, exists only in a
-  kernel built with ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``, which is off by
-  default and meant for test images, and it takes only the bytes a repair has
-  needed, none known to hold a rogue ONU control. This image has no such entry
-  (M: ``/sys/kernel/debug/rtl9602c`` lists no ``t2write`` on the image of
-  2026-10-12).
+  kernel built with ``CONFIG_PON_GN25L95_STORE`` (until 2026-10-19
+  ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``), which is off by default and meant
+  for test images, and it takes only the bytes a repair has needed, none known
+  to hold a rogue ONU control. This image has no such entry (M:
+  ``/sys/kernel/debug/rtl9602c``, where the entry was then, listed no
+  ``t2write`` on the image of 2026-10-12; it is now in the laser driver's
+  directory, ``/sys/kernel/debug/i2c/i2c-0/0-0050``).
 * The module's bus is not open to user space: the image has no ``/dev/i2c-N``
   (M: ``ls /dev/i2c*`` on the same image), because ``CONFIG_I2C_CHARDEV`` is not
   set. Where it is set, a client can write the module for good unless the
-  kernel is built with ``CONFIG_RTL9602C_OPTICS_RO``, which makes the driver
-  and the bus refuse every write (``rtl9602c-optics.rst``, "The read-only
+  kernel is built with ``CONFIG_RTL9602C_OPTICS_RO``, which makes the bus
+  refuse every write (``gn25l95.rst``, "The read-only
   build", "Known limitations").
 
 What it cannot do
@@ -129,7 +133,7 @@ What it cannot do
   the line, the transmitter is as the loader and the module leave it; nothing
   here measured it (I: a trace of the line from power-up would settle it).
 * **After a watchdog reset at a lower power level.** The module stays at the
-  level the OLT last set until it loses power (``rtl9602c-optics.rst``,
+  level the OLT last set until it loses power (``gn25l95.rst``,
   "Known limitations").
 * **Dying_Gasp** is sent before an orderly restart; whether the loss of supply
   makes the MAC send it is not known.
@@ -145,7 +149,7 @@ What a person does
 * **Check that the laser is dark** before touching a fibre::
 
       for h in /sys/class/hwmon/hwmon*; do
-          [ "$(cat $h/name)" = rtl9602c_optics ] || continue
+          [ "$(cat $h/name)" = gn25l95 ] || continue
           echo "bias $(cat $h/curr1_input) mA, tx $(cat $h/power1_input) uW"
       done
 

@@ -204,10 +204,10 @@ sends the upstream bursts and reports the optical diagnostics of the module.
 The SoC reaches that IC over its I2C master 1.
 
 The laser driver has a hard transmit-disable input, SoC GPIO 13, active high
-(M: ``linux/Documentation/networking/device_drivers/pon/rtl9602c-optics.rst``,
-"Facts"). The switch driver requests it asserted at probe and releases it only
-in the activation states O3 to O5, so that the stick sends no light in any
-other state. Bringing the interface ``pon`` up starts the ONU's activation
+(M: ``linux/Documentation/networking/device_drivers/pon/gn25l95.rst``,
+"Facts"). The laser driver's driver, ``gn25l95``, requests it asserted at
+probe, and the GPON MAC has it released only in the activation states O3 to
+O5, so that the stick sends no light in any other state. Bringing the interface ``pon`` up starts the ONU's activation
 towards the OLT (ITU-T G.984.3, states O1 to O5).
 
 Nothing in the procedures of this handbook needs the PON side: starting a
@@ -296,7 +296,7 @@ kernel drives it:
 * ``networking/pon.rst``: the PON class, the kernel's interface to the ONU
   that omcid and the stick's programs use.
 * ``networking/device_drivers/pon/rtl9602c.rst``: the PON MAC;
-  ``rtl9602c-gpon.rst`` beside it, the GPON MAC; ``rtl9602c-optics.rst``, the
+  ``rtl9602c-gpon.rst`` beside it, the GPON MAC; ``gn25l95.rst``, the
   optics and the laser.
 * ``networking/devlink/rtl9602c.rst``: the switch driver's devlink parameters,
   among them the ONU's identity and the host lane's mode.

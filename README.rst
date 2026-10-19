@@ -207,7 +207,7 @@ files:
   <linux/arch/mips/boot/dts/realtek/rtl9602c.dtsi>`__, with its memory and
   its flash partitions;
 * support for its laser driver, if it has another one (`the optics
-  <linux/Documentation/networking/device_drivers/pon/rtl9602c-optics.rst>`__);
+  <linux/Documentation/networking/device_drivers/pon/gn25l95.rst>`__);
 * a Buildroot configuration and a board directory in `br2-external/
   <br2-external/README.rst>`__;
 * what its boot loader expects: how it picks a bank, and where the shipped
@@ -403,7 +403,7 @@ Documentation
   and `PTP <linux/Documentation/networking/dsa/rtl9602c-ptp.rst>`__;
 * the `PON MAC <linux/Documentation/networking/device_drivers/pon/rtl9602c.rst>`__,
   the `GPON MAC <linux/Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst>`__
-  and the `optics <linux/Documentation/networking/device_drivers/pon/rtl9602c-optics.rst>`__;
+  and the `optics <linux/Documentation/networking/device_drivers/pon/gn25l95.rst>`__;
 * `the CPU port <linux/Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst>`__
   and `devlink <linux/Documentation/networking/devlink/rtl9602c.rst>`__;
 * the device-tree bindings under ``linux/Documentation/devicetree/bindings/``.
