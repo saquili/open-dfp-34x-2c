@@ -929,9 +929,10 @@ export const handlers = [
 
   /*
    * A fixed address: a device's MAC and the IP it always gets in network LAN,
-   * with NAME; IP= takes it away, and the forwards to the device and the DMZ
-   * that is it with it, as pond does. A network's address of another device,
-   * or one already fixed, is refused, as onu-apply would.
+   * with NAME; IP= takes it away, and the forwards to the device, the DMZ
+   * that is it and the firewall's rules that go to it with it, as pond does:
+   * a rule reaches a device by its fixed address. A network's address of
+   * another device, or one already fixed, is refused, as onu-apply would.
    */
   http.post("*/api/set/fixed", async ({ request }) => {
     await delay(500);
@@ -945,6 +946,7 @@ export const handlers = [
       settings.fixed = list;
       settings.forwards = (settings.forwards ?? []).filter(other);
       settings.dmz = (settings.dmz ?? []).filter(other);
+      settings.rules = (settings.rules ?? []).filter((y) => y.to !== `dev:${lan}:${mac}`);
       return HttpResponse.json({ id: "fixed", ok: true });
     }
     if (

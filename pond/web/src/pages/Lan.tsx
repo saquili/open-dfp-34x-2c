@@ -49,6 +49,7 @@ import {
   leases,
   MAX_FIXED,
   MAX_LANS,
+  rules,
   served,
   sessions,
 } from "../lib/state";
@@ -907,11 +908,15 @@ function FixedForm({
       { LAN: v.lan, MAC: v.mac.toLowerCase(), IP: v.ip, NAME: v.name },
       { onSuccess: onClose },
     );
-  /* The forwards to the device and the DMZ that is it go with its fixed address. */
+  /*
+   * The forwards to the device, the DMZ that is it and the firewall's rules
+   * that go to it go with its fixed address.
+   */
   const used =
     !!d &&
     (forwards(live).some((f) => f.lan === d.lan && f.mac === d.mac) ||
-      dmzs(live).some((y) => y.lan === d.lan && y.mac === d.mac));
+      dmzs(live).some((y) => y.lan === d.lan && y.mac === d.mac) ||
+      rules(live).some((y) => y.to === `dev:${d.lan}:${d.mac}`));
   const unpin = () => {
     if (!d || (used && !window.confirm(t("lan.unpinConfirm", { name: d.name ?? d.mac })))) return;
     change.mutate({ LAN: String(d.lan), MAC: d.mac, IP: "" }, { onSuccess: onClose });

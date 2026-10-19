@@ -390,7 +390,7 @@ export const pl: Dictionary = {
     pinTitle: "Przypnij adres",
     unpin: "Odepnij",
     unpinConfirm:
-      "Odpiąć {name}? Przekierowania portów i DMZ, które prowadzą do tego urządzenia, zostaną usunięte razem z jego stałym adresem.",
+      "Odpiąć {name}? Przekierowania portów, DMZ i reguły zapory, które prowadzą do tego urządzenia, zostaną usunięte razem z jego stałym adresem.",
     fixedMark: "stały adres",
     fixedOn: "stała",
     off: "wyłączone",
