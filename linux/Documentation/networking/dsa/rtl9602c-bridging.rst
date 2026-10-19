@@ -2152,9 +2152,9 @@ entry of the classifier. The classifier's entry format and the sequence that pro
 entry are on the *acl-qos* page; VLAN membership (``port_vlan_add``) is a
 different block.
 
-A translation from VID 410 to VID 1410, a C-tag of VID 410 and priority 5 given to
-untagged frames from the subscriber side, and that tag taken off frames from the
-network side::
+A translation from VID 410 to VID 1410, a C-tag of VID 410 and priority 5 given
+to untagged frames from the subscriber side, and that tag taken off frames from
+the network side::
 
     tc qdisc add dev sfp clsact
     tc qdisc add dev pon clsact
