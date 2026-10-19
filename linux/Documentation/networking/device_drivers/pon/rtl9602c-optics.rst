@@ -989,9 +989,6 @@ defined in ``rtl9602c-optics.c``):
      - The persistence control. Reads it; bits 1:0 both set
        (``RTL9602C_OPTICS_TBL2_PERSIST_OFF``, ``0x03``) keep register changes
        out of the EEPROM.
-   * - ``0xcc``
-     - none in the code
-     - Clears bits 3:2 if either is set, and waits 400 ms.
 
 .. list-table::
    :header-rows: 1
@@ -1003,9 +1000,8 @@ defined in ``rtl9602c-optics.c``):
    * - The registers of the configuration table that the driver uses are, as A2h
        addresses with byte 127 at ``02h``: ``RTL9602C_OPTICS_TBL2_ER_CTRL``
        ``0xa5``, ``RTL9602C_OPTICS_TBL2_MOD_DAC`` ``0xab`` and ``0xac``,
-       ``RTL9602C_OPTICS_TBL2_MOD_LIMIT`` ``0xaf``,
-       ``RTL9602C_OPTICS_TBL2_PERSIST`` ``0xc7``, and ``0xcc``, which has no
-       name in the code.
+       ``RTL9602C_OPTICS_TBL2_MOD_LIMIT`` ``0xaf`` and
+       ``RTL9602C_OPTICS_TBL2_PERSIST`` ``0xc7``.
      - T
      - The hold's log after each module power-up, ``modulation held at 39.0 mA
        (modulation DAC 5f80, ...); automatic ER e3 -> e2``, reads back what it
@@ -1061,12 +1057,17 @@ defined in ``rtl9602c-optics.c``):
      - I
      - The field, the DAC position and the conversion are unverified; they
        affect only the log line.
-   * - Byte ``0xcc``: before writing the table the driver clears its bits 3:2 if
-       either is set, then waits 400 ms; this module reads ``0xff`` there.
+   * - The table takes writes with nothing else written. The text of the
+       GN25L95's datasheet places the access control of the upper page at
+       ``0xcc``, and the driver used to clear bits 3:2 there before writing the
+       table; the register map of the same datasheet places that control at
+       ``0xc4`` and the PW1 password at ``0xc9``-``0xcc``, so that write went
+       to the password. The driver writes neither byte.
      - I
-     - Whether the table write needs it is not tested; skipping the step and
-       checking that ER_CTRL still reads back with bit 0 clear would settle it.
-       Not load-bearing while the step stays.
+     - On this module ``0xc4`` reads ``00h``, and ``0xcc`` ``ffh``, or ``f3h``
+       after the old step. A table that refused the writes would show in the
+       hold's read-back of ER_CTRL (``modulation DAC seed ... is unusable``)
+       after a module power-up.
    * - A2h bytes 120-126 are left by SFF-8472 to the module maker, for example
        for a password field.
      - P
@@ -1104,27 +1105,25 @@ not write, it returns at once and writes nothing. Its steps:
    and give up with ``-EPERM``. Purpose: a table write now would be copied into
    the EEPROM, so none is made. (M) By then step 1 has written the page select,
    when it held another page, which the module keeps.
-4. Read byte ``0xcc``; if bit 3 or bit 2 is set, write it back with both clear
-   and wait 400 ms. Purpose: the table takes writes. (I)
-5. If a lower transmit power level is set, put the module's own modulation and
+4. If a lower transmit power level is set, put the module's own modulation and
    set point back (see "Transmit power levelling") and log ``transmit power
    back at level mode 0``. Purpose: every session starts at mode 0. (T)
-6. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
+5. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
    the loop off, and see the value the modulation now runs from. (M)
-7. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
+6. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
    and the high byte of MOD_DAC exceeds it: write ER_CTRL back as it was, so
    that the loop keeps running, log ``modulation DAC seed ... is unusable`` and
    give up with ``-EINVAL``. Purpose: do not leave the modulation at a value
    that cannot be right. (I)
-8. At the first hold since probe, read the set point (``0xa8``) and keep it
+7. At the first hold since probe, read the set point (``0xa8``) and keep it
    with MOD_DAC as the settings of transmit power level mode 0. Purpose: the
    lower levels are made from them, and mode 0 puts them back. (M)
-9. Log the held modulation. Purpose: show the value the modulation runs from.
+8. Log the held modulation. Purpose: show the value the modulation runs from.
    (I)
-10. Write the value kept in step 1 back to byte 127. Purpose: leave the page
-    selection as it was found. This follows every step after the write of
-    step 1, whatever its outcome; only a transfer that fails in the read of
-    step 1 returns before it, when the page select has not been written. (T)
+9. Write the value kept in step 1 back to byte 127. Purpose: leave the page
+   selection as it was found. This follows every step after the write of
+   step 1, whatever its outcome; only a transfer that fails in the read of
+   step 1 returns before it, when the page select has not been written. (T)
 
 A failed hold is logged by the GPON bring-up (``modulation not held``), and the
 bring-up carries on.
@@ -1237,8 +1236,8 @@ Setting a level (``rtl9602c_optics_level_work()``, queued by the GPON code):
    own settings, give up with ``-EOPNOTSUPP``. Purpose: nothing is written
    that could not be put back. (I)
 3. Show the table and check PERSIST as the hold does, giving up with
-   ``-EPERM`` when register changes would reach the EEPROM; clear the bits of
-   byte ``0xcc``. Purpose: the writes stay in registers. (M)
+   ``-EPERM`` when register changes would reach the EEPROM. Purpose: the
+   writes stay in registers. (M)
 4. For mode 0, write the module's modulation and then its set point. (M)
 5. For a lower mode, read the transmitted power while the optics are still at
    mode 0: the module measures the bursts, so the power read is that of mode 0
@@ -1513,10 +1512,10 @@ Questions the code does not depend on
        ("The modulation hold").
      - Nothing the driver needs: the first guards against an implausible value
        and the others only change the log line.
-   * - Whether the table write needs byte ``0xcc`` cleared ("The modulation
-       hold").
-     - Skipping the step and checking that ER_CTRL still reads back with bit 0
-       clear.
+   * - That the table takes writes after a module power-up with nothing
+       written to ``0xcc`` ("The modulation hold").
+     - The hold's log after a module power cycle: ``modulation held at``, not
+       ``modulation DAC seed ... is unusable``.
    * - Whether activation needs the modulation hold ("The modulation hold").
      - Repeated activations from a module power-up with the hold (the default)
        and without it (``CONFIG_RTL9602C_OPTICS_RO``), counting those that the

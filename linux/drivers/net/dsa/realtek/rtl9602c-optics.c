@@ -673,6 +673,14 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_a2);
  * words included, and the part does not acknowledge on the bus while a
  * copy runs.  This module reads 0x03 in PERSIST.
  *
+ * Nothing else is written for the table to take a write.  The text of the
+ * GN25L95's datasheet places the access control of the upper page at 0xcc,
+ * and the driver used to clear bits 3:2 there first; the register map of
+ * the same datasheet places that control at 0xc4 and the PW1 password at
+ * 0xc9-0xcc, so that write went to the password.  This module reads 00h
+ * at 0xc4.  A write the table refuses shows in the read-backs of
+ * ER_CTRL and MOD_DAC.
+ *
  * Not verified: MOD_LIMIT as a limit on the modulation DAC, 0xff meaning
  * none.  MOD_RANGE only decides how the log shows the modulation.  The log
  * lines name the part GN25L95; the driver relies on the behaviour above,
@@ -687,27 +695,6 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_a2);
 #define RTL9602C_OPTICS_TBL2_MOD_LIMIT		0xaf
 #define RTL9602C_OPTICS_TBL2_PERSIST	0xc7
 #define RTL9602C_OPTICS_TBL2_PERSIST_OFF	(BIT(1) | BIT(0))
-
-/*
- * Prepare the shown configuration table for a write: if bit 3 or 2 of
- * table byte 0xcc is set, clear both and wait 400 ms; this module reads
- * 0xff there.  That the table needs this before it takes a write is not
- * verified.
- */
-static int rtl9602c_gn_t2_prepare(struct rtl9602c_priv *p)
-{
-	u8 acc;
-	int err;
-
-	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0xcc, &acc);
-	if (err || !(acc & (BIT(3) | BIT(2))))
-		return err;
-	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0xcc,
-			       acc & ~(BIT(3) | BIT(2)));
-	if (!err)
-		msleep(400);
-	return err;
-}
 
 /*
  * Transmit power levelling (ITU-T G.984.2 clause 8.3.2): level mode 0 is the
@@ -854,8 +841,7 @@ static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long actio
 			    RTL9602C_OPTICS_TBL2_PERSIST_OFF)
 			err = -EPERM;
 		if (!err)
-			err = rtl9602c_gn_t2_prepare(p) ?:
-			      rtl9602c_optics_level_set(p, 0);
+			err = rtl9602c_optics_level_set(p, 0);
 		rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
 	}
 	if (!err)
@@ -893,8 +879,8 @@ int rtl9602c_optics_level_register(struct rtl9602c_priv *p)
  * or before the first modulation hold has kept the module's own settings.
  *
  * Context: Process context.  May sleep, with the optics lock held, for up
- * to about six seconds: 400 ms to prepare the table and 20 ms for each step
- * of the set point, of which there are at most 256.
+ * to about six seconds: 20 ms or more for each step of the set point, of
+ * which there are at most 256.
  */
 void rtl9602c_optics_level_work(struct work_struct *work)
 {
@@ -927,8 +913,6 @@ void rtl9602c_optics_level_work(struct work_struct *work)
 	if (!err && (eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) !=
 		    RTL9602C_OPTICS_TBL2_PERSIST_OFF)
 		err = -EPERM;
-	if (!err)
-		err = rtl9602c_gn_t2_prepare(p);
 	if (!err) {
 		err = rtl9602c_optics_level_set(p, mode);
 		if (!err) {
@@ -983,9 +967,9 @@ told:
  * the table read and took these writes with nothing written to bytes
  * 123-126 (measured on this board).  So a hold that gives up with -EPERM has written only the page
  * select, when it did not hold 02h, which the module keeps in its EEPROM;
- * table byte 0xcc and the table itself are written only once PERSIST keeps
- * register changes out of the EEPROM.  Once the page select has been set,
- * every path puts it back as found, without checking that write.
+ * the table is written only once PERSIST keeps register changes out of the
+ * EEPROM.  Once the page select has been set, every path puts it back as
+ * found, without checking that write.
  *
  * Context: Process context.  May sleep.
  * Return: 0 when the modulation is held; -EPERM when table writes would
@@ -1023,10 +1007,6 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 		err = -EPERM;
 		goto out;
 	}
-
-	err = rtl9602c_gn_t2_prepare(p);
-	if (err)
-		goto out;
 
 	/*
 	 * A transmit power level set in an earlier session is undone first,
