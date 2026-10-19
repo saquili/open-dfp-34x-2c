@@ -250,9 +250,26 @@ the boot script starts needs a power cycle (``boot-contract.rst``, "A trial
 boot").
 
 This way in has tests on the host, which run ``fwu.sh`` against stand-ins of
-the stick's partitions and tools (``br2-external/tests/image/test_mkweb.py``).
-An installation through the web page of a real stick has not been recorded
-yet.
+the stick's partitions and tools (``br2-external/tests/image/test_mkweb.py``),
+and was measured on a stick on 2026-10-19 (M), with the shipped firmware
+V1.2.2-221209 running from bank 1 and the package of b40aae0fde97 (3338240
+bytes):
+
+* The page took the package and ran ``fwu.sh``, which logged ``into bank 0``,
+  erased and wrote both partitions, and ``bank 0 is tried at the next
+  start; the page says the update failed``. The stick restarted, the loader
+  started bank 0 once, and this system came up from it, reached O5 nine
+  seconds after the kernel started and committed its bank.
+* The shipped firmware stayed in bank 1, in its own split. With ``sw_commit``
+  set to 1 from this system (``onu-update env sw_commit=1``) and a restart, it
+  started again and loaded its configuration from ``config``, where this
+  system had kept its own file beside the shipped firmware's; the same login
+  as before opened its page. A second upload through that page brought this
+  system back, committed, with the shipped firmware still in bank 1.
+* The stick had run this system before, so its file in ``config`` was there
+  already: the first start of this system on a stick that never ran it, which
+  takes the identity from the shipped firmware's files, was not part of this
+  measurement.
 
 The new system finds the shipped firmware's files in the partition
 ``config``, mounts them, takes the identity from them and starts with its
