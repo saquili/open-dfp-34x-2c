@@ -24,6 +24,7 @@
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_data/i2c-rtl9602c.h>
 
 /* The optics hang on master 1; master 0 has its own registers, 4 below. */
@@ -189,10 +190,17 @@ static void rtl9602c_i2c_gone(void *arg)
 		pd->adapter(pd->priv, NULL);
 }
 
+/* After the adapter has gone, the node it was given. */
+static void rtl9602c_i2c_put_node(void *np)
+{
+	of_node_put(np);
+}
+
 static int rtl9602c_i2c_probe(struct auxiliary_device *adev,
 			      const struct auxiliary_device_id *id)
 {
 	struct rtl9602c_i2c_data *pd = dev_get_platdata(&adev->dev);
+	struct device_node *np;
 	struct rtl9602c_i2c *i2c;
 	int err;
 
@@ -215,11 +223,16 @@ static int rtl9602c_i2c_probe(struct auxiliary_device *adev,
 	i2c->adap.algo = &rtl9602c_i2c_algo;
 	i2c->adap.dev.parent = &adev->dev;
 	/*
-	 * The adapter has no device tree node. The switch's would make the I2C
-	 * core treat the node's children as I2C devices, and the ports node is
-	 * not one. No node refers to the adapter, and the devices at 0x50 and
-	 * 0x51 are not described.
+	 * The devices on the bus are the children of the switch node's i2c
+	 * node, which the I2C core registers with the adapter. The switch node
+	 * itself is not the adapter's: its ports node is no I2C device. A tree
+	 * without the i2c node gives the adapter no devices.
 	 */
+	np = of_get_child_by_name(adev->dev.parent->of_node, "i2c");
+	err = devm_add_action_or_reset(&adev->dev, rtl9602c_i2c_put_node, np);
+	if (err)
+		return err;
+	i2c->adap.dev.of_node = np;
 	i2c_set_adapdata(&i2c->adap, i2c);
 	strscpy(i2c->adap.name, "rtl9602c i2c", sizeof(i2c->adap.name));
 	err = devm_i2c_add_adapter(&adev->dev, &i2c->adap);

@@ -22,7 +22,11 @@ only. The driver runs master 1 and registers it as an SMBus adapter named
 
 The registers lie in the switch's window, which the switch driver
 (``rtl9602c``, drivers/net/dsa/realtek) maps, so the master has no node of its
-own in the device tree. The switch driver makes the auxiliary device
+own with registers. The devices on its bus are the children of the switch
+node's ``i2c`` node (Documentation/devicetree/bindings/net/dsa/
+realtek,rtl9602c-switch.yaml), which the driver gives the adapter, so that the
+I2C core registers them with it; without the node the adapter has no devices.
+The switch driver makes the auxiliary device
 ``rtl9602c.i2c`` and gives it the window as platform data
 (include/linux/platform_data/i2c-rtl9602c.h); this driver binds to that
 device. It may bind before or after the switch is set up, and the switch
