@@ -1380,7 +1380,9 @@ device.
      - ``GN25L95: transmit power level not restored to mode 0``
    * - Before a restart, a lower level was set
      - ``GN25L95: transmit power back at level mode 0 before the restart``, or
-       ``not put back at`` in place of ``back at`` when it failed.
+       ``not put back at`` in place of ``back at`` when it failed, also when
+       PERSIST would have let the writes reach the EEPROM, so that nothing
+       was written.
 
 Setup, in order
 ===============

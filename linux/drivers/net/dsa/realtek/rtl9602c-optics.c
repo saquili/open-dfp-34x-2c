@@ -856,8 +856,10 @@ static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long actio
 		err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
 		      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
 				      &eectl);
-		if (!err && (eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) ==
+		if (!err && (eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) !=
 			    RTL9602C_OPTICS_TBL2_PERSIST_OFF)
+			err = -EPERM;
+		if (!err)
 			err = rtl9602c_gn_t2_prepare(p) ?:
 			      rtl9602c_optics_level_set(p, 0);
 		rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
