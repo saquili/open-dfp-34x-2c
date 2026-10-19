@@ -8,7 +8,7 @@ netifd
 OpenWrt's network interface daemon, carried as a fork. On the stick it holds
 the interfaces of the host side: the address on the host link, the management
 VLAN and its address, the PPPoE sessions, and the links that hand a session's
-address on to the host, with their routes and rules (ADR 0014,
+address on to the host, with their routes and rules (ADR 0011,
 ``docs/handbook/system.rst``). The daemon's own description is ``DESIGN``.
 
 Where it comes from
@@ -79,5 +79,5 @@ Tests
 
 The fork has no tests in this tree. Each change was measured with veth or
 dummy devices in a network namespace, as its commit says, and the daemon was
-tried on the bench's stick (ADR 0014); no run of the device tests
+tried on the bench's stick (ADR 0011); no run of the device tests
 (``tests/device``) has been recorded with it yet.
