@@ -1395,8 +1395,8 @@ end of a step is the tag of the fact the step rests on (see the tables above).
 1. At probe, request the ``tx-disable`` line as an output driven to its asserted
    level. Purpose: nothing lases before the PON path allows it. (I)
 2. During switch setup, create the debugfs directory and with it the views
-   ``a2`` and ``eeblocks``. Purpose: the laser driver can be read back without
-   the hwmon device. (M)
+   ``a2``, ``eeblocks`` and ``sfpslave``. Purpose: the laser driver, and the
+   SoC's SFP slave, can be read back without the hwmon device. (M)
 3. Make the auxiliary device ``rtl9602c.i2c``, for the master's driver to set
    ``RTL9602C_PADMUX_FUNC_EN_I2C`` in ``RTL9602C_PADMUX_FUNC_EN`` by
    read-modify-write and register the master as the adapter ``rtl9602c i2c``.
@@ -1436,7 +1436,8 @@ Known limitations
 - A watchdog reset, or any reset that runs no restart notifier, with the
   transmit power at level mode 1 or 2 leaves the module there, and the next
   kernel takes that level for the module's own until the module loses power
-  (see "Transmit power levelling"). The extinction ratio at the lower levels
+  (see "Transmit power levelling"): a level the OLT asks for then is counted
+  down from the lower one. The extinction ratio at the lower levels
   is not measured.
 - A PON bring-up writes a byte that the module keeps only when A2h byte 127
   holds another page than ``02h``: before it has read PERSIST, the modulation

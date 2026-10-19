@@ -16,10 +16,11 @@
  * diagnostic word together, publishes the SFF-8472 diagnostics through hwmon,
  * drives the laser's TX_DISABLE line, turns the part's automatic
  * extinction-ratio loop off at every PON bring-up
- * (rtl9602c_optics_hold_modulation()), and offers two debugfs views that
- * only read, "a2" and "eeblocks", a third, "tables", that selects each table
- * to read it, and, with CONFIG_NET_DSA_RTL9602C_OPTICS_STORE, "t2write",
- * which stores table 2 bytes in the module's EEPROM on request.
+ * (rtl9602c_optics_hold_modulation()), and offers three debugfs views that
+ * only read, "a2", "eeblocks" and "sfpslave", a fourth, "tables", that
+ * selects each table to read it, and, with
+ * CONFIG_NET_DSA_RTL9602C_OPTICS_STORE, "t2write", which stores table 2
+ * bytes in the module's EEPROM on request.
  *
  * CONFIG_RTL9602C_OPTICS_RO makes the modulation hold, the driver's only
  * write to the part of its own accord, return without writing, and the adapter
@@ -828,7 +829,8 @@ static int rtl9602c_optics_level_set(struct rtl9602c_priv *p, unsigned int mode)
  * module keeps its registers across a warm reboot of the SoC, and the next
  * kernel takes the settings it finds for the module's own.  A reset that
  * runs no notifier, such as the watchdog's, leaves a lower level in place
- * until the module loses power.
+ * until the module loses power, and a level the OLT asks for after it is
+ * counted down from that lower one.
  */
 static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long action,
 				  void *data)
@@ -890,7 +892,9 @@ int rtl9602c_optics_level_register(struct rtl9602c_priv *p)
  * then told what was set.  Nothing is written with CONFIG_RTL9602C_OPTICS_RO
  * or before the first modulation hold has kept the module's own settings.
  *
- * Context: Process context.  May sleep for about a second.
+ * Context: Process context.  May sleep, with the optics lock held, for up
+ * to about six seconds: 400 ms to prepare the table and 20 ms for each step
+ * of the set point, of which there are at most 256.
  */
 void rtl9602c_optics_level_work(struct work_struct *work)
 {
