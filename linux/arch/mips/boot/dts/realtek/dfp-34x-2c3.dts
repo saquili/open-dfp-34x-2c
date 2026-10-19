@@ -164,4 +164,21 @@
 &switch {
 	memory-region = <&pbo_us>, <&pbo_ds>;
 	memory-region-names = "pbo-us", "pbo-ds";
+
+	/* The GPON MAC drives the optics' laser driver. */
+	realtek,pon-optics = <&laser>;
+};
+
+/*
+ * The optics' laser driver, which serves the SFF-8472 management interface,
+ * A0h at 0x50 and A2h at 0x51. Its hard transmit-disable input is GPIO 13,
+ * high turning the light off (measured); its driver requests it asserted and
+ * the GPON MAC releases it only while the PON link needs the laser.
+ */
+&switch_i2c {
+	laser: laser-driver@50 {
+		compatible = "semtech,gn25l95";
+		reg = <0x50>;
+		tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+	};
 };

@@ -85,22 +85,6 @@ static bool rtl9602c_pon_op_us_ready(void *pon, unsigned int flow)
 	return rtl9602c_gem_us_ready(pon, flow);
 }
 
-static u8 rtl9602c_pon_op_power_mode(void *pon)
-{
-	struct rtl9602c_pon *p = pon;
-	u8 mode;
-
-	mutex_lock(&p->gpon_lock);
-	mode = p->gpon_power_mode;
-	mutex_unlock(&p->gpon_lock);
-	return mode;
-}
-
-static void rtl9602c_pon_op_power_applied(void *pon, u8 asked, u8 mode, int err)
-{
-	rtl9602c_gpon_power_applied(pon, asked, mode, err);
-}
-
 static void rtl9602c_pon_op_second_enable(void *pon, bool on)
 {
 	rtl9602c_gpon_second_enable(pon, on);
@@ -117,8 +101,6 @@ static const struct rtl9602c_pon_ops rtl9602c_pon_ops = {
 	.password_set	= rtl9602c_pon_op_password_set,
 	.password_is_set = rtl9602c_pon_op_password_is_set,
 	.us_ready	= rtl9602c_pon_op_us_ready,
-	.power_mode	= rtl9602c_pon_op_power_mode,
-	.power_applied	= rtl9602c_pon_op_power_applied,
 	.second_enable	= rtl9602c_pon_op_second_enable,
 };
 
@@ -127,8 +109,9 @@ static const struct rtl9602c_pon_ops rtl9602c_pon_ops = {
  * @pd: the platform data
  * @dev: the device the driver is bound to
  *
- * Finds what the PON MAC needs outside the switch, arranges the dying gasp
- * before a restart, and registers the OMCI port and the data path with the PON
+ * Takes the optics the switch node names, waiting for their driver, finds
+ * what the PON MAC needs outside the switch, arranges the dying gasp before a
+ * restart, and registers the OMCI port and the data path with the PON
  * class; neither is registered without the PON MAC's system controller and
  * buffers, or without the CPU port's conduit. Last, makes the driver's
  * operations available to the switch driver.
@@ -150,9 +133,18 @@ int rtl9602c_pon_probe(struct rtl9602c_pon_data *pd, struct device *dev)
 	p->reg = pd->reg;
 	memset(p->gpon_tcont_map, 0xff, sizeof(p->gpon_tcont_map));
 	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
+	INIT_WORK(&p->gpon_power_work, rtl9602c_gpon_power_work);
 	mutex_init(&p->ploam_lock);
 	spin_lock_init(&p->ploam_log_lock);
 	mutex_init(&p->gpon_lock);
+
+	/*
+	 * The optics first, which the MAC waits for: it must not come up with
+	 * a transmitter it cannot keep dark.
+	 */
+	p->optics = devm_pon_optics_get(dev, pd->optics);
+	if (IS_ERR(p->optics))
+		return dev_err_probe(dev, PTR_ERR(p->optics), "cannot take the optics\n");
 
 	err = rtl9602c_ponmac_probe(p);
 	if (err)
@@ -227,6 +219,7 @@ void rtl9602c_pon_remove(struct rtl9602c_pon_data *pd)
 
 	/* With no interrupt the worker is not cancelled by the bring-down. */
 	cancel_delayed_work_sync(&p->gpon_work);
+	cancel_work_sync(&p->gpon_power_work);
 	rtl9602c_gem_teardown(p);
 	rtl9602c_omci_teardown(p);
 }

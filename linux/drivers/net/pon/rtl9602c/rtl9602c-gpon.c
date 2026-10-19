@@ -776,9 +776,35 @@ int rtl9602c_gpon_reboot_register(struct rtl9602c_pon *p)
 }
 
 /**
+ * rtl9602c_gpon_power_work() - set the optics to the ONU's power level
+ * @work: &rtl9602c_pon.gpon_power_work
+ *
+ * Takes the mode the ONU is to send at and has the optics set it, which may
+ * take seconds, with gpon_lock not held; then takes what they set. Without
+ * optics, mode 0 is set and any other fails with -EOPNOTSUPP.
+ *
+ * Context: process context; takes gpon_lock.
+ */
+void rtl9602c_gpon_power_work(struct work_struct *work)
+{
+	struct rtl9602c_pon *p = container_of(work, struct rtl9602c_pon,
+					      gpon_power_work);
+	unsigned int now;
+	u8 asked;
+	int err;
+
+	mutex_lock(&p->gpon_lock);
+	asked = p->gpon_power_mode;
+	mutex_unlock(&p->gpon_lock);
+
+	err = pon_optics_set_power_level(p->optics, asked, &now);
+	rtl9602c_gpon_power_applied(p, asked, now, err);
+}
+
+/**
  * rtl9602c_gpon_power_applied() - take what the optics set
  * @p: the switch
- * @asked: the transmit power level mode optics_level_work set out to set
+ * @asked: the transmit power level mode gpon_power_work set out to set
  * @mode: the mode the optics are at now
  * @err: 0, or why @asked was not set
  *
@@ -1118,8 +1144,8 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_pon *p, u8 state)
 	 * the allocations the OLT grants: not below O3, nor in O6, where the
 	 * downstream was lost, nor in O7, where the OLT stopped the ONU.
 	 */
-	RTL9602C_HOST(p, tx_disable, state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
-		      state > RTL9602C_ONU_O5_OPERATION);
+	pon_optics_tx_disable(p->optics, state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
+			      state > RTL9602C_ONU_O5_OPERATION);
 
 	if (state == RTL9602C_ONU_O5_OPERATION) {
 		p->gpon_rei_sent = 0;
@@ -2033,7 +2059,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
 		 * in bursts, which come often only from O4 on.
 		 */
 		p->gpon_power_mode = 0;
-		RTL9602C_HOST(p, power_level_changed);
+		queue_work(system_wq, &p->gpon_power_work);
 		rtl9602c_gpon_arm_sn(p);
 		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O3_SERIAL_NUMBER);
 		return;
@@ -2440,7 +2466,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
 		/*
 		 * Directed or broadcast, in O4 and O5 (G.984.3 clause 9.2.3.16
 		 * and clause 10.5.2): one transmit power level mode up or down,
-		 * within 0 to 2, which optics_level_work then sets; '00' and
+		 * within 0 to 2, which gpon_power_work then sets; '00' and
 		 * '11' ask for nothing, and neither does a step past either end.
 		 */
 		u8 ind = msg[RTL9602C_PLOAM_CPL_IND] & RTL9602C_PLOAM_CPL_IND_MASK;
@@ -2461,7 +2487,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
 		if (mode == p->gpon_power_mode)
 			return;
 		p->gpon_power_mode = mode;
-		RTL9602C_HOST(p, power_level_changed);
+		queue_work(system_wq, &p->gpon_power_work);
 		return;
 	}
 
@@ -2711,15 +2737,14 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 	rtl9602c_gem_restore(p);
 
 	/*
-	 * Hold the optics' modulation before the laser is first released in O3;
-	 * the hold also puts transmit power level mode 0 back. A failure is
-	 * logged and bring-up goes on; whether activation needs the hold is not
-	 * verified.
+	 * Let the optics prepare the transmitter before the laser is first
+	 * released in O3; they also go back to transmit power level mode 0. A
+	 * failure is logged and bring-up goes on.
 	 */
 	p->gpon_power_mode = 0;
-	err = RTL9602C_HOST(p, hold_modulation);
+	err = pon_optics_start(p->optics);
 	if (err)
-		pr_warn("GN25L95: modulation not held (%d)\n", err);
+		pr_warn("<GPON> the optics did not prepare the transmitter (%d)\n", err);
 
 	/*
 	 * The threshold below which the ends of adjacent bursts are merged; its

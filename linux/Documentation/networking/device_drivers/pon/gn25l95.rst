@@ -1,47 +1,51 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 
-=================================
-Realtek RTL9602C optics interface
-=================================
+=====================================================
+Semtech GN25L95 PON laser driver: the RTL9602C optics
+=====================================================
 
 Overview
 ========
 
 The transmitter and the receiver of the stick are driven by a laser-driver IC
-that sits between the SoC and the fibre. The SoC reaches it over its I2C
-master 1. The IC serves the SFF-8472 management interface of an SFP module, the
-page A0h at the 7-bit address ``0x50`` and the page A2h at ``0x51``, and it
-keeps its configuration and calibration in an EEPROM of its own. Two more
-connections run from the SoC to the optics: the hard transmit-disable input,
-TX_DISABLE, taken to be SoC GPIO 13, and the burst enable, which the GPON MAC
-keys for each upstream burst.
+that sits between the SoC and the fibre, taken to be a Semtech GN25L95. The SoC
+reaches it over its I2C master 1. The IC serves the SFF-8472 management
+interface of an SFP module, the page A0h at the 7-bit address ``0x50`` and the
+page A2h at ``0x51``, and it keeps its configuration and calibration in an
+EEPROM of its own. Two more connections run from the SoC to the optics: the
+hard transmit-disable input, TX_DISABLE, taken to be SoC GPIO 13, and the burst
+enable, which the GPON MAC keys for each upstream burst.
 
-The optics have no driver of their own. The code is part of the switch driver,
-``rtl9602c``, in ``rtl9602c-optics.c``, and it does five things:
+The IC has a driver of its own, ``gn25l95`` (``drivers/net/pon/gn25l95.c``), an
+I2C client driver bound by the IC's device tree node. It does five things:
 
-- It moves bytes over the I2C master, one per transfer or the two of a
-  diagnostic word together, through the SMBus adapter ``rtl9602c i2c`` that the
-  master's own driver, ``i2c-rtl9602c``, registers.
+- It moves bytes over the I2C bus, one per transfer or the two of a diagnostic
+  word together, through the SMBus adapter ``rtl9602c i2c`` that the master's
+  own driver, ``i2c-rtl9602c``, registers.
 - It publishes the five measurements of the SFF-8472 diagnostics, which are the
   temperature, the supply voltage, the transmitter bias, the transmitted power
-  and the received power, as the hwmon device ``rtl9602c_optics``.
-- It drives TX_DISABLE for the GPON state machine: asserted below O3, released
-  from O3 on.
-- It turns the laser driver's automatic extinction-ratio loop off at every PON
-  bring-up, so that the modulation of the laser runs from the value the module
-  loads at power-up. This is the modulation hold.
-- It offers three debugfs views that only read, ``a2``, ``eeblocks`` and
-  ``sfpslave``, a fourth, ``tables``, that selects each table of the upper page to read it, and,
-  with ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``, an entry, ``t2write``, that
-  stores a byte of the configuration table in the module's EEPROM, or resets
-  the laser driver, when root writes to it.
+  and the received power, as the hwmon device ``gn25l95``.
+- It offers the optics to the GPON MAC through the PON class
+  (Documentation/networking/pon.rst): the MAC asserts TX_DISABLE below O3 and
+  releases it from O3 on, prepares the transmitter before every activation, and
+  asks for the transmit power levels the OLT sets.
+- Before every activation it turns the laser driver's automatic
+  extinction-ratio loop off, so that the modulation of the laser runs from the
+  value the module loads at power-up. This is the modulation hold.
+- It offers two debugfs views that only read, ``a2`` and ``eeblocks``, a third,
+  ``tables``, that selects each table of the upper page to read it, and, with
+  ``CONFIG_PON_GN25L95_STORE``, an entry, ``t2write``, that stores a byte of the
+  configuration table in the module's EEPROM, or resets the laser driver, when
+  root writes to it.
 
-The driver writes nothing to the laser driver at probe or at setup. Its only
-writes are those of the modulation hold, at PON bring-up, those a read of the
-``tables`` view makes and those a write to ``t2write`` asks for, and
-``CONFIG_RTL9602C_OPTICS_RO`` removes all three. So does a module that does not
-declare itself as one the driver was measured on (see "The modules the driver
-writes"). The connections::
+The driver writes nothing to the laser driver at probe. Its only writes are
+those of the modulation hold, at PON bring-up, those of the transmit power
+levels, those a read of the ``tables`` view makes and those a write to
+``t2write`` asks for. Whether they reach the part is the bus's to decide: the
+switch driver, ``rtl9602c``, lets the adapter pass writes on only for a module
+it has identified as the one this page was measured on, and never with
+``CONFIG_RTL9602C_OPTICS_RO`` (see "The modules the driver writes" and "The
+read-only build"). The connections::
 
     RTL9602C                               laser-driver IC
     +---------------+                      +------------------------+
@@ -70,86 +74,80 @@ Configuration
 
    * - Symbol
      - Effect
-   * - ``CONFIG_NET_DSA_RTL9602C``
-     - The switch driver. ``rtl9602c-optics.o`` is one of the objects that make
-       up ``rtl9602c.o``, so the optics are built with the switch driver and
-       have no symbol of their own.
+   * - ``CONFIG_PON_GN25L95``
+     - Tristate, "Semtech GN25L95 PON laser driver"; depends on ``PON`` and
+       ``I2C``. The module is ``gn25l95``.
    * - ``CONFIG_RTL9602C_OPTICS_RO``
      - Bool, "RTL9602C: never write to the optics part"; depends on
-       ``NET_DSA_RTL9602C``; off unless set. With it the modulation hold
-       returns at once, the driver itself writes nothing to the laser driver,
-       and the I2C adapter refuses writes (see "The read-only build").
+       ``NET_DSA_RTL9602C``; off unless set. With it the adapter refuses every
+       write, and the laser driver only reads the part (see "The read-only
+       build").
    * - ``CONFIG_I2C``
-     - The I2C core, which the optics code registers the master with. The
-       Kconfig entry of the switch driver depends on it.
+     - The I2C core, which the master's driver registers the adapter with and
+       which registers the laser driver's device on it.
    * - ``CONFIG_I2C_CHARDEV``
      - The ``/dev/i2c-N`` device files, which give user space the adapter.
    * - ``CONFIG_HWMON``
-     - Tristate, on by default. The hwmon device ``rtl9602c_optics`` is
-       registered only with it; without it the registration is a stub that
-       returns 0.
+     - Tristate, on by default. The hwmon device ``gn25l95`` is registered only
+       with it; without it the registration is a stub that returns 0.
    * - ``CONFIG_DEBUG_FS``
      - The debugfs views ``a2``, ``eeblocks`` and ``tables`` and the entry
-       ``t2write`` exist only with it, ``tables`` only without
-       ``CONFIG_RTL9602C_OPTICS_RO``.
-   * - ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``
-     - Boolean, off by default, and only without ``CONFIG_RTL9602C_OPTICS_RO``.
-       The entry ``t2write`` exists only with it. The bytes it stores outlive
-       every power cycle, among them the transmitter's rogue ONU controls,
-       which protect the other ONUs of the PON: the option is for test images.
+       ``t2write`` exist only with it.
+   * - ``CONFIG_PON_GN25L95_STORE``
+     - Boolean, off by default. The entry ``t2write`` exists only with it. The
+       bytes it stores outlive every power cycle, among them the transmitter's
+       rogue ONU controls, which protect the other ONUs of the PON: the option
+       is for test images. With ``CONFIG_RTL9602C_OPTICS_RO`` its writes are
+       refused.
    * - ``CONFIG_GPIOLIB``, ``CONFIG_GPIO_REALTEK_OTTO``
      - The GPIO controller that serves the TX_DISABLE line
        (Documentation/arch/mips/rtl9602c.rst).
 
-``rtl9602c_defconfig`` (``arch/mips/configs/``) sets ``CONFIG_I2C=y``,
-``CONFIG_GPIOLIB=y``, ``CONFIG_GPIO_REALTEK_OTTO=y`` and ``CONFIG_DEBUG_FS=y``;
-``CONFIG_HWMON`` is on by default, and the defconfig sets neither
-``CONFIG_I2C_CHARDEV`` nor ``CONFIG_RTL9602C_OPTICS_RO``.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 58 6 36
-
-   * - Fact
-     - Tag
-     - Checked by
-   * - ``CONFIG_NET_DSA_RTL9602C`` builds the optics code into the switch
-       driver: the object ``rtl9602c-optics.o`` is linked into ``rtl9602c.o``.
-     - T
-     - The board boots to a shell with the switch driver probed and the optics
-       diagnostics readable.
+``rtl9602c_defconfig`` (``arch/mips/configs/``) sets ``CONFIG_PON_GN25L95=y``,
+``CONFIG_I2C=y``, ``CONFIG_GPIOLIB=y``, ``CONFIG_GPIO_REALTEK_OTTO=y`` and
+``CONFIG_DEBUG_FS=y``; ``CONFIG_HWMON`` is on by default, and the defconfig sets
+neither ``CONFIG_I2C_CHARDEV`` nor ``CONFIG_RTL9602C_OPTICS_RO``.
 
 Device tree and binding
 -----------------------
 
-The optics have no device tree node of their own. Their one property,
-``tx-disable-gpios``, is on the ``switch`` node (compatible
-``realtek,rtl9602c-switch``) of ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``,
-and it names a line of the GPIO controller node ``gpio0``::
+The laser driver is a child of the ``i2c`` node of the ``switch`` node
+(compatible ``realtek,rtl9602c-switch``), which describes the SoC's I2C master
+1. ``arch/mips/boot/dts/realtek/rtl9602c.dtsi`` gives the ``i2c`` node, and the
+board's tree, ``dfp-34x-2c3.dts``, the device on it and the phandle by which
+the GPON MAC finds it::
 
-    switch: switch@1b000000 {
-            compatible = "realtek,rtl9602c-switch";
+    &switch {
             ...
-            tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
-            ...
+            realtek,pon-optics = <&laser>;
     };
 
-The binding is
-``Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml``. It
-describes ``tx-disable-gpios`` as the hard transmit-disable input of the laser
-driver, with one entry and not required: while the input is asserted the
-transmitter emits no light. ``rtl9602c_probe()`` takes the line with
-``devm_gpiod_get_optional()`` under the name ``tx-disable``, already driven to
-its asserted level (``GPIOD_OUT_HIGH``), so that nothing lases before the PON
-path allows it. Without the property every TX_DISABLE step is skipped. GPIO
-13, active high, is the laser driver's disable input: driving it high stops the
-light (measured, see "TX_DISABLE").
+    &switch_i2c {
+            laser: laser-driver@50 {
+                    compatible = "semtech,gn25l95";
+                    reg = <0x50>;
+                    tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+            };
+    };
 
-There is no node for the I2C master or for the laser driver. The master's driver
-registers the adapter without a node, and the devices at ``0x50`` and ``0x51``
-are not described. The GPIO controller, ``gpio@18003300`` (compatible
-``realtek,rtl9602c-gpio`` and ``realtek,otto-gpio``), and the pad-function
-registers are described in Documentation/arch/mips/rtl9602c.rst.
+The bindings are
+``Documentation/devicetree/bindings/net/semtech,gn25l95.yaml``, for the laser
+driver, and
+``Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml``, for
+the ``i2c`` node and ``realtek,pon-optics``. ``reg`` is the address of A0h;
+A2h is at the next address, which the driver takes with a dummy client so
+that no other client takes it. ``tx-disable-gpios`` is the hard
+transmit-disable input, with one entry and not required: while the input is
+asserted the transmitter emits no light. ``gn25l95_probe()`` takes the line
+with ``devm_gpiod_get_optional()`` under the name ``tx-disable``, already
+driven to its asserted level (``GPIOD_OUT_HIGH``), so that nothing lases before
+the PON path allows it. Without the property every TX_DISABLE step is skipped.
+GPIO 13, active high, is the laser driver's disable input: driving it high
+stops the light (measured, see "TX_DISABLE").
+
+The GPIO controller, ``gpio@18003300`` (compatible ``realtek,rtl9602c-gpio``
+and ``realtek,otto-gpio``), and the pad-function registers are described in
+Documentation/arch/mips/rtl9602c.rst.
 
 Where the code is
 -----------------
@@ -160,55 +158,49 @@ Where the code is
 
    * - File
      - Contents
+   * - ``drivers/net/pon/gn25l95.c``
+     - The driver: the byte transfers and their locks (``gn25l95_read()``,
+       ``gn25l95_lock()``), the numbering of the part's registers
+       (``GN25L95_A2*``), the hwmon device (``gn25l95_hwmon_register()``), the
+       optics' operations, TX_DISABLE (``gn25l95_tx_disable()``), the
+       modulation hold (``gn25l95_start()``) with the ``GN25L95_TBL2_*`` macros
+       of the configuration table it writes and the transmit power levels
+       (``gn25l95_set_power_level()``), level mode 0 put back at shutdown
+       (``gn25l95_shutdown()``), and the debugfs views
+       (``gn25l95_debugfs_init()``).
+   * - ``drivers/net/pon/pon_optics.c``, ``include/linux/pon.h``
+     - The optics of the PON class: ``devm_pon_optics_register()``, by which
+       the driver offers them, and ``devm_pon_optics_get()``, by which the MAC
+       takes them.
    * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
-     - The byte transfers through the SMBus adapter and their locks
-       (``rtl9602c_i2c_read_byte()``, ``rtl9602c_i2c_lock()``), the hand-over of
-       the master to its driver (``rtl9602c_optics_i2c_add()``), the numbering of the part's registers (``rtl9602c_l_read()``), the TX_DISABLE
-       drive (``rtl9602c_l_txdis_gpio()``), the hwmon device
-       (``rtl9602c_optics_hwmon_register()``), the modulation hold
-       (``rtl9602c_optics_hold_modulation()``) with the
-       ``RTL9602C_OPTICS_TBL2_*`` macros of the configuration table it writes,
-       the transmit power levels (``rtl9602c_optics_level_register()``,
-       ``rtl9602c_optics_level_work()``), and the debugfs views
-       (``rtl9602c_optics_debugfs_init()``).
-   * - ``drivers/net/dsa/realtek/rtl9602c.h``
-     - The byte numbers of the diagnostics (``RTL9602C_OPTICS_A2_*``), the
-       members ``tx_disable``, ``i2c`` and ``optics_lock`` of ``struct
-       rtl9602c_priv``, and the prototypes of the calls above.
+     - The switch's side: the hand-over of the master to its driver and the
+       TX_DISABLE pad (``rtl9602c_optics_i2c_add()``), the identification of
+       the module (``rtl9602c_optics_identify()``) and the adapter's write rule
+       (``rtl9602c_optics_writable()``).
    * - ``drivers/i2c/busses/i2c-rtl9602c.c``
      - The I2C master: its registers (``RTL9602C_I2C_*``, ``RTL9602C_PADMUX_*``)
-       and the SMBus adapter (Documentation/i2c/busses/i2c-rtl9602c.rst).
-   * - ``include/linux/platform_data/i2c-rtl9602c.h``
-     - What the switch driver gives the master's driver, and what it gets back.
-   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
-     - ``rtl9602c_probe()`` takes the ``tx-disable`` line and prepares the
-       transmit power levels. ``rtl9602c_setup()`` creates the debugfs
-       directory with the optics views, registers the I2C adapter and then the
-       hwmon device (see "Setup, in order").
-   * - ``drivers/net/pon/rtl9602c/rtl9602c-gpon.c``
-     - ``rtl9602c_gpon_apply_state()`` drives TX_DISABLE at every change of the
-       ONU state, ``rtl9602c_gpon_bringup()`` calls the modulation hold after
-       the MAC reset, and Change_Power_Level and Upstream_Overhead ask for
-       transmit power levels. It reaches the optics through the host operations
-       ``tx_disable``, ``hold_modulation`` and ``power_level_changed``, and the
-       optics ask which level it wants, and tell it what they set, through the
-       PON operations ``power_mode`` and ``power_applied``.
-   * - ``drivers/net/dsa/realtek/Kconfig``, ``Makefile``
-     - ``CONFIG_RTL9602C_OPTICS_RO`` and the list of objects of ``rtl9602c.o``.
-   * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``
-     - ``tx-disable-gpios`` on the ``switch`` node.
-   * - ``realtek,rtl9602c-switch.yaml`` in
-       ``Documentation/devicetree/bindings/net/dsa/``
-     - The binding of that property.
+       and the SMBus adapter, with the children of the ``i2c`` node
+       (Documentation/i2c/busses/i2c-rtl9602c.rst).
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gpon.c``, ``rtl9602c-pon-main.c``
+     - ``rtl9602c_pon_probe()`` takes the optics that ``realtek,pon-optics``
+       names, waiting for their driver. ``rtl9602c_gpon_apply_state()`` drives
+       TX_DISABLE at every change of the ONU state,
+       ``rtl9602c_gpon_bringup()`` prepares the optics after the MAC reset, and
+       Change_Power_Level and Upstream_Overhead ask for transmit power levels,
+       which ``rtl9602c_gpon_power_work()`` sets.
+   * - ``drivers/net/pon/Kconfig``, ``Makefile``
+     - ``CONFIG_PON_GN25L95`` and ``CONFIG_PON_GN25L95_STORE``.
+   * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``, ``dfp-34x-2c3.dts``
+     - The ``i2c`` node, and the laser driver's node on it.
 
 Interfaces to user space
 ------------------------
 
-- The hwmon device ``rtl9602c_optics``, with the five measurements of the
-  diagnostics. Its directory is ``/sys/class/hwmon/hwmonN``, where N follows
-  the order of registration, and it is found by its ``name`` file::
+- The hwmon device ``gn25l95``, with the five measurements of the diagnostics.
+  Its directory is ``/sys/class/hwmon/hwmonN``, where N follows the order of
+  registration, and it is found by its ``name`` file::
 
-      # grep -l rtl9602c_optics /sys/class/hwmon/hwmon*/name
+      # grep -l gn25l95 /sys/class/hwmon/hwmon*/name
       /sys/class/hwmon/hwmon0/name
 
   The attributes are ``temp1_input``, ``in0_input``, ``curr1_input``,
@@ -219,41 +211,46 @@ Interfaces to user space
   a value or a threshold takes one two-byte transfer on the I2C master;
   reading a label takes none.
 - The I2C adapter ``rtl9602c i2c``, whose name is in
-  ``/sys/class/i2c-adapter/i2c-N/name``. It offers SMBus byte-data transfers
-  and word-data reads (Documentation/i2c/busses/i2c-rtl9602c.rst). With ``CONFIG_I2C_CHARDEV`` it has a file
-  ``/dev/i2c-N``, and a write through it can change the module for good (see
-  "The management interface").
-- ``/sys/kernel/debug/rtl9602c/a2``, ``/sys/kernel/debug/rtl9602c/eeblocks``
-  and ``/sys/kernel/debug/rtl9602c/tables``, views that read the laser driver
-  one byte at a time and print it, and ``/sys/kernel/debug/rtl9602c/sfpslave``,
-  which reads the SoC's SFP slave (see "The debugfs views"). They have mode
-  ``0400`` and exist only with ``CONFIG_DEBUG_FS``.
-- ``/sys/kernel/debug/rtl9602c/t2write``, mode ``0200``, which stores a byte
-  of table 2 in the module's EEPROM or resets the laser driver (see "Storing
-  table 2 bytes"), only with ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``.
+  ``/sys/class/i2c-adapter/i2c-N/name``, and on it the device ``N-0050``, bound
+  to ``gn25l95``, and the dummy ``N-0051``. The adapter offers SMBus byte-data
+  transfers and word-data reads (Documentation/i2c/busses/i2c-rtl9602c.rst).
+  With ``CONFIG_I2C_CHARDEV`` it has a file ``/dev/i2c-N``; the two addresses
+  are taken, so a client of it reaches them only with ``I2C_SLAVE_FORCE``, and
+  a write the adapter passes on can change the module for good (see "The
+  management interface").
+- ``a2``, ``eeblocks`` and ``tables`` in the client's debugfs directory,
+  ``/sys/kernel/debug/i2c/i2c-N/N-0050/``, views that read the laser driver one
+  byte at a time and print it (see "The debugfs views"). They have mode
+  ``0400`` and exist only with ``CONFIG_DEBUG_FS``. The view of the SoC's SFP
+  slave, ``/sys/kernel/debug/rtl9602c/sfpslave``, is the switch driver's.
+- ``t2write`` in the same directory, mode ``0200``, which stores a byte of
+  table 2 in the module's EEPROM or resets the laser driver (see "Storing
+  table 2 bytes"), only with ``CONFIG_PON_GN25L95_STORE``.
 - The TX_DISABLE line. It has no file of its own: it is line 13 of the GPIO
   bank, requested under the consumer name ``tx-disable``, and
   ``/sys/kernel/debug/gpio`` shows its direction and level (high while
   TX_DISABLE is asserted). Its level follows the ONU state, so
   ``ip link set pon up`` and ``ip link set pon down`` are the commands that
   move it (see "TX_DISABLE").
-- ``ip link set pon up`` also runs the modulation hold, unless
-  ``CONFIG_RTL9602C_OPTICS_RO`` is set or the module is not one the driver
-  writes (see "The modulation hold" and "The modules the driver writes").
-- The kernel log lines of the optics, which begin with ``rtl9602c-switch:``
-  (see "Logging").
-- The optics have no module parameters, devlink parameters or ethtool
+- ``ip link set pon up`` also runs the modulation hold, whose writes the
+  adapter refuses with ``CONFIG_RTL9602C_OPTICS_RO`` or for a module the switch
+  driver does not know (see "The modulation hold" and "The modules the driver
+  writes").
+- The kernel log lines of the driver, which begin with ``gn25l95 N-0050:``, and
+  those of the switch's side, which begin with ``rtl9602c-switch:`` (see
+  "Logging").
+- The driver has no module parameters, devlink parameters or ethtool
   statistics.
 
 First checks on a board
 -----------------------
 
-1. Read ``/sys/kernel/debug/rtl9602c/eeblocks``. The blocks for ``0x50`` and
-   ``0x51`` report no unanswered read, and A0h byte 0 reads ``03``, the SFP
+1. Read ``eeblocks`` in the client's debugfs directory. The blocks for ``0x50``
+   and ``0x51`` report no unanswered read, and A0h byte 0 reads ``03``, the SFP
    identifier. The blocks for ``0x52`` and ``0x53`` read ``ff`` throughout, with
    at most one unanswered read in 256 (see "The debugfs views").
 2. Look for the hwmon device. If it is missing, either ``CONFIG_HWMON`` is off
-   or the kernel log carries ``rtl9602c-switch: no optical diagnostics`` (see
+   or the kernel log carries ``gn25l95 N-0050: no diagnostics`` (see
    "Logging"), and the ``eeblocks`` view shows whether anything answers.
 3. Read the five measurements (see "The hwmon device"). Below O3, with
    TX_DISABLE asserted, the bias and the transmitted power read 0; in O5 they
@@ -290,12 +287,14 @@ The SoC has two I2C masters with the same set of registers, and the laser
 driver answers on master 1 only. The master has a driver of its own,
 ``i2c-rtl9602c`` (Documentation/i2c/busses/i2c-rtl9602c.rst), which owns its
 registers, the pad function that enables it and the order of a transfer, and
-registers the SMBus adapter ``rtl9602c i2c``. The switch driver makes the
+registers the SMBus adapter ``rtl9602c i2c`` with the children of the switch
+node's ``i2c`` node, the laser driver among them. The switch driver makes the
 auxiliary device that driver binds to, with the switch's register window
 (``rtl9602c_optics_i2c_add()``), and is told when the adapter appears
-(``rtl9602c_optics_adapter()``): that identifies the module and publishes the
-diagnostics. The code of this page moves its bytes through the I2C core, with
-``__i2c_smbus_xfer()``, in sequences under the locks below.
+(``rtl9602c_optics_adapter()``): that identifies the module, which decides
+whether the adapter passes writes on. The driver of this page moves its bytes
+through the I2C core, with ``__i2c_smbus_xfer()``, in sequences under the locks
+below.
 
 .. list-table::
    :header-rows: 1
@@ -304,30 +303,30 @@ diagnostics. The code of this page moves its bytes through the I2C core, with
    * - Fact
      - Tag
      - Checked by
-   * - Every user of the optics holds the switch's ``optics_lock`` for its
-       whole sequence of transfers, and the adapter's bus lock inside it
-       (``rtl9602c_i2c_lock()``): a hwmon read, the ``a2``, ``eeblocks`` and
-       ``tables`` views, the modulation hold, the transmit power levelling and
-       the store view. A transfer of another client of the adapter takes the
-       bus lock alone, so none can come between two transfers of a sequence.
-       The hwmon core and the I2C core serialise only their own callers, and
-       the modulation hold switches the page of A2h 128-255 and puts it back,
-       which no other user may see. Without the adapter, the sequence runs under
-       ``optics_lock`` and every transfer fails with ``-ENODEV``.
+   * - Every user of the part holds the driver's lock for its whole sequence
+       of transfers, and the adapter's bus lock inside it (``gn25l95_lock()``):
+       a hwmon read, the ``a2``, ``eeblocks`` and ``tables`` views, the
+       modulation hold, the transmit power levelling, the restore at shutdown
+       and the store view. A transfer of another client of the adapter takes
+       the bus lock alone, so none can come between two transfers of a
+       sequence. The hwmon core and the I2C core serialise only their own
+       callers, and the modulation hold switches the page of A2h 128-255 and
+       puts it back, which no other user may see.
      - I
      - Read from the code; in a kernel with lockdep, the transfer function
-       asserts that ``optics_lock`` is held. Reading the hwmon attributes in a
-       loop while reading the ``a2`` view would show no mixed bytes; not run.
-   * - The adapter passes a write on only for a module the driver identified
-       (``rtl9602c_optics_writable()``) and never with
-       ``CONFIG_RTL9602C_OPTICS_RO``; otherwise it refuses it with ``-EPERM``.
-       The driver's own writes check the same condition first.
-     - T
-     - The modulation hold writes on the module the driver knows, and on one
-       it does not know the hold, the levelling and the store view return
-       without a write.
+       asserts that the lock is held. Reading the hwmon attributes in a loop
+       while reading the ``a2`` view would show no mixed bytes; not run.
+   * - The adapter passes a write on only for a module the switch driver
+       identified (``rtl9602c_optics_writable()``) and never with
+       ``CONFIG_RTL9602C_OPTICS_RO``; otherwise it refuses it with ``-EPERM``,
+       which the driver of this page takes for a bus on which it only reads.
+     - I
+     - Before the split into a driver of its own, the modulation hold wrote on
+       the module the switch knows and returned without a write on one it did
+       not; the split has not been run on the board.
    * - A client of the adapter has not been run: the I2C core can reach the
-       laser driver through ``/dev/i2c-N`` with ``CONFIG_I2C_CHARDEV``.
+       addresses through ``/dev/i2c-N`` with ``CONFIG_I2C_CHARDEV`` and
+       ``I2C_SLAVE_FORCE``.
      - I
      - Reading ``0x50`` through the adapter and comparing with the ``eeblocks``
        view would settle it.
@@ -344,7 +343,7 @@ every byte reads ``0xff`` there, so the stored configuration cannot be read
 through them.
 
 The driver numbers the registers of the part from ``0x000`` to ``0x1ff``, the
-way ``rtl9602c_l_read()`` takes them:
+way ``gn25l95_read()`` takes them:
 
 .. list-table::
    :header-rows: 1
@@ -358,17 +357,17 @@ way ``rtl9602c_l_read()`` takes them:
      - A0h byte n.
    * - ``0x100`` to ``0x1ff``
      - ``0x51``
-     - A2h byte n - ``0x100`` (``RTL9602C_OPTICS_A2_BASE`` = ``0x100``).
+     - A2h byte n - ``0x100`` (``GN25L95_A2`` = ``0x100``).
    * - ``0x200`` and above
      - none
      - Refused with ``-EINVAL``.
 
 In the rest of this page a byte is named by its page and its byte number, as
-SFF-8472 does. The header names two places in A2h:
-``RTL9602C_OPTICS_A2_DDM`` (``0x60``, the first diagnostic word) and
-``RTL9602C_OPTICS_A2_PASSWORD`` (``0x7b``, byte 123, the first of four bytes
-inside the range 120-126 that SFF-8472 leaves to the module maker). The page
-select, byte 127, is written as ``0x7f`` in the code.
+SFF-8472 does. The driver names three places in A2h: ``GN25L95_A2_DDM``
+(``0x60``, the first diagnostic word), ``GN25L95_A2_PASSWORD`` (``0x7b``, byte
+123, the first of four bytes inside the range 120-126 that SFF-8472 leaves to
+the module maker) and ``GN25L95_A2_PAGE`` (``0x7f``, the page select, byte
+127).
 
 .. list-table::
    :header-rows: 1
@@ -431,12 +430,13 @@ select, byte 127, is written as ``0x7f`` in the code.
        observed on this board; reading the ``a2`` view ("table select") after a
        module power cycle taken while byte 127 held ``02h`` would at least show
        whether byte 127 is stored.
-   * - The laser driver IC is a GN25L95, the name the driver's log messages
-       use.
+   * - The laser driver IC is a GN25L95, the name of the driver and of its
+       compatible.
      - I
-     - Not verified from anything public; the package marking would settle it.
-       Not load-bearing: the driver relies on the measured behaviour in this
-       page, not on the name.
+     - The register map of the GN25L95's datasheet agrees with the part where
+       it has been checked: EEPROM_CTRL at C7h, and the state machine's reset
+       key, which loads the tables from the EEPROM. The package marking would
+       settle it. The driver relies on the measured behaviour in this page.
 
 What the driver reads and writes of the part:
 
@@ -448,8 +448,9 @@ What the driver reads and writes of the part:
      - Read by
      - Written by
    * - ``0x50`` (A0h), bytes 0-255
-     - The ``eeblocks`` view; bytes 20-35 and 40-55 once at probe (see "The
-       modules the driver writes").
+     - The ``eeblocks`` view; bytes 20-35 and 40-55 by the switch driver when
+       the adapter comes, and again until they read (see "The modules the
+       driver writes").
      - Nothing in the driver.
    * - ``0x51`` (A2h), bytes 0-127
      - The ``a2`` view; the hwmon device reads bytes 0-39 and 96-105 only.
@@ -526,7 +527,7 @@ units.
    * - Fact
      - Tag
      - Checked by
-   * - A2h bytes 96-105 (``RTL9602C_OPTICS_A2_DDM`` = ``0x60`` onward) hold five
+   * - A2h bytes 96-105 (``GN25L95_A2_DDM`` = ``0x60`` onward) hold five
        16-bit measurements, most significant byte first: temperature (96),
        supply voltage (98), transmitter bias (100), transmitted power (102) and
        received power (104).
@@ -571,12 +572,12 @@ the SFP modules it manages.
    * - Fact
      - Tag
      - Checked by
-   * - The hwmon device ``rtl9602c_optics`` has ``temp1`` labelled
+   * - The hwmon device ``gn25l95`` has ``temp1`` labelled
        ``temperature``, ``in0`` ``VCC``, ``curr1`` ``bias``, ``power1``
        ``TX_power`` and ``power2`` ``RX_power``, the labels of
-       ``drivers/net/phy/sfp.c``. It is registered at switch setup if one read
-       of the temperature word succeeds; otherwise the driver logs
-       ``no optical diagnostics`` and the switch carries on. Without
+       ``drivers/net/phy/sfp.c``. It is registered at probe if one read of the
+       temperature word succeeds; otherwise the driver logs ``no
+       diagnostics`` and binds without it. Without
        ``CONFIG_HWMON`` nothing is registered.
      - M
      - In O5 on an OLT: 46.8 degC, 3.217 V, 7 mA, 1697 uW (+2.3 dBm) and 10 uW,
@@ -608,7 +609,7 @@ in the hex dump of the ``a2`` view.
    * - Fact
      - Tag
      - Checked by
-   * - A2h bytes 0-39 (``RTL9602C_OPTICS_A2_LIMIT``) hold four 16-bit
+   * - A2h bytes 0-39 (``GN25L95_A2_LIMIT``) hold four 16-bit
        thresholds per measurement, most significant byte first, in the order
        temperature, supply voltage, bias, transmitted power, received power:
        high alarm, low alarm, high warning, low warning.
@@ -625,18 +626,20 @@ in the hex dump of the ``a2`` view.
      - The ``a2`` view in O5 on an OLT: 46 degC, 3.209 V, 6.4 mA, 1671.5 uW
        and 3.0 uW.
 
-The device is registered once, at setup: if the temperature word cannot be
-read then, there is no hwmon device until the switch is set up again.
+The device is registered once, at probe: if the temperature word cannot be
+read then, there is no hwmon device until the driver binds again.
 
 The debugfs views
 -----------------
 
-The ``a2``, ``eeblocks`` and ``sfpslave`` views read and never write what
-they show. They are created in the driver's debugfs directory,
-``/sys/kernel/debug/rtl9602c/``, with mode ``0400``::
+The ``a2`` and ``eeblocks`` views read and never write what they show. They
+are created in the client's debugfs directory,
+``/sys/kernel/debug/i2c/i2c-N/N-0050/``, with mode ``0400``, N being the
+adapter's number. The ``sfpslave`` view, of the switch driver, is in
+``/sys/kernel/debug/rtl9602c/`` and only reads too::
 
-    # cat /sys/kernel/debug/rtl9602c/a2
-    # cat /sys/kernel/debug/rtl9602c/eeblocks
+    # cat /sys/kernel/debug/i2c/i2c-0/0-0050/a2
+    # cat /sys/kernel/debug/i2c/i2c-0/0-0050/eeblocks
     # cat /sys/kernel/debug/rtl9602c/sfpslave
 
 The ``a2`` view reads A2h bytes 0 to 127 one byte at a time, stopping at the
@@ -713,9 +716,11 @@ failed: <error>``). Table 2 holds the laser driver's configuration, among it
 the receiver's loss-of-signal control (BBh) and the APD bias control (BDh);
 table 6 the temperature-indexed APD DAC values at C0h to FFh. Byte 127 is kept
 in the module's EEPROM, so a read of the view writes the EEPROM once for each
-table it shows; a build with ``CONFIG_RTL9602C_OPTICS_RO`` has no such view::
+table it shows. On a bus that refuses writes, as with
+``CONFIG_RTL9602C_OPTICS_RO``, the view shows the table selected and the others
+fail with ``-EPERM``::
 
-    # cat /sys/kernel/debug/rtl9602c/tables
+    # cat /sys/kernel/debug/i2c/i2c-0/0-0050/tables
     === table 0
     80: <16 bytes>
     ...
@@ -729,14 +734,14 @@ maker sets it: among it the receiver's loss-of-signal control (BBh), whose
 (``rtl9602c-gpon.rst``, "Downstream lock, LOS and alarms"), the APD bias
 control (BDh) and the current limits (ADh-AFh). A module whose table 2 has gone
 wrong is put right through ``t2write``, mode ``0200``, in a kernel built with
-``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``, one command per write::
+``CONFIG_PON_GN25L95_STORE``, one command per write::
 
-    # W=/sys/kernel/debug/rtl9602c/t2write
+    # W=/sys/kernel/debug/i2c/i2c-0/0-0050/t2write
     # echo open > $W
     # echo "bb 1c" > $W
     # echo close > $W
     # echo reset > $W
-    # cat /sys/kernel/debug/rtl9602c/tables
+    # cat /sys/kernel/debug/i2c/i2c-0/0-0050/tables
 
 ``open`` writes ``0xff`` to the password bytes 123 to 126, shows table 2 and
 clears both bits of EEPROM_CTRL (C7h), so that the part copies the changes of
@@ -747,7 +752,7 @@ table, then writes ``VALUE`` at table 2 byte ``REG``. The byte is not read
 back: while the part copies into its EEPROM it does not acknowledge and its
 reads return a constant, so a read then proves nothing. ``close`` puts C7h and
 the page select back as found. The kernel log has a line for each step,
-beginning ``GN25L95: table 2``.
+beginning ``gn25l95 N-0050: table 2``.
 
 Only the bytes that a repair of a module has needed are taken, the others fail
 with ``EINVAL``, as does a byte before ``open``: the current limits ADh-AFh,
@@ -913,11 +918,14 @@ Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst.
    * - With the line released the laser emits.
      - T
      - The ONU reaches O5 on an OLT with the line released from O3 on.
-   * - Before driving the line the driver sets bit 13 of
-       ``RTL9602C_PADMUX_GPIO_EN`` (``0x48``) by read-modify-write, which gives
-       the pad to its GPIO function; ``RTL9602C_PADMUX_GPIO_EN_TX_DISABLE`` =
-       13 is both the GPIO number and the bit. The GPIO controller does not own
-       this register.
+   * - The switch driver sets bit 13 of ``RTL9602C_PADMUX_GPIO_EN``
+       (``0x48``) by read-modify-write once, after the I2C master's device is
+       made, when the optics ``realtek,pon-optics`` names have a
+       ``tx-disable-gpios``; that gives the pad to its GPIO function.
+       ``RTL9602C_PADMUX_GPIO_EN_TX_DISABLE`` = 13 is both the GPIO number and
+       the bit. The register is in the switch's window, and neither the GPIO
+       controller nor this driver owns it. With the drivers built in, this
+       driver has requested the line asserted by then.
      - M, I
      - M: with the bit set, the line acts (the row above). I: whether the pad
        needs it; a run with the bit clear would show it.
@@ -934,18 +942,16 @@ Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst.
      - P
      - SFF-8472 Rev 12.4 clause 9.8, Table 9-16.
 
-At each ONU state change the driver runs these steps
-(``rtl9602c_l_txdis_gpio()``, called from ``rtl9602c_gpon_apply_state()``); the
-request of the line at probe is the first step of "Setup, in order":
+At each ONU state change the GPON MAC asks the optics for the line
+(``pon_optics_tx_disable()`` from ``rtl9602c_gpon_apply_state()``, which calls
+``gn25l95_tx_disable()``); the request of the line at probe is the first step of
+"Setup, in order":
 
-1. If the device tree gave no TX_DISABLE line, stop. Purpose: a board without
-   the wiring skips all of this. (T)
-2. Set bit 13 of ``RTL9602C_PADMUX_GPIO_EN`` by read-modify-write. Purpose: the
-   pad is a GPIO; only bit 13 changes, and setting it again is harmless. (I)
-3. Set the line with ``gpiod_set_value_cansleep()``: asserted for a state below
+1. Set the line with ``gpiod_set_value_cansleep()``: asserted for a state below
    O3, released from O3 on. The flags of the device tree turn "asserted" into a
-   high level. Purpose: no light below O3, where an ONU does not transmit. (I
-   for the line, P for the states)
+   high level; without a TX_DISABLE line in the device tree nothing is set.
+   Purpose: no light below O3, where an ONU does not transmit. (I for the
+   line, P for the states)
 
 The modulation hold
 ===================
@@ -963,7 +969,7 @@ failed hold and carries on.
 The hold works in a configuration table that the module shows at A2h bytes
 128-255 while A2h byte 127 holds ``02h``. The driver calls it table 2. The
 registers it uses are listed by their A2h byte numbers (the driver's macros are
-defined in ``rtl9602c-optics.c``):
+defined in ``gn25l95.c``):
 
 .. list-table::
    :header-rows: 1
@@ -973,21 +979,21 @@ defined in ``rtl9602c-optics.c``):
      - Register
      - What the driver does with it
    * - ``0xa5``
-     - ``RTL9602C_OPTICS_TBL2_ER_CTRL``
+     - ``GN25L95_TBL2_ER_CTRL``
      - The extinction-ratio control. Reads it, clears bit 0
-       (``RTL9602C_OPTICS_TBL2_ER_CTRL_AUTO``, the automatic loop) and reads it
-       back. Bits 3:2 (``RTL9602C_OPTICS_TBL2_ER_CTRL_MOD_RANGE``) only decide
+       (``GN25L95_TBL2_ER_CTRL_AUTO``, the automatic loop) and reads it
+       back. Bits 3:2 (``GN25L95_TBL2_ER_CTRL_MOD_RANGE``) only decide
        how the log shows the modulation.
    * - ``0xab``, ``0xac``
-     - ``RTL9602C_OPTICS_TBL2_MOD_DAC``
+     - ``GN25L95_TBL2_MOD_DAC``
      - The modulation DAC, 16 bits, most significant byte first. Reads it.
    * - ``0xaf``
-     - ``RTL9602C_OPTICS_TBL2_MOD_LIMIT``
+     - ``GN25L95_TBL2_MOD_LIMIT``
      - The limit on the modulation DAC. Reads it; ``0xff`` means no limit.
    * - ``0xc7``
-     - ``RTL9602C_OPTICS_TBL2_PERSIST``
+     - ``GN25L95_TBL2_PERSIST``
      - The persistence control. Reads it; bits 1:0 both set
-       (``RTL9602C_OPTICS_TBL2_PERSIST_OFF``, ``0x03``) keep register changes
+       (``GN25L95_TBL2_PERSIST_OFF``, ``0x03``) keep register changes
        out of the EEPROM.
 
 .. list-table::
@@ -998,15 +1004,15 @@ defined in ``rtl9602c-optics.c``):
      - Tag
      - Checked by
    * - The registers of the configuration table that the driver uses are, as A2h
-       addresses with byte 127 at ``02h``: ``RTL9602C_OPTICS_TBL2_ER_CTRL``
-       ``0xa5``, ``RTL9602C_OPTICS_TBL2_MOD_DAC`` ``0xab`` and ``0xac``,
-       ``RTL9602C_OPTICS_TBL2_MOD_LIMIT`` ``0xaf`` and
-       ``RTL9602C_OPTICS_TBL2_PERSIST`` ``0xc7``.
+       addresses with byte 127 at ``02h``: ``GN25L95_TBL2_ER_CTRL``
+       ``0xa5``, ``GN25L95_TBL2_MOD_DAC`` ``0xab`` and ``0xac``,
+       ``GN25L95_TBL2_MOD_LIMIT`` ``0xaf`` and
+       ``GN25L95_TBL2_PERSIST`` ``0xc7``.
      - T
      - The hold's log after each module power-up, ``modulation held at 39.0 mA
        (modulation DAC 5f80, ...); automatic ER e3 -> e2``, reads back what it
        wrote.
-   * - ``RTL9602C_OPTICS_TBL2_ER_CTRL_AUTO``, bit 0 of ER_CTRL, turns the
+   * - ``GN25L95_TBL2_ER_CTRL_AUTO``, bit 0 of ER_CTRL, turns the
        automatic extinction-ratio loop on; ER_CTRL reads ``0xe3`` after a
        module power-up. Cleared (``0xe2``), the loop stays off until the module
        loses power: a warm reboot of the SoC does not restore it, and a power
@@ -1025,7 +1031,7 @@ defined in ``rtl9602c-optics.c``):
      - M
      - On an OLT: the ``a2`` view, MOD_DAC read back, provisioned activations
        counted.
-   * - ``RTL9602C_OPTICS_TBL2_MOD_DAC`` (``0xab`` and ``0xac``) is 16 bits, most
+   * - ``GN25L95_TBL2_MOD_DAC`` (``0xab`` and ``0xac``) is 16 bits, most
        significant byte first. With the loop off the modulation runs from it.
        After hours with the loop on, turning the loop off read back ``0x5f80``,
        the value the hold reads at every first bring-up after a module
@@ -1033,8 +1039,8 @@ defined in ``rtl9602c-optics.c``):
      - M
      - MOD_DAC read back after hours of loop operation; the hold's log after
        power-ups (``modulation DAC 5f80``).
-   * - ``RTL9602C_OPTICS_TBL2_PERSIST`` (``0xc7``): with bits 1:0 both set
-       (``RTL9602C_OPTICS_TBL2_PERSIST_OFF``, ``0x03``) register changes are not
+   * - ``GN25L95_TBL2_PERSIST`` (``0xc7``): with bits 1:0 both set
+       (``GN25L95_TBL2_PERSIST_OFF``, ``0x03``) register changes are not
        copied into the module's EEPROM, so a power cycle restores the stored
        configuration; with ``0x00`` they are copied, the diagnostic words that
        change all the time included, and while a copy runs the part does not
@@ -1044,13 +1050,13 @@ defined in ``rtl9602c-optics.c``):
        reads went unanswered at a drifting address while the part copied; at
        ``0x03`` the hold's ER_CTRL write is gone after every module power cycle
        (the ``e3 -> e2`` line above).
-   * - ``RTL9602C_OPTICS_TBL2_MOD_LIMIT`` (``0xaf``) is a limit on the
+   * - ``GN25L95_TBL2_MOD_LIMIT`` (``0xaf``) is a limit on the
        modulation DAC, ``0xff`` meaning none; the driver refuses a MOD_DAC whose
        high byte exceeds a limit other than ``0xff``.
      - I
      - Unverified; the check only guards against an implausible value. Not
        load-bearing.
-   * - ``RTL9602C_OPTICS_TBL2_ER_CTRL_MOD_RANGE`` (bits 3:2 of ER_CTRL): when it
+   * - ``GN25L95_TBL2_ER_CTRL_MOD_RANGE`` (bits 3:2 of ER_CTRL): when it
        is 0 the driver logs the held modulation in mA as (DAC + 8) / 10, with
        DAC = bits 15:6 of MOD_DAC; otherwise it logs the raw register. This
        module reads 0 there.
@@ -1072,7 +1078,7 @@ defined in ``rtl9602c-optics.c``):
        for a password field.
      - P
      - SFF-8472 Rev 12.4 clause 10.2.
-   * - On this module A2h bytes 123-126 (``RTL9602C_OPTICS_A2_PASSWORD``) read
+   * - On this module A2h bytes 123-126 (``GN25L95_A2_PASSWORD``) read
        ``00`` whatever was written to them.
      - M
      - The ``a2`` view, repeated: ``00 00 00 00`` after writes of ``0xff`` to
@@ -1093,8 +1099,10 @@ defined in ``rtl9602c-optics.c``):
        transmitted power at +2.2 dBm.
 
 The hold runs at ``ip link set pon up``, after the GPON MAC reset and before the
-first O3. With ``CONFIG_RTL9602C_OPTICS_RO``, or for a module the driver does
-not write, it returns at once and writes nothing. Its steps:
+first O3, when the GPON MAC prepares the optics (``gn25l95_start()``). On a
+bus that refuses writes, with ``CONFIG_RTL9602C_OPTICS_RO`` or for a module the
+switch driver does not know, its first write is refused and it returns 0
+having written nothing. Its steps:
 
 1. Read A2h byte 127 and keep the value; write ``02h`` to it unless it holds
    ``02h`` already. Purpose: show the configuration table at A2h 128-255, and
@@ -1153,21 +1161,21 @@ by the same factor, and then a lower set point.
      - Register
      - What the driver does with it
    * - ``0xa8``
-     - ``RTL9602C_OPTICS_TBL2_APCSET``
+     - ``GN25L95_TBL2_APCSET``
      - The power control's set point. Keeps the module's own value at the
        first hold since probe; writes lower values for modes 1 and 2, never a
        higher one, and the module's own back for mode 0.
    * - ``0xab``, ``0xac``
-     - ``RTL9602C_OPTICS_TBL2_MOD_DAC``
+     - ``GN25L95_TBL2_MOD_DAC``
      - The modulation DAC. Keeps the module's own value, read with the
        automatic loop off, at the first hold since probe; writes it with its
-       DAC field, bits 15:6 (``RTL9602C_OPTICS_TBL2_MOD_DAC_FIELD``), halved
+       DAC field, bits 15:6 (``GN25L95_TBL2_MOD_DAC_FIELD``), halved
        for mode 1 and quartered for mode 2, and the module's own back for mode
        0.
    * - 100-101 and 102-103
      - (diagnostics)
      - The bias and the transmitted power, read
-       ``RTL9602C_OPTICS_LEVEL_SETTLE_MS`` (20 ms) after each change.
+       ``GN25L95_LEVEL_SETTLE_MS`` (20 ms) after each change.
 
 .. list-table::
    :header-rows: 1
@@ -1219,22 +1227,27 @@ by the same factor, and then a lower set point.
    * - The module keeps its registers across a warm reboot of the SoC, and the
        next kernel takes the settings it finds for the module's own: booted
        with the optics at mode 2, a kernel logged ``modulation held at 19.8 mA
-       (modulation DAC 2f80, ...)``. Before an orderly restart, power-off or
-       halt the driver puts mode 0 back; a reset that runs no notifier, such
-       as the watchdog's, leaves the lower level until the module loses power.
-     - M
-     - The hold's log after a warm reboot from mode 2 without the notifier;
-       with it, ``reboot`` at mode 2 logged ``transmit power back at level
-       mode 0 before the restart``, and the next kernel held the modulation at
-       39.0 mA (``5f80``) and sent 1661 uW.
+       (modulation DAC 2f80, ...)``. At an orderly restart, power-off or
+       halt the driver puts mode 0 back (``gn25l95_shutdown()``); a reset that
+       shuts no device down, such as the watchdog's, leaves the lower level
+       until the module loses power.
+     - M, I
+     - M: the hold's log after a warm reboot from mode 2 without the restore;
+       with it, as a restart notifier of the switch driver before the split
+       into a driver of its own, ``reboot`` at mode 2 logged ``transmit power
+       back at level mode 0 before the restart``, and the next kernel held the
+       modulation at 39.0 mA (``5f80``) and sent 1661 uW. I: the restore as
+       the driver's shutdown, which runs after the restart notifiers, has not
+       been run.
 
-Setting a level (``rtl9602c_optics_level_work()``, queued by the GPON code):
+Setting a level (``gn25l95_set_power_level()``, called from the GPON MAC's
+work, ``rtl9602c_gpon_power_work()``, which the MAC queues for each request):
 
-1. Take the mode the GPON code asks for; if the optics are already at it,
-   stop. Purpose: one work item serves every request. (T)
-2. With ``CONFIG_RTL9602C_OPTICS_RO``, or before a hold has kept the module's
-   own settings, give up with ``-EOPNOTSUPP``. Purpose: nothing is written
-   that could not be put back. (I)
+1. Take the mode the MAC asks for; if the optics are already at it, stop.
+   Purpose: one work item serves every request. (T)
+2. Before a hold has kept the module's own settings, as when the bus refuses
+   writes, give up with ``-EOPNOTSUPP``. Purpose: nothing is written that could
+   not be put back. (I)
 3. Show the table and check PERSIST as the hold does, giving up with
    ``-EPERM`` when register changes would reach the EEPROM. Purpose: the
    writes stay in registers. (M)
@@ -1250,30 +1263,32 @@ Setting a level (``rtl9602c_optics_level_work()``, queued by the GPON code):
 7. Move the set point one step at a time towards the target, reading the
    power and the bias after each, until the power crosses the target. A set
    point above the module's own, a power of 0 or a bias above
-   ``RTL9602C_OPTICS_LEVEL_BIAS_MAX`` (40 mA) gives ``-ERANGE``. Purpose: the
+   ``GN25L95_LEVEL_BIAS_MAX`` (40 mA) gives ``-ERANGE``. Purpose: the
    power lands at the level without the laser going out. (T)
 8. On a failure, put mode 0 back; when even that fails, log it and count the
    optics at no known level, which the next request and the next hold try to
    leave. (I)
 9. Write the page select back, log the level with the power and the bias, and
-   tell the GPON code what was set, which declares it in Serial_Number_ONU.
+   tell the MAC what was set, which declares it in Serial_Number_ONU.
    (T)
 
 The modules the driver writes
 =============================
 
-At probe, once the master is enabled, ``rtl9602c_optics_identify()`` reads the
-vendor name (A0h bytes 20-35) and the vendor part number (A0h bytes 40-55) the
-module declares, the header the host reads through the SFP cage, and drops the
-trailing spaces. The driver writes the laser driver only when the name is
-``ODI`` and the part number begins with ``DFP-34X-2C``, the module this page
-was measured on. For any other module, and when the header cannot be read, the
-driver behaves as the read-only build below, without the build option: the
-modulation hold returns at once, ``rtl9602c_l_write()`` and the I2C adapter
-refuse writes with ``-EPERM``, no transmit power level is set, and the log has
-one line at probe (see "Logging"). A header that cannot be read is read again at
-each modulation hold until it reads, so that a transfer that failed once, when
-the adapter came, does not leave the module unwritten until the next boot.
+Who may write the part is the switch driver's to decide, which knows the board,
+not this driver's. When the adapter comes, ``rtl9602c_optics_identify()`` of
+the switch driver reads the vendor name (A0h bytes 20-35) and the vendor part
+number (A0h bytes 40-55) the module declares, the header the host reads through
+the SFP cage, and drops the trailing spaces. The adapter passes writes on only
+when the name is ``ODI`` and the part number begins with ``DFP-34X-2C``, the
+module this page was measured on. For any other module, and while the header
+cannot be read, the adapter refuses every write with ``-EPERM``, as in the
+read-only build below, and this driver only reads the part: the modulation hold
+returns 0 having written nothing and logs the refusal once, no transmit power
+level is set, and the switch driver logs one line (see "Logging"). A header
+that cannot be read is read again every five seconds until it reads, so that a
+transfer that failed once, when the adapter came, does not leave the module
+unwritten until the next boot.
 
 .. list-table::
    :header-rows: 1
@@ -1293,8 +1308,8 @@ the adapter came, does not leave the module unwritten until the next boot.
        to another name is taken for an unknown one, and one changed to this
        module's name is written.
      - I
-     - The driver reads the header once, at probe; a change takes effect at
-       the next boot.
+     - The switch driver reads the header once it reads; a change takes
+       effect at the next boot.
    * - The module this page was measured on reads ``ODI`` and
        ``DFP-34X-2C3``.
      - M
@@ -1303,15 +1318,16 @@ the adapter came, does not leave the module unwritten until the next boot.
 The read-only build
 ===================
 
-``CONFIG_RTL9602C_OPTICS_RO`` makes ``rtl9602c_optics_hold_modulation()`` return
-0 at once, before it writes anything. The driver itself then writes nothing to
-the laser driver: the page select, the bytes 123 to 126 and the configuration
-table stay as the module has them, the automatic loop keeps running, and the
-hold logs nothing. The I2C adapter refuses every write with ``-EPERM``, so a
-client of it, user space through ``i2c-dev`` included, cannot change the
-module either. No transmit power level is set: a request for one gives
-``-EOPNOTSUPP``, and the ONU stays at level mode 0. The hwmon device and the
-``a2`` and ``eeblocks`` views only read, and they are unchanged.
+``CONFIG_RTL9602C_OPTICS_RO``, an option of the switch driver, makes the I2C
+adapter refuse every write with ``-EPERM``, from this driver and from any other
+client, user space through ``i2c-dev`` included. Nothing on the board then
+changes the module: the page select, the bytes 123 to 126 and the configuration
+table stay as the module has them, and the automatic loop keeps running. The
+modulation hold returns 0 having written nothing and logs the refusal once. No
+transmit power level is set: a request for one gives ``-EOPNOTSUPP``, and the
+ONU stays at level mode 0. The hwmon device and the ``a2`` and ``eeblocks``
+views only read, and they are unchanged; the ``tables`` view shows the table
+selected.
 
 .. list-table::
    :header-rows: 1
@@ -1320,10 +1336,9 @@ module either. No transmit power level is set: a request for one gives
    * - Fact
      - Tag
      - Checked by
-   * - With ``CONFIG_RTL9602C_OPTICS_RO`` the modulation hold returns at once,
-       so the driver itself writes nothing to the part, and the adapter refuses
-       every write with ``-EPERM``; the hwmon reads and the ``a2`` and
-       ``eeblocks`` views are unchanged.
+   * - With ``CONFIG_RTL9602C_OPTICS_RO`` the adapter refuses every write with
+       ``-EPERM``, so nothing writes the part; the hwmon reads and the ``a2``
+       and ``eeblocks`` views are unchanged.
      - I
      - Read from the code; a build with the option and ``i2cset`` on the
        adapter's ``/dev/i2c-N`` would show the refusal.
@@ -1333,9 +1348,9 @@ module either. No transmit power level is set: a request for one gives
 Logging
 =======
 
-The optics log through ``pr_warn()`` and ``pr_info()`` with the prefix
-``rtl9602c-switch:``, except the probe line, which carries the name of the
-device.
+The driver logs through ``dev_warn()``, ``dev_info()`` and ``dev_err()``, its
+lines beginning ``gn25l95 N-0050:``. The switch driver's side logs with the
+prefix ``rtl9602c-switch:``, and the GPON MAC with ``<GPON>``.
 
 .. list-table::
    :header-rows: 1
@@ -1344,95 +1359,105 @@ device.
    * - When
      - Line
    * - Probe, the ``tx-disable`` line is given and cannot be taken
-     - ``cannot get the laser tx-disable gpio``, reported by
-       ``dev_err_probe()``; the probe fails or is deferred.
-   * - Setup, the master cannot be handed to its driver
-     - ``i2c master not handed over: <error>``
-   * - Setup, no hwmon device
-     - ``no optical diagnostics: <error>``
-   * - Setup, the module is not one the driver writes
-     - ``optics: module "<vendor name>" "<part number>" is not one the driver
-       was measured on; the laser driver is only read``
-   * - Setup, or a bring-up after it, the module's header cannot be read
-     - ``optics: the module's header could not be read (<error>); the laser
-       driver is only read``
+     - ``cannot get the tx-disable gpio``, reported by ``dev_err_probe()``; the
+       probe fails or is deferred.
+   * - Probe, no hwmon device
+     - ``no diagnostics: <error>``
+   * - Switch setup, the master cannot be handed to its driver
+     - ``rtl9602c-switch: i2c master not handed over: <error>``
+   * - The adapter came, the module is not one the laser driver was measured on
+     - ``rtl9602c-switch: optics: module "<vendor name>" "<part number>" is not
+       one the laser driver was measured on; writes to it are refused``
+   * - The adapter came, the module's header cannot be read, once until it
+       reads
+     - ``rtl9602c-switch: optics: the module's header could not be read
+       (<error>); writes to the laser driver are refused until it reads``
+   * - Bring-up, the bus refused the hold's writes, once
+     - ``the bus refuses writes; the laser driver is only read``
    * - Bring-up, the hold succeeded
-     - ``GN25L95: modulation held at <m>.<d> mA (modulation DAC <hhhh>, the
-       module's calibration); automatic ER <hh> -> <hh>``. When bits 3:2 of
-       ER_CTRL are not 0: ``GN25L95: modulation held at modulation DAC <hhhh>
-       (the module's calibration); automatic ER <hh> -> <hh>``. The two ER
-       values are ER_CTRL before and after the hold.
+     - ``modulation held at <m>.<d> mA (modulation DAC <hhhh>, the module's
+       calibration); automatic ER <hh> -> <hh>``. When bits 3:2 of ER_CTRL are
+       not 0: ``modulation held at modulation DAC <hhhh> (the module's
+       calibration); automatic ER <hh> -> <hh>``. The two ER values are
+       ER_CTRL before and after the hold.
    * - Bring-up, PERSIST lets register changes reach the EEPROM
-     - ``GN25L95: EEPROM updates are enabled (C7h <hh>); modulation left alone
-       rather than written to the EEPROM``
+     - ``EEPROM updates are enabled (C7h <hh>); modulation left alone rather
+       than written to the EEPROM``
    * - Bring-up, the hold cannot use MOD_DAC
-     - ``GN25L95: modulation DAC seed <hhhh> is unusable (modulation max <hh>,
-       ER control <hh>); modulation left to the module``
+     - ``modulation DAC seed <hhhh> is unusable (modulation max <hh>, ER control
+       <hh>); modulation left to the module``
    * - Bring-up, the hold failed for any reason
-     - ``GN25L95: modulation not held (<error>)``, from the GPON bring-up. When
-       the hold gave up for a reason of its own, the two rows above, this line
-       follows the line of that reason.
+     - ``<GPON> the optics did not prepare the transmitter (<error>)``, from the
+       GPON bring-up. When the hold gave up for a reason of its own, the two
+       rows above, this line follows the line of that reason.
    * - Bring-up, a lower power level was set
-     - ``GN25L95: transmit power back at level mode 0``
+     - ``transmit power back at level mode 0``
    * - A power level was set
-     - ``GN25L95: transmit power level mode <n>: <uW>.<d> uW, bias <mA>.<dd>
-       mA``
+     - ``transmit power level mode <n>: <uW>.<d> uW, bias <mA>.<dd> mA``
    * - Neither the level asked for nor mode 0 could be set
-     - ``GN25L95: transmit power level not restored to mode 0``
-   * - Before a restart, a lower level was set
-     - ``GN25L95: transmit power back at level mode 0 before the restart``, or
-       ``not put back at`` in place of ``back at`` when it failed, also when
-       PERSIST would have let the writes reach the EEPROM, so that nothing
-       was written.
+     - ``transmit power level not restored to mode 0``
+   * - A power level was not set
+     - ``<GPON> transmit power level mode <n> not set (<error>); the ONU stays
+       at mode <m>``, from the GPON MAC.
+   * - Shutdown, a lower level was set
+     - ``transmit power back at level mode 0 before the restart``, or ``not put
+       back at`` in place of ``back at`` when it failed, also when PERSIST
+       would have let the writes reach the EEPROM, so that nothing was written.
 
 Setup, in order
 ===============
 
-The steps are in the order the driver takes them. The tag in parentheses at the
-end of a step is the tag of the fact the step rests on (see the tables above).
+The steps are in the order they are taken. The tag in parentheses at the end
+of a step is the tag of the fact the step rests on (see the tables above).
 
-1. At probe, request the ``tx-disable`` line as an output driven to its asserted
-   level. Purpose: nothing lases before the PON path allows it. (I)
-2. During switch setup, create the debugfs directory and with it the views
-   ``a2``, ``eeblocks`` and ``sfpslave``. Purpose: the laser driver, and the
-   SoC's SFP slave, can be read back without the hwmon device. (M)
-3. Make the auxiliary device ``rtl9602c.i2c``, for the master's driver to set
-   ``RTL9602C_PADMUX_FUNC_EN_I2C`` in ``RTL9602C_PADMUX_FUNC_EN`` by
-   read-modify-write and register the master as the adapter ``rtl9602c i2c``.
-   When the adapter is there, read the module's vendor name and part number, and with them whether
-   the driver writes the laser driver (see "The modules the driver writes").
-   Purpose: without the enable the master ignores every command; a module the
-   driver was not measured on is only read. (M for the enable, I for the
-   adapter and for the module standing for its laser driver)
-4. Read the temperature word once (A2h bytes 96 and 97). If it reads, register
-   the hwmon device ``rtl9602c_optics``; if not, log ``no optical diagnostics``
-   and go on. Purpose: no device appears when nothing answers at A2h. (M)
+1. In switch setup, make the auxiliary device ``rtl9602c.i2c``, for the
+   master's driver to set ``RTL9602C_PADMUX_FUNC_EN_I2C`` in
+   ``RTL9602C_PADMUX_FUNC_EN`` by read-modify-write and register the master as
+   the adapter ``rtl9602c i2c``, with the children of the ``i2c`` node.
+   Purpose: without the enable the master ignores every command. (M)
+2. The I2C core registers the laser driver's device, ``N-0050``, and binds
+   this driver: request the ``tx-disable`` line as an output driven to its
+   asserted level, take ``0x51`` with a dummy client, read the temperature word
+   once (A2h bytes 96 and 97) and, if it reads, register the hwmon device
+   ``gn25l95``, create the debugfs views, and last offer the optics to the PON
+   class. Purpose: nothing lases before the PON path allows it; no hwmon device
+   appears when nothing answers at A2h; the MAC finds the optics only once they
+   work. (I for the line, M for the rest)
+3. When the adapter is there, the switch driver reads the module's vendor name
+   and part number, and with them whether the adapter passes writes on (see
+   "The modules the driver writes"), and then gives the TX_DISABLE pad to its
+   GPIO function (see "TX_DISABLE"). Purpose: a module the code was not
+   measured on is only read. (I)
+4. The GPON MAC's driver binds once the optics are offered: it takes them by
+   ``realtek,pon-optics``, linked to them so that the driver core unbinds the
+   MAC before the optics go. Purpose: no MAC without the means to keep the
+   laser dark. (I)
 5. At the first ONU state change after ``ip link set pon up``, which is O1, and
-   at every later one, drive TX_DISABLE (see "TX_DISABLE"). Purpose: follow the
-   activation state. (T)
-6. In the GPON bring-up, after the MAC reset and before the first O3, read the
-   module's header again if it could not be read in step 3, then run the
-   modulation hold (see "The modulation hold"). Purpose: the modulation runs
-   from the value the module loads at power-up. (M)
+   at every later one, the MAC drives TX_DISABLE (see "TX_DISABLE"). Purpose:
+   follow the activation state. (T)
+6. In the GPON bring-up, after the MAC reset and before the first O3, the MAC
+   prepares the optics: the modulation hold (see "The modulation hold").
+   Purpose: the modulation runs from the value the module loads at power-up.
+   (M)
 
-At probe the driver also sets up the work that sets power levels and registers
-the notifier that puts level mode 0 back before a restart
-(``rtl9602c_optics_level_register()``; a failure fails the probe).
+At shutdown, restart or halt the driver puts level mode 0 back
+(``gn25l95_shutdown()``).
 
-The adapter and the hwmon device are device-managed
-(``devm_i2c_add_adapter()`` and ``devm_hwmon_device_register_with_info()``) and
-go with the switch's platform device. The debugfs views go with the debugfs
-directory, which switch teardown removes.
+The hwmon device, the dummy client and the optics are device-managed and go
+with the laser driver's device, whose debugfs directory the I2C core removes
+with it. The adapter goes with the master's auxiliary device, which goes with
+the switch's platform device.
 
 Known limitations
 =================
 
-- Without ``CONFIG_RTL9602C_OPTICS_RO``, for a module the driver writes, the
-  I2C adapter passes every write on, and A0h and A2h bytes 0-127 take writes without a password and keep them
-  across a power cycle of the module, so a client of the adapter can change the
-  module for good. User space reaches the adapter through ``i2c-dev`` where
-  ``CONFIG_I2C_CHARDEV`` is set.
-- A watchdog reset, or any reset that runs no restart notifier, with the
+- Without ``CONFIG_RTL9602C_OPTICS_RO``, for a module the switch driver knows,
+  the I2C adapter passes every write on, and A0h and A2h bytes 0-127 take
+  writes without a password and keep them across a power cycle of the module,
+  so a client of the adapter can change the module for good. User space
+  reaches the adapter through ``i2c-dev`` where ``CONFIG_I2C_CHARDEV`` is set,
+  and the addresses this driver holds with ``I2C_SLAVE_FORCE``.
+- A watchdog reset, or any reset that shuts no device down, with the
   transmit power at level mode 1 or 2 leaves the module there, and the next
   kernel takes that level for the module's own until the module loses power
   (see "Transmit power levelling"): a level the OLT asks for then is counted
@@ -1462,10 +1487,11 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - The level requested at probe reaches the pin before the driver first
-       sets bit 13 of ``RTL9602C_PADMUX_GPIO_EN``, at the first ONU state
-       change after ``ip link set pon up``: that holds only if the pad is a
-       GPIO function at reset, or the bit is not needed ("TX_DISABLE").
+   * - The level this driver requests at probe reaches the pin when the switch
+       driver sets bit 13 of ``RTL9602C_PADMUX_GPIO_EN``, after the master's
+       device is made: that holds when this driver has bound by then, as with
+       both drivers built in, when the pad is a GPIO function at reset, or when
+       the bit is not needed ("TX_DISABLE").
      - A run with the bit clear shows whether it is needed at all.
    * - Nothing serialises a transfer between its users ("Known limitations").
      - Reading the hwmon attributes in a loop while reading the ``a2`` view: it
@@ -1507,7 +1533,7 @@ Questions the code does not depend on
        observed on this board.
    * - Whether the part is a GN25L95 ("The management interface").
      - The package marking.
-   * - Whether ``RTL9602C_OPTICS_TBL2_MOD_LIMIT`` limits the modulation DAC, and
+   * - Whether ``GN25L95_TBL2_MOD_LIMIT`` limits the modulation DAC, and
        what bits 3:2 of ER_CTRL and the conversion of the logged current mean
        ("The modulation hold").
      - Nothing the driver needs: the first guards against an implausible value

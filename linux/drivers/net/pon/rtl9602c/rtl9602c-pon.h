@@ -218,9 +218,19 @@ struct rtl9602c_pon {
 	/**
 	 * @gpon_power_mode: the transmit power level mode the ONU is to send
 	 * at, 0 normal to 2 (ITU-T G.984.2 clause 8.3.2); the optics follow it
-	 * in optics_level_work, and Serial_Number_ONU declares it
+	 * in @gpon_power_work, and Serial_Number_ONU declares it
 	 */
 	u8 gpon_power_mode;
+	/**
+	 * @gpon_power_work: has the optics set @gpon_power_mode, and takes what
+	 * they set (rtl9602c_gpon_power_applied())
+	 */
+	struct work_struct gpon_power_work;
+	/**
+	 * @optics: the optics the switch node's realtek,pon-optics names, which
+	 * the MAC drives; NULL when it names none
+	 */
+	struct pon_optics *optics;
 	/**
 	 * @gpon_flow_port: the Port-ID each flow is bound to in the Port-ID
 	 * table, or RTL9602C_GPON_PORTID_NONE
@@ -374,6 +384,7 @@ void rtl9602c_gpon_debugfs_init(struct rtl9602c_pon *p);
 void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p);
 void rtl9602c_gpon_report(struct rtl9602c_pon *p);
 void rtl9602c_gpon_work(struct work_struct *w);
+void rtl9602c_gpon_power_work(struct work_struct *work);
 void rtl9602c_gpon_irq(struct rtl9602c_pon *p);
 void rtl9602c_gpon_second_enable(struct rtl9602c_pon *p, bool on);
 int rtl9602c_gpon_reboot_register(struct rtl9602c_pon *p);

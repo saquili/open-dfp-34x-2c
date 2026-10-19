@@ -39,7 +39,7 @@ the three blocks and describes the PON MAC, the GEM ports as network
 interfaces and the OMCI path, and the contract between the two drivers. The GPON
 MAC has a page of its own,
 Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst, and so have the
-optics, Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
+optics, Documentation/networking/device_drivers/pon/gn25l95.rst.
 
 The path of a frame, from the switch to the fibre::
 
@@ -64,7 +64,7 @@ The path of a frame, from the switch to the fibre::
     +--------------------------------------------------------------+
      |  PON SerDes, analog front end
     +--------------------------------------------------------------+
-    | optics                                    rtl9602c-optics.c  |
+    | optics                                gn25l95.c (PON class) |
     |   laser driver on I2C master 1, TX_DISABLE, diagnostics      |
     +--------------------------------------------------------------+
      |  fibre
@@ -162,11 +162,6 @@ The host operations are the DSA driver's services to the MAC
    * - ``irq_enable``
      - Changes the sources of the switch interrupt: the GPON source is enabled
        by the bring-up.
-   * - ``tx_disable``, ``hold_modulation``
-     - Drives the laser's TX_DISABLE line, and turns the laser driver's
-       extinction-ratio loop off before the first burst (see the *optics* page).
-   * - ``power_level_changed``
-     - Queues the work that sets the laser to the level the MAC asks for.
    * - ``gem_added``, ``gem_unbind``, ``gem_forget``
      - A flow now carries a GEM port; a GEM port is going (it leaves the
        bridge, gives up its VLAN claims and the routed flow that names it); it
@@ -201,8 +196,6 @@ The PON operations are the MAC's to the switch driver (``rtl9602c-pon-main.c``):
        up.
    * - ``us_ready``
      - Whether a GEM port's upstream is programmed (the flowtable offload asks).
-   * - ``power_mode``, ``power_applied``
-     - The transmit power level the MAC asks for, and what the optics set.
 
 The switch calls the PON operations under the read side of a semaphore in the
 platform data; the PON driver takes the write side to bind and to unbind, so
@@ -246,14 +239,17 @@ The blocks and their files
      - ``rtl9602c-omci.c``
      - This page; Documentation/networking/pon.rst for the port.
    * - Optics
-     - The I2C master registers and the pad multiplexer in the switch's window,
-       and a GPIO line.
-     - ``rtl9602c-optics.c``
-     - Documentation/networking/device_drivers/pon/rtl9602c-optics.rst
+     - A laser driver on I2C master 1, whose registers and pad multiplexer are
+       in the switch's window, and a GPIO line. The MAC drives the optics
+       through the PON class: TX_DISABLE, the preparation before an
+       activation, the transmit power levels.
+     - ``drivers/net/pon/gn25l95.c``, and ``rtl9602c-optics.c`` of the switch
+       driver for who may write them
+     - Documentation/networking/device_drivers/pon/gn25l95.rst
 
 The register definitions of the GPON MAC and the PON MAC are in
 ``rtl9602c-pon-regs.h`` of the PON driver, and those of the optics in
-``rtl9602c.h`` of the switch driver.
+``gn25l95.c``.
 
 Configuration
 -------------
@@ -271,8 +267,7 @@ Configuration
        implies ``PON_RTL9602C``. Builds ``rtl9602c.o`` from
        ``rtl9602c-main.o``, ``rtl9602c-l2.o``, ``rtl9602c-pon-host.o``,
        ``rtl9602c-optics.o``, ``rtl9602c-offload.o`` and ``rtl9602c-ptp.o``; as
-       a module it is ``rtl9602c``. The optics have no options of their own,
-       apart from the one below.
+       a module it is ``rtl9602c``.
    * - ``CONFIG_PON_RTL9602C``
      - Tristate, "Realtek RTL9602C GPON MAC". Depends on
        ``NET_DSA_RTL9602C`` and ``RTL9602C_ETH || !RTL9602C_ETH``. Selects
@@ -295,9 +290,13 @@ Configuration
      - The conduit. The OMCI messages and the GEM frames cross it. Without the
        conduit driver the calls that the switch driver makes into it return
        ``-EOPNOTSUPP``, and no OMCI port or GEM data path is created.
+   * - ``CONFIG_PON_GN25L95``
+     - The driver of the optics' laser driver. The GPON MAC's driver waits for
+       the optics the switch node names, so without it the MAC does not bind
+       on the board.
    * - ``CONFIG_RTL9602C_OPTICS_RO``
-     - Bool. The driver writes nothing to the optics part itself. The optics
-       page describes it.
+     - Bool. The optics' I2C adapter refuses every write, so nothing writes the
+       optics part. The optics page describes it.
    * - ``CONFIG_I2C``
      - The driver registers an I2C adapter and uses declarations that exist
        only with ``CONFIG_I2C``. Its Kconfig entry neither selects nor depends
@@ -335,13 +334,14 @@ node of its own. The nodes the PON side uses, without the ports::
             reg = <0x1b000000 0xf10000>;
             interrupt-parent = <&intc>;
             interrupts = <8>;
-            tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
             realtek,sysctl = <&sysctl>;
 
             /* from dfp-34x-2c3.dts */
+            realtek,pon-optics = <&laser>;
             memory-region = <&pbo_us>, <&pbo_ds>;
             memory-region-names = "pbo-us", "pbo-ds";
 
+            i2c { laser: laser-driver@50 { ... }; };
             ports { ... };
     };
 
@@ -380,9 +380,10 @@ switch and to DSA (Documentation/networking/dsa/rtl9602c.rst).
        core.
    * - ``interrupts``
      - One interrupt for all the switch's sources, the GPON MAC's among them.
-   * - ``tx-disable-gpios``
-     - Optional. The hard transmit-disable input of the laser driver; the
-       optics page describes it.
+   * - ``realtek,pon-optics``
+     - Optional. The optics the GPON MAC drives, a laser driver in the ``i2c``
+       node; the optics page describes them. Without it the MAC runs without
+       optics, with no TX_DISABLE.
    * - ``realtek,sysctl``
      - A phandle to the system controller, looked up as a syscon regmap. The
        system controller holds the enable in front of the PON MAC. Without it
@@ -432,10 +433,13 @@ Where the code is
        ``rtl9602c_gem_restore()`` at each bring-up,
        ``rtl9602c_gem_tcont_ready()`` when an Alloc-ID is bound to a T-CONT, and
        ``rtl9602c_ponmac_sid_valid()`` when it binds or unbinds the OMCC.
+   * - ``drivers/net/pon/gn25l95.c``
+     - The optics: the hwmon device, TX_DISABLE, the modulation hold, the
+       transmit power levels and the debugfs views ``a2``, ``eeblocks`` and
+       ``tables``, over the I2C adapter that
+       ``drivers/i2c/busses/i2c-rtl9602c.c`` registers.
    * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
-     - The optics: the hwmon device, TX_DISABLE and the debugfs views ``a2``,
-       ``eeblocks`` and ``tables``, over the I2C master and adapter, which
-       ``drivers/i2c/busses/i2c-rtl9602c.c`` drives.
+     - Who may write the optics, and the pad of TX_DISABLE.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - Probe, setup and teardown (in which the PON driver's device is made and
        destroyed), and the debugfs directory.
@@ -522,11 +526,13 @@ Interfaces to user space
   of the driver adds its views to. This page describes ``ponmac``, ``ponpath``
   and ``pondp`` (see "The debugfs views"). The GPON MAC creates ``gpon``,
   ``gpontbl``, ``ploamlog``, ``usburst``, ``gemusintr``, ``bwmap`` and
-  ``uscntr``, and the optics ``a2``, ``eeblocks`` and ``tables``.
-- The hwmon device ``rtl9602c_optics`` (temperature, supply voltage, bias
-  current, transmitted and received power of the optics) and the I2C adapter
-  ``rtl9602c i2c``, which Documentation/i2c/busses/i2c-rtl9602c.rst describes. The hwmon device exists
-  only with ``CONFIG_HWMON`` (on in the board's configuration).
+  ``uscntr``. The optics' views ``a2``, ``eeblocks`` and ``tables`` are in the
+  laser driver's own directory, ``/sys/kernel/debug/i2c/i2c-N/N-0050/``.
+- The hwmon device ``gn25l95`` (temperature, supply voltage, bias current,
+  transmitted and received power of the optics) and the I2C adapter
+  ``rtl9602c i2c``, which Documentation/i2c/busses/i2c-rtl9602c.rst describes.
+  The hwmon device exists only with ``CONFIG_HWMON`` (on in the board's
+  configuration).
 - ``devlink`` on the switch, for the parameters and the region that the
   devlink page describes (Documentation/networking/devlink/rtl9602c.rst); the
   ONU's serial number is set there.
@@ -565,7 +571,7 @@ Where to read next
 
 - Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst: the GPON MAC,
   its activation, PLOAM messages, bandwidth map, Alloc-ID and Port-ID tables.
-- Documentation/networking/device_drivers/pon/rtl9602c-optics.rst: the I2C
+- Documentation/networking/device_drivers/pon/gn25l95.rst: the I2C
   master, the laser driver's management interface, the diagnostics and
   TX_DISABLE.
 - Documentation/networking/pon.rst: the PON class, the OMCI port, the GEM

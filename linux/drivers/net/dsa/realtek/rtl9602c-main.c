@@ -1800,8 +1800,9 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 
 	/*
 	 * The optics' I2C master has a driver of its own. It registers the
-	 * adapter when it binds, and that identifies the module and publishes
-	 * its diagnostics (rtl9602c_optics_adapter()).
+	 * adapter when it binds, with the optics' laser driver, and that
+	 * identifies the module, which decides whether the adapter passes
+	 * writes on (rtl9602c_optics_adapter()).
 	 */
 	err = rtl9602c_optics_i2c_add(p);
 	if (err)
@@ -1842,7 +1843,7 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 
 	cancel_delayed_work_sync(&p->mib_work);
 	cancel_delayed_work_sync(&p->sds_work);
-	cancel_work_sync(&p->optics_level_work);
+	cancel_delayed_work_sync(&p->optics_id_work);
 	rtl9602c_l34_notifiers_unregister(p);
 	rtl9602c_l34_fini(p);
 	rtl9602c_pon_detach(p);
@@ -2465,7 +2466,6 @@ static const struct dsa_switch_ops rtl9602c_switch_ops = {
 static int rtl9602c_probe(struct platform_device *pdev)
 {
 	struct rtl9602c_priv *p;
-	int err;
 
 	p = devm_kzalloc(&pdev->dev, sizeof(*p), GFP_KERNEL);
 	if (!p)
@@ -2497,21 +2497,6 @@ static int rtl9602c_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, PTR_ERR(p->reg),
 				     "cannot map the switch registers\n");
 
-	/*
-	 * Asserted from the start, so that the laser emits nothing before
-	 * the PON path allows it. Optional: without it every TX_DISABLE step
-	 * is skipped.
-	 */
-	p->tx_disable = devm_gpiod_get_optional(&pdev->dev, "tx-disable",
-						GPIOD_OUT_HIGH);
-	if (IS_ERR(p->tx_disable))
-		return dev_err_probe(&pdev->dev, PTR_ERR(p->tx_disable),
-				     "cannot get the laser tx-disable gpio\n");
-
-	err = rtl9602c_optics_level_register(p);
-	if (err)
-		return dev_err_probe(&pdev->dev, err,
-				     "cannot register the transmit power restore\n");
 	p->ds.dev = &pdev->dev;
 	p->ds.num_ports = RTL9602C_NUM_PORTS;
 	p->ds.ops = &rtl9602c_switch_ops;

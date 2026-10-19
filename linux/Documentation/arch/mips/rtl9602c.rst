@@ -1624,8 +1624,9 @@ The SoC's GPIO bank is driven by the Otto GPIO driver
 (``drivers/gpio/gpio-realtek-otto.c``, ``CONFIG_GPIO_REALTEK_OTTO``), unchanged
 apart from one match entry for ``realtek,rtl9602c-gpio``. On this board one line
 is used: line 13, the laser driver's TX_DISABLE input (see the facts below),
-which the switch driver requests through
-``tx-disable-gpios`` on the ``switch`` node. Two pad-function registers in the
+which the laser driver's driver, ``gn25l95``, requests through
+``tx-disable-gpios`` on its node in the switch's ``i2c`` node. Two pad-function
+registers in the
 switch register window route pins to their functions:
 ``RTL9602C_PADMUX_GPIO_EN`` selects GPIO use per pin, and
 ``RTL9602C_PADMUX_FUNC_EN`` enables other functions, the I2C masters among them.
@@ -1673,8 +1674,9 @@ The GPIO bank
        the bank; the driver has an entry for it, and its flags apply. ``GPIO_REALTEK_OTTO`` depends on
        ``MACH_REALTEK_RTL || RTL9602C``, so the driver builds for this platform.
      - T
-     - The switch driver probes: it takes its TX_DISABLE line from this bank at
-       probe, and a missing provider would defer or fail it.
+     - The laser driver's driver (``gn25l95``) probes: it takes its TX_DISABLE
+       line from this bank at probe, and a missing provider would defer or
+       fail it.
    * - ``gpio0: gpio@18003300``, ``compatible = "realtek,rtl9602c-gpio"``,
        ``reg = <0x18003300 0x1c>``, ``gpio-controller``,
        ``#gpio-cells = <2>``, ``ngpios = <32>``; no interrupt properties: no
@@ -1682,17 +1684,17 @@ The GPIO bank
      - T
      - Laser off before O3, TX_DISABLE honoured.
    * - Line 13 is the laser's TX_DISABLE input, high = transmitter off
-       (``tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>`` on the switch node).
-       The switch driver requests it asserted (``GPIOD_OUT_HIGH``), so no light
-       leaves before anything else runs, and then drives it from the ONU state:
-       asserted below O3, released from O3 on. A board whose device tree has no
-       such line skips all of this.
+       (``tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>`` on the laser
+       driver's node). The laser driver's driver requests it asserted
+       (``GPIOD_OUT_HIGH``) at its probe, and the GPON MAC then drives it from
+       the ONU state through the PON class: asserted below O3, released from
+       O3 on. A board whose device tree has no such line skips all of this.
      - M
      - With the ONU in O5, the line driven high by hand (a test build): the
        module's bias and transmitted power fell to 0 within a second and the
        OLT deactivated the ONU; driven low again, the laser emitted and the ONU
        returned to O5
-       (Documentation/networking/device_drivers/pon/rtl9602c-optics.rst).
+       (Documentation/networking/device_drivers/pon/gn25l95.rst).
 
 Pad control
 -----------
@@ -1757,14 +1759,17 @@ GPIO sequences
 TX_DISABLE, at each ONU state change
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This sequence belongs to the switch driver (``rtl9602c_l_txdis_gpio()`` in
-``rtl9602c-optics.c``).
+Once, after the switch driver has made the I2C master's device
+(``rtl9602c_optics_i2c_add()`` in ``rtl9602c-optics.c``): if the optics that
+``realtek,pon-optics`` names have a ``tx-disable-gpios``, set bit 13 of
+``RTL9602C_PADMUX_GPIO_EN`` by read-modify-write. Purpose: the pad is a GPIO.
+(I)
 
-1. If the device tree gave no TX_DISABLE line, stop. (T)
-2. Set bit 13 of ``RTL9602C_PADMUX_GPIO_EN`` by read-modify-write. Purpose: the
-   pad is a GPIO. (I)
-3. ``gpiod_set_value_cansleep()``: asserted below O3, released from O3 on; the
-   flags of the device tree turn "asserted" into a high level. (I)
+At each ONU state change the laser driver's driver (``gn25l95_tx_disable()``,
+called by the GPON MAC through ``pon_optics_tx_disable()``) sets the line with
+``gpiod_set_value_cansleep()``: asserted below O3, released from O3 on; the
+flags of the device tree turn "asserted" into a high level. Without a
+TX_DISABLE line in the device tree nothing is set. (I)
 
 I2C master enable, before the adapter is registered
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1932,7 +1937,7 @@ The wiring, as the device tree has it::
    * - The optical side: the GPON MAC drives a separate laser-driver IC, which
        the SoC reaches over its I2C master 1. Its hard transmit-disable input is
        SoC GPIO 13 (see "GPIO and pad control"), measured as the optics page
-       says (Documentation/networking/device_drivers/pon/rtl9602c-optics.rst).
+       says (Documentation/networking/device_drivers/pon/gn25l95.rst).
      - M
      - The optics diagnostics read through hwmon over master 1 (see "GPIO and
        pad control").

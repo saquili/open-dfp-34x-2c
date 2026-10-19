@@ -45,15 +45,6 @@ properties:
       share, the GPON MAC's included.
     maxItems: 1
 
-  tx-disable-gpios:
-    description:
-      The hard transmit-disable input of the optics' laser driver. While it is
-      asserted the transmitter emits no light. It belongs to the laser
-      driver's node; a tree that describes the optics in the i2c node gives it
-      there.
-    maxItems: 1
-    deprecated: true
-
   i2c:
     $ref: /schemas/i2c/i2c-controller.yaml#
     unevaluatedProperties: false

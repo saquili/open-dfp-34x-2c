@@ -57,7 +57,7 @@ framing, the counters, FEC and encryption, and what the driver reports to the
 PON class, through devlink and in debugfs. The PON MAC and the packet buffer are
 on Documentation/networking/device_drivers/pon/rtl9602c.rst, which also
 introduces the set of pages for the PON hardware; the optics are on
-Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
+Documentation/networking/device_drivers/pon/gn25l95.rst.
 
 Activation in brief
 -------------------
@@ -196,9 +196,9 @@ Configuration
        lines. They print once enabled through dynamic debug (see "The kernel
        log").
    * - ``CONFIG_RTL9602C_OPTICS_RO``
-     - With it the modulation hold of the bring-up returns at once and writes
-       nothing (see
-       Documentation/networking/device_drivers/pon/rtl9602c-optics.rst).
+     - With it the optics' I2C adapter refuses every write, and the modulation
+       hold of the bring-up writes nothing (see
+       Documentation/networking/device_drivers/pon/gn25l95.rst).
 
 ``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver in
 (``CONFIG_NET_DSA_RTL9602C=y``) and sets ``CONFIG_DEBUG_FS=y`` and
@@ -227,10 +227,11 @@ code depends on these properties of that node.
        ``RTL9602C_IRQ_ENABLE``, ``0x01d00c``): the bring-up enables it, and the
        interrupt thread dispatches PLOAM messages. The binding requires the
        property.
-   * - ``tx-disable-gpios``
-     - Optional. The laser's TX_DISABLE line, which the state machine releases
-       in O3 to O5 and asserts in every other state. Without the property every
-       TX_DISABLE step is skipped.
+   * - ``realtek,pon-optics``
+     - Optional. The optics the MAC drives (``semtech,gn25l95``, with the
+       laser's TX_DISABLE line, which the state machine releases in O3 to O5
+       and asserts in every other state). The MAC's driver waits for their
+       driver; without the property every TX_DISABLE step is skipped.
    * - ``realtek,sysctl``, ``memory-region``
      - Read at probe for the PON MAC, which the bring-up builds (see
        Documentation/networking/device_drivers/pon/rtl9602c.rst).
@@ -271,13 +272,14 @@ Where the code is
    * - ``drivers/net/pon/rtl9602c/rtl9602c-omci.c``
      - The OMCI port. It reads the activation state and whether the OMCC is
        bound; this block reports the OMCI channel's link to the port.
-   * - ``rtl9602c-ponmac.c`` in the same directory, and ``rtl9602c-optics.c`` of
-       the switch driver
+   * - ``rtl9602c-ponmac.c`` in the same directory, and the optics of the PON
+       class
      - Called from this block: ``rtl9602c_ponmac_init()`` and
-       ``rtl9602c_ponmac_sid_valid()`` of the PON MAC, and, through the host
-       operations ``tx_disable`` and ``hold_modulation``,
-       ``rtl9602c_l_txdis_gpio()`` and ``rtl9602c_optics_hold_modulation()`` of
-       the optics. The ``ponpath`` view of the PON MAC calls
+       ``rtl9602c_ponmac_sid_valid()`` of the PON MAC, and
+       ``pon_optics_tx_disable()``, ``pon_optics_start()`` and, from
+       ``rtl9602c_gpon_power_work()``, ``pon_optics_set_power_level()`` of the
+       optics (``gn25l95_tx_disable()``, ``gn25l95_start()`` and
+       ``gn25l95_set_power_level()``). The ``ponpath`` view of the PON MAC calls
        ``rtl9602c_gpon_port_get()``, ``rtl9602c_gpon_cntr_sync()`` and
        ``rtl9602c_gpon_flow_cntr()``.
 
@@ -447,7 +449,7 @@ The other pages of the port, for what this page leaves to them:
 - Documentation/networking/device_drivers/pon/rtl9602c.rst: the PON MAC and the
   packet buffer, the upstream streams, queues and T-CONT scheduler, the GEM
   ports as network interfaces and the OMCI path.
-- Documentation/networking/device_drivers/pon/rtl9602c-optics.rst: the I2C
+- Documentation/networking/device_drivers/pon/gn25l95.rst: the I2C
   masters of the optics, the laser driver's pages, the digital diagnostics,
   TX_DISABLE and the loss-of-signal input.
 - Documentation/networking/pon.rst: the PON class, its OMCI port, the ``gem``
@@ -657,10 +659,10 @@ those of the facts that carry each step.
    activation. (M)
 7. Program the GEM ports that exist again (``rtl9602c_gem_restore()``). Purpose:
    they live in the tables that step 6 emptied. (M)
-8. Hold the optics' modulation (``rtl9602c_optics_hold_modulation()``, see
-   Documentation/networking/device_drivers/pon/rtl9602c-optics.rst). Purpose:
-   before the laser is first enabled in O3. A failure is logged and bring-up
-   goes on. (I)
+8. Let the optics prepare the transmitter (``pon_optics_start()``: the
+   modulation hold of Documentation/networking/device_drivers/pon/gn25l95.rst).
+   Purpose: before the laser is first enabled in O3. A failure is logged and
+   bring-up goes on. (I)
 9. Set the burst merge threshold. (I)
 10. Write the response delay under the write key. Purpose: upstream timing. (M)
 11. Write the period of the frame-derived pulse. (I)
@@ -777,10 +779,10 @@ Take-down and the facts of the bring-up
      - After a PON down and up, a GEM port created before it was restored, and
        its upstream restarted when the Alloc-ID was assigned again (the kernel
        log line ``upstream started``).
-   * - The optics' modulation is held (``rtl9602c_optics_hold_modulation()``,
-       see Documentation/networking/device_drivers/pon/rtl9602c-optics.rst)
-       before the laser is first enabled in O3; a failure is logged and bring-up
-       goes on.
+   * - The optics' modulation is held (``pon_optics_start()``, see
+       Documentation/networking/device_drivers/pon/gn25l95.rst) before the
+       laser is first enabled in O3; a failure is logged and bring-up goes
+       on.
      - I
      - Whether activation needs the hold is open: activations have been clean
        with the hold on and off.
@@ -861,7 +863,7 @@ removed on its own to see whether it is needed, and the rows say so.
        forces is not established.
      - M
      - With the bit set and TX_DISABLE released, the module's own diagnostics
-       (see Documentation/networking/device_drivers/pon/rtl9602c-optics.rst)
+       (see Documentation/networking/device_drivers/pon/gn25l95.rst)
        read zero bias and zero power; forcing the module's burst enable instead
        read 14.1 mA and +2.3 dBm.
    * - Write whole, in this order: ``RTL9602C_SERDES_ANA_TUNE2`` (``0x022588``)
@@ -1287,8 +1289,8 @@ The report to the PON class follows the log line
      - A capture of the upstream at the OLT with the register at 255 and at an
        assigned value.
    * - TX_DISABLE follows the state: it is released in O3 to O5 and asserted in
-       O1, O2, O6 and O7 (``rtl9602c_l_txdis_gpio()``, see
-       Documentation/networking/device_drivers/pon/rtl9602c-optics.rst). Only
+       O1, O2, O6 and O7 (``pon_optics_tx_disable()``, see
+       Documentation/networking/device_drivers/pon/gn25l95.rst). Only
        the hard block is lifted: the burst enable still confines emission to the
        allocations that the OLT grants.
      - M
@@ -1455,7 +1457,7 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
      - O4, O5
      - One transmit power level mode up ('10') or down ('01'), within modes 0
        to 2, which the optics then set (see "Transmit power levelling" in
-       Documentation/networking/device_drivers/pon/rtl9602c-optics.rst); '00',
+       Documentation/networking/device_drivers/pon/gn25l95.rst); '00',
        '11' and a step past either end change nothing. Each is logged; none is
        acknowledged, as G.984.3 asks for no acknowledgment (clause 9.2.3.16
        and clause 10.5.2). Injected in O5, down twice and up twice, they took

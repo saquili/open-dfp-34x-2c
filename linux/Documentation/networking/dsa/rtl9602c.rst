@@ -18,12 +18,14 @@ The switch's register window, physical ``0x1b000000``, is larger than the
 switch core. It also holds the GPON MAC, the PON MAC with its packet buffer,
 the L3/NAT engine, the IEEE 1588 clock and the I2C masters of the optics, and
 three drivers share it. ``rtl9602c``, the DSA driver this page describes, drives
-the switch core, the L3/NAT engine, the clock and the optics' diagnostics. The
-I2C master of the optics (``i2c-rtl9602c``) and the GPON MAC with the PON MAC
-behind it (``rtl9602c-pon``, which registers the ONU with the PON class,
-Documentation/networking/pon.rst) have drivers of their own, on auxiliary
-devices that the DSA driver makes and whose drivers it serves (see "The
-auxiliary devices"). This page describes the switch core as the
+the switch core, the L3/NAT engine and the clock, and decides whether the
+optics may be written. The I2C master of the optics (``i2c-rtl9602c``) and the
+GPON MAC with the PON MAC behind it (``rtl9602c-pon``, which registers the ONU
+with the PON class, Documentation/networking/pon.rst) have drivers of their
+own, on auxiliary devices that the DSA driver makes and whose drivers it serves
+(see "The auxiliary devices"). The optics' laser driver, on the master's bus,
+has a driver of its own too, ``gn25l95``
+(Documentation/networking/device_drivers/pon/gn25l95.rst). This page describes the switch core as the
 driver sets it up: probe and identification, the forced MAC ability of the
 ports, the SerDes lane to the host and phylink, the switch's half of the CPU
 tag, the frame length limit, the switch's interrupt, the per-port counters,
@@ -219,15 +221,12 @@ Configuration
        rtl9602c.rst), which brings the PON class (``CONFIG_PON``) with it.
        Without it the switch works and the PON port cannot be enabled.
    * - ``CONFIG_RTL9602C_OPTICS_RO``
-     - Bool, depends on ``NET_DSA_RTL9602C``. With it, the sequence that turns
-       off the laser driver's automatic extinction-ratio loop at every PON
-       bring-up returns without writing, and the driver itself writes nothing to
-       the optics part (*PON*).
+     - Bool, depends on ``NET_DSA_RTL9602C``. With it, the optics' I2C adapter
+       refuses every write, so that the laser driver's driver, and anything
+       else on the board, only reads the optics part
+       (Documentation/networking/device_drivers/pon/gn25l95.rst).
    * - ``CONFIG_DEBUG_FS``
      - The debugfs directory ``rtl9602c`` and its views exist only with it.
-   * - ``CONFIG_HWMON``
-     - The hwmon device ``rtl9602c_optics`` exists only with it; without it its
-       registration is a stub that returns 0.
    * - ``CONFIG_PTP_1588_CLOCK``
      - The PTP hardware clock exists only with it; without it no clock is
        registered.
@@ -253,10 +252,10 @@ ports::
             reg = <0x1b000000 0xf10000>;
             interrupt-parent = <&intc>;
             interrupts = <8>;
-            tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
             realtek,sysctl = <&sysctl>;
 
             /* from dfp-34x-2c3.dts */
+            realtek,pon-optics = <&laser>;
             memory-region = <&pbo_us>, <&pbo_ds>;
             memory-region-names = "pbo-us", "pbo-ds";
 
@@ -297,12 +296,16 @@ follows.
        share. It is source 8 of the SoC interrupt controller, Linux interrupt
        16, and is taken with ``platform_get_irq_optional()`` (see "The switch
        interrupt").
-   * - ``tx-disable-gpios``
-     - Optional. The hard transmit-disable input of the laser driver. Probe
-       requests it with ``devm_gpiod_get_optional()`` as ``tx-disable``, already
-       driven to its asserted level; without it every TX_DISABLE step is
-       skipped. That GPIO 13, active high, is the laser driver's
-       transmit-disable is not verified (*MIPS*).
+   * - ``i2c``
+     - The optics' I2C master. Its children, the laser driver
+       (``semtech,gn25l95``), are the devices on its bus, which the master's
+       driver registers with its adapter.
+   * - ``realtek,pon-optics``
+     - Optional. The optics the GPON MAC drives, which the switch driver hands
+       to the MAC's driver; if the laser driver's node has a
+       ``tx-disable-gpios``, the switch also gives the TX_DISABLE pad to its
+       GPIO function. The laser driver's own binding has its transmit
+       disable.
    * - ``realtek,sysctl``
      - A phandle to the system controller, looked up with
        ``syscon_regmap_lookup_by_phandle()``. It holds the enable in front of
@@ -393,8 +396,11 @@ next".
      - The OMCI channel as the PON class's OMCI port.
      - *PON*; *PON class*
    * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
-     - The optics' hwmon diagnostics, modulation hold and TX_DISABLE, over the
-       I2C master that ``drivers/i2c/busses/i2c-rtl9602c.c`` drives.
+     - The hand-over of the optics' I2C master to
+       ``drivers/i2c/busses/i2c-rtl9602c.c``, the identification of the module
+       that decides whether the master passes writes on, the TX_DISABLE pad,
+       and the view of the SoC's SFP slave. The laser driver has a driver of
+       its own, ``drivers/net/pon/gn25l95.c``.
      - *PON*
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The register map block by block, but for the GPON MAC's and the PON
@@ -487,10 +493,8 @@ Interfaces to user space
   ``rtl9602c-gpon.c`` creates ``gpontbl``, ``gpon``, ``ploamlog``,
   ``usburst``, ``gemusintr``, ``bwmap`` and ``uscntr``, and ``ploaminject``
   with ``CONFIG_PON_RTL9602C_PLOAM_INJECT``; ``rtl9602c-ponmac.c`` creates
-  ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates ``a2``
-  and ``eeblocks``, ``tables`` without ``CONFIG_RTL9602C_OPTICS_RO``, and
-  ``t2write`` with ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``;
-  ``rtl9602c-ptp.c`` creates ``todstat`` and
+  ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates
+  ``sfpslave``; ``rtl9602c-ptp.c`` creates ``todstat`` and
   ``ptpstat``. A
   view belongs to the block that creates it, and the page of that block says
   what it shows.
@@ -499,9 +503,10 @@ Interfaces to user space
 
       16: ...  rtl9602c-intc   8 rtl9602c-switch
 
-- The hwmon device ``rtl9602c_optics``, the I2C adapter ``rtl9602c i2c`` and
-  the PTP hardware clock ``rtl9602c-ptp``, which the *PON* and *ptp* pages
-  describe.
+- The I2C adapter ``rtl9602c i2c`` and the PTP hardware clock
+  ``rtl9602c-ptp``, which the *PON* and *ptp* pages describe. The optics'
+  hwmon device, ``gn25l95``, and their debugfs views are those of the laser
+  driver's driver (Documentation/networking/device_drivers/pon/gn25l95.rst).
 - Through the PON class: the OMCI port ``/dev/pon0omci0``, the ``gem``
   interfaces and the ``pon`` generic netlink family (*PON class*).
 - The kernel log lines that begin ``rtl9602c-switch:``. The lines of the blocks
@@ -663,15 +668,15 @@ Probe
 
 1. Map the register window (resource 0 of the switch node). Purpose: every
    register access goes through it. (T)
-2. Request the optional ``tx-disable`` GPIO, already driven to its asserted
-   level. Purpose: the laser emits nothing before the PON path enables it. (T)
-3. Describe the switch to DSA (four ports, VLAN filtering switch-wide, the
+2. Describe the switch to DSA (four ports, VLAN filtering switch-wide, the
    ageing range (*bridging*), the phylink MAC operations) and register it with
    ``dsa_register_switch()``. Purpose: DSA then calls
    ``rtl9602c_setup()``. (T)
 
-All three steps are checked by the board booting to a shell with the switch
-probed; step 2 also by the laser being off before O3, with TX_DISABLE honoured.
+Both steps are checked by the board booting to a shell with the switch
+probed. The laser's TX_DISABLE line is the laser driver's driver's, which
+requests it asserted at its probe
+(Documentation/networking/device_drivers/pon/gn25l95.rst).
 The system controller and the packet-buffer regions of the PON MAC are looked
 up by the GPON MAC's driver when it binds ("The system-controller enable in
 front of the PON packet buffer").

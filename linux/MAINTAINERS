@@ -23360,6 +23360,7 @@ M:	Paweł Phan <szop.hektar_1w@icloud.com>
 L:	netdev@vger.kernel.org
 S:	Odd Fixes
 F:	Documentation/devicetree/bindings/net/semtech,gn25l95.yaml
+F:	Documentation/networking/device_drivers/pon/gn25l95.rst
 F:	drivers/net/pon/gn25l95.c
 
 SENSABLE PHANTOM

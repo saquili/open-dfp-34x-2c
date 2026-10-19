@@ -200,7 +200,7 @@ on other pages:
 - The PON MAC and the packet buffer, which carry the GEM flows, the T-CONTs
   and the queues: Documentation/networking/device_drivers/pon/rtl9602c.rst.
 - The optics, the laser driver and its transmit-disable line:
-  Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
+  Documentation/networking/device_drivers/pon/gn25l95.rst.
 - The CPU port and its DMA engine, the conduit through which the OMCI messages
   and the GEM frames reach the switch:
   Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst.

@@ -55,26 +55,27 @@ config RTL9602C_OPTICS_RO
 	bool "RTL9602C: never write to the optics part"
 	depends on NET_DSA_RTL9602C
 	help
-	  At every bring-up of the PON, the RTL9602C switch driver turns off
-	  the automatic extinction-ratio loop of the laser driver behind the
-	  optics' I2C master, so that the laser's modulation runs from the
-	  value the module loads at power-up. When the OLT asks for a lower
-	  transmit power level, it sets the laser to it, and it puts the
-	  module's own level back before an orderly restart. These changes
-	  are made so that the module does not store them: they last until
-	  the module loses power. To make them the driver shows the laser
-	  driver's configuration table through A2h byte 127, the page
-	  select, which the module keeps across a power cycle: it writes the
-	  byte only when it holds another page, and writes it back as it was
-	  found.
+	  At every bring-up of the PON, the driver of the optics' laser
+	  driver (PON_GN25L95) turns off its automatic extinction-ratio
+	  loop, so that the laser's modulation runs from the value the module
+	  loads at power-up. When the OLT asks for a lower transmit power
+	  level, it sets the laser to it, and it puts the module's own level
+	  back at an orderly restart. These changes are made so that the
+	  module does not store them: they last until the module loses power.
+	  To make them the driver shows the laser driver's configuration
+	  table through A2h byte 127, the page select, which the module keeps
+	  across a power cycle: it writes the byte only when it holds another
+	  page, and writes it back as it was found. The adapter of the optics'
+	  I2C master, which I2C_RTL9602C registers, passes those writes on
+	  only for a module the switch driver has identified as one the laser
+	  driver's code was measured on.
 
-	  With this option the driver writes nothing to the part: no
-	  extinction-ratio hold, no transmit power level and no "tables"
-	  debugfs view, which writes the page select. The adapter of the
-	  optics' I2C master, which I2C_RTL9602C registers, refuses every
-	  write, from userspace through i2c-dev too, so that nothing on the
-	  board can change the module. The diagnostics read through hwmon
-	  and the "a2", "eeblocks" and "sfpslave" debugfs views stay as they
+	  With this option the adapter refuses every write, from the laser
+	  driver and from userspace through i2c-dev alike, so that nothing on
+	  the board can change the module: no extinction-ratio hold, no
+	  transmit power level, and the "tables" debugfs view, which writes
+	  the page select, shows only the table selected. The diagnostics
+	  read through hwmon and the debugfs views that only read stay as they
 	  are.
 
 	  Say Y for an image that must leave the module as it was found. With
@@ -86,7 +87,6 @@ config NET_DSA_RTL9602C
 	depends on NET_DSA
 	depends on HAS_IOMEM
 	depends on I2C
-	depends on HWMON || HWMON=n
 	depends on PTP_1588_CLOCK_OPTIONAL
 	depends on RTL9602C_ETH || !RTL9602C_ETH
 	select AUXILIARY_BUS
@@ -101,30 +101,15 @@ config NET_DSA_RTL9602C
 	  RTL9602C_ETH driver. Besides the switch itself (bridging, VLANs, the
 	  address table, ACL and classifier rules, QoS, storm control and
 	  L3/NAT offload). It also registers the switch's IEEE 1588 clock,
-	  and the diagnostics of the optics, whose I2C master has a driver of
-	  its own, I2C_RTL9602C. The chip's GPON MAC, with the PON class's
-	  ONU, its OMCI channel and a network interface per GEM port, has a
-	  driver of its own too, PON_RTL9602C, which this driver makes a
+	  and decides whether the optics may be written, whose I2C master
+	  has a driver of its own, I2C_RTL9602C, and their laser driver
+	  another, such as PON_GN25L95. The chip's GPON MAC, with the PON
+	  class's ONU, its OMCI channel and a network interface per GEM port,
+	  has a driver of its own too, PON_RTL9602C, which this driver makes a
 	  device for.
 
 	  Say Y or M on an RTL9602C board. To compile this driver as a module,
 	  choose M here: the module will be called rtl9602c.
-
-config NET_DSA_RTL9602C_OPTICS_STORE
-	bool "Store bytes of the optics' configuration table through debugfs"
-	depends on NET_DSA_RTL9602C && DEBUG_FS && !RTL9602C_OPTICS_RO
-	help
-	  Give the switch's debugfs directory a file, rtl9602c/t2write, that
-	  stores bytes of the laser driver's configuration table (table 2)
-	  in the module's EEPROM, where they stay across every power cycle,
-	  and resets the laser driver. It puts right a module whose table 2
-	  has gone wrong. Among the bytes it takes are the transmitter's
-	  fault, alarm and rogue ONU controls, which keep a faulty ONU from
-	  disturbing the other ONUs of the PON, so a process that can write
-	  the file can weaken that protection for good. The option is for
-	  test images, not for an ONU in service.
-
-	  If unsure, say N.
 
 config NET_DSA_RTL9602C_KUNIT_TEST
 	bool "KUnit tests of the Realtek RTL9602C switch driver" if !KUNIT_ALL_TESTS

@@ -25,6 +25,7 @@
 #include <linux/if_link.h>
 #include <linux/if_vlan.h>
 #include <linux/pon.h>
+#include <linux/property.h>
 #include <net/dsa.h>
 #include <net/switchdev.h>
 
@@ -35,23 +36,6 @@
 static void rtl9602c_host_irq_enable(void *host, u32 clr, u32 set)
 {
 	rtl9602c_irq_enable(host, clr, set);
-}
-
-static int rtl9602c_host_tx_disable(void *host, bool disable)
-{
-	return rtl9602c_l_txdis_gpio(host, disable);
-}
-
-static int rtl9602c_host_hold_modulation(void *host)
-{
-	return rtl9602c_optics_hold_modulation(host);
-}
-
-static void rtl9602c_host_power_level_changed(void *host)
-{
-	struct rtl9602c_priv *p = host;
-
-	queue_work(system_wq, &p->optics_level_work);
 }
 
 static void rtl9602c_host_gem_added(void *host, unsigned int flow)
@@ -366,9 +350,6 @@ static void rtl9602c_host_second(void *host)
 
 static const struct rtl9602c_pon_host_ops rtl9602c_pon_host_ops = {
 	.irq_enable		= rtl9602c_host_irq_enable,
-	.tx_disable		= rtl9602c_host_tx_disable,
-	.hold_modulation	= rtl9602c_host_hold_modulation,
-	.power_level_changed	= rtl9602c_host_power_level_changed,
 	.gem_added		= rtl9602c_host_gem_added,
 	.gem_unbind		= rtl9602c_host_gem_unbind,
 	.gem_forget		= rtl9602c_host_gem_forget,
@@ -400,6 +381,11 @@ static void rtl9602c_pon_data_init(struct rtl9602c_priv *p)
 	pd->debugfs = p->debugfs;
 	pd->host = p;
 	pd->host_ops = &rtl9602c_pon_host_ops;
+
+	/* The optics the MAC drives, if the switch node names them. */
+	pd->optics = fwnode_find_reference(dev_fwnode(p->dev), "realtek,pon-optics", 0);
+	if (IS_ERR(pd->optics))
+		pd->optics = NULL;
 }
 
 /**
@@ -432,6 +418,8 @@ void rtl9602c_pon_detach(struct rtl9602c_priv *p)
 	if (p->pon_adev)
 		auxiliary_device_destroy(p->pon_adev);
 	p->pon_adev = NULL;
+	fwnode_handle_put(p->pon.optics);
+	p->pon.optics = NULL;
 }
 
 /**
@@ -580,30 +568,6 @@ bool rtl9602c_pon_us_ready(struct rtl9602c_priv *p, unsigned int flow)
 		ready = pd->pon_ops->us_ready(pd->pon, flow);
 	up_read(&pd->sem);
 	return ready;
-}
-
-/* The transmit power level mode the MAC asks for; 0, the normal one, if none. */
-u8 rtl9602c_pon_power_mode(struct rtl9602c_priv *p)
-{
-	struct rtl9602c_pon_data *pd = &p->pon;
-	u8 mode = 0;
-
-	down_read(&pd->sem);
-	if (pd->pon_ops)
-		mode = pd->pon_ops->power_mode(pd->pon);
-	up_read(&pd->sem);
-	return mode;
-}
-
-void rtl9602c_pon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
-				int err)
-{
-	struct rtl9602c_pon_data *pd = &p->pon;
-
-	down_read(&pd->sem);
-	if (pd->pon_ops)
-		pd->pon_ops->power_applied(pd->pon, asked, mode, err);
-	up_read(&pd->sem);
 }
 
 int rtl9602c_pon_second_enable(struct rtl9602c_priv *p, bool on)

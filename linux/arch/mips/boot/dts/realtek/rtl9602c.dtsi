@@ -180,16 +180,18 @@
 			interrupt-parent = <&intc>;
 			interrupts = <8>;
 
-			/*
-			 * The hard transmit-disable input of the laser driver:
-			 * GPIO 13, high turning the light off (measured). The
-			 * switch driver requests it asserted and releases it
-			 * only while the PON link needs the laser.
-			 */
-			tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
-
 			/* Holds the enable in front of the PON MAC. */
 			realtek,sysctl = <&sysctl>;
+
+			/*
+			 * The I2C master of the optics, master 1 of the two in
+			 * the window. The board describes the devices on its
+			 * bus.
+			 */
+			switch_i2c: i2c {
+				#address-cells = <1>;
+				#size-cells = <0>;
+			};
 
 			/*
 			 * Port 1 exists in the silicon and is left out:

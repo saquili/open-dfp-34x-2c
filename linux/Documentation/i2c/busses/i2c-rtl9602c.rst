@@ -31,8 +31,8 @@ The switch driver makes the auxiliary device
 (include/linux/platform_data/i2c-rtl9602c.h); this driver binds to that
 device. It may bind before or after the switch is set up, and the switch
 driver is told when the adapter appears or is about to go. Without this
-driver the switch has no optics: it cannot identify the module, publish its
-diagnostics through hwmon, or hold the laser's modulation.
+driver the optics have no bus: the switch driver cannot identify the module,
+and the laser driver's driver, ``gn25l95``, has no device to bind to.
 
 The adapter offers SMBus byte data, read and write, and word data, read only.
 A word is read in one transfer of two bytes, so that the module does not
@@ -41,12 +41,13 @@ word; ``i2c_smbus_read_word_swapped()`` gives the word as SFF-8472 has it,
 most significant byte first. Every other transaction is refused with
 ``-EOPNOTSUPP``.
 
-A write from a client is passed on only if the switch driver allows it, which
-it does for a module that it has identified as one it was measured on, and not
-with ``CONFIG_RTL9602C_OPTICS_RO``. Otherwise it is refused with ``-EPERM``:
+A write from a client, the laser driver's driver among them, is passed on
+only if the switch driver allows it, which it does for a module that it has
+identified as one the laser driver's code was measured on, and not with
+``CONFIG_RTL9602C_OPTICS_RO``. Otherwise it is refused with ``-EPERM``:
 the A0h and A2h bytes 0-127 of the module take writes without a password and
 keep them across a power cycle, so that a write is a permanent change to the
-module (Documentation/networking/device_drivers/pon/rtl9602c-optics.rst).
+module (Documentation/networking/device_drivers/pon/gn25l95.rst).
 
 There is no interrupt. The master is polled until it is no longer busy, which
 takes up to about two milliseconds for a byte, and the driver relies on the

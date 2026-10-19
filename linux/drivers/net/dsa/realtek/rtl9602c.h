@@ -1502,49 +1502,6 @@ enum rtl9602c_ptp_tc {
 #define RTL9602C_APPTRUST_MAX		2
 
 /*
- * The optics' SFF-8472 bytes as the driver numbers them, A2h from A2_BASE:
- * the thresholds, the diagnostics, and bytes 123 to 126, left to the
- * module maker.  Each of the five diagnostics, numbered as in enum
- * rtl9602c_optics_ddm, has a word in A2h 96-105 and four in A2h 0-39: its
- * high alarm, low alarm, high warning and low warning thresholds.
- */
-#define RTL9602C_OPTICS_A2_BASE		0x100
-#define RTL9602C_OPTICS_A2_LIMIT(ddm, limit)	(8 * (ddm) + 2 * (limit))
-#define RTL9602C_OPTICS_A2_DDM		0x60
-#define RTL9602C_OPTICS_A2_WORD(ddm)		(RTL9602C_OPTICS_A2_DDM + 2 * (ddm))
-#define RTL9602C_OPTICS_A2_PASSWORD		0x7b
-
-/**
- * enum rtl9602c_optics_ddm - the diagnostics of SFF-8472, in A2h order
- * @RTL9602C_OPTICS_TEMP: temperature, signed, 1/256 degC
- * @RTL9602C_OPTICS_VCC: supply voltage, 100 uV
- * @RTL9602C_OPTICS_BIAS: laser bias current, 2 uA
- * @RTL9602C_OPTICS_TX: transmitted optical power, 0.1 uW
- * @RTL9602C_OPTICS_RX: received optical power, 0.1 uW
- */
-enum rtl9602c_optics_ddm {
-	RTL9602C_OPTICS_TEMP,
-	RTL9602C_OPTICS_VCC,
-	RTL9602C_OPTICS_BIAS,
-	RTL9602C_OPTICS_TX,
-	RTL9602C_OPTICS_RX,
-};
-
-/**
- * enum rtl9602c_optics_limit - the thresholds of a diagnostic, in A2h order
- * @RTL9602C_OPTICS_HIGH_ALARM: high alarm
- * @RTL9602C_OPTICS_LOW_ALARM: low alarm
- * @RTL9602C_OPTICS_HIGH_WARN: high warning
- * @RTL9602C_OPTICS_LOW_WARN: low warning
- */
-enum rtl9602c_optics_limit {
-	RTL9602C_OPTICS_HIGH_ALARM,
-	RTL9602C_OPTICS_LOW_ALARM,
-	RTL9602C_OPTICS_HIGH_WARN,
-	RTL9602C_OPTICS_LOW_WARN,
-};
-
-/*
  * A set bit routes its pad to the GPIO function; bit 13 is TX_DISABLE's.
  * Not verified.
  */
@@ -1553,7 +1510,6 @@ enum rtl9602c_optics_limit {
 
 #include <linux/i2c.h>
 #include <linux/platform_data/i2c-rtl9602c.h>
-#include <linux/gpio/consumer.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/workqueue.h>
 #include <linux/hashtable.h>
@@ -1818,12 +1774,6 @@ struct rtl9602c_priv {
 	struct device *dev;
 	/** @reg: the switch's register window */
 	void __iomem *reg;
-
-	/**
-	 * @tx_disable: the laser's TX_DISABLE line, requested asserted; NULL
-	 * when the device tree gives none
-	 */
-	struct gpio_desc *tx_disable;
 
 	/**
 	 * @table_lock: serialises the indirect table engine and the L3/NAT
@@ -2167,58 +2117,23 @@ struct rtl9602c_priv {
 	 */
 	struct i2c_adapter	*i2c_adap;
 	/**
-	 * @optics_lock: held by every user of the optics for the whole of its
-	 * sequence of transfers, with the adapter's bus lock inside it
+	 * @optics_lock: held by the identification of the module for its
+	 * reads, with the adapter's bus lock inside it
 	 */
 	struct mutex		optics_lock;
 	/**
-	 * @optics_hwmon: the hwmon device of the diagnostics, once registered
-	 */
-	struct device		*optics_hwmon;
-	/**
-	 * @optics_apcset0: the power control's set point the module came
-	 * with, that of transmit power level mode 0; under optics_lock
-	 */
-	u8			optics_apcset0;
-	/** @optics_mod0: the modulation DAC the module came with */
-	u16			optics_mod0;
-	/** @optics_ref: @optics_apcset0 and @optics_mod0 are known */
-	bool			optics_ref;
-	/**
 	 * @optics_known: the module declares itself as one whose laser driver
-	 * the driver writes (rtl9602c_optics_identify()); without it the
-	 * driver only reads the laser driver
+	 * may be written (rtl9602c_optics_identify()); without it the adapter
+	 * refuses every write
 	 */
 	bool			optics_known;
 	/**
 	 * @optics_unread: the module's header could not be read at the last
-	 * try, which the next modulation hold repeats
+	 * try, which @optics_id_work repeats; under @optics_lock
 	 */
 	bool			optics_unread;
-	/**
-	 * @optics_t2_open: table 2 is open for storing through the debugfs
-	 * entry t2write, which keeps @optics_t2_eectl and @optics_t2_tabsel,
-	 * EEPROM_CTRL and the page select as found; under optics_lock
-	 */
-	bool			optics_t2_open;
-	/** @optics_t2_eectl: EEPROM_CTRL as found by t2write's "open" */
-	u8			optics_t2_eectl;
-	/** @optics_t2_tabsel: the page select as found by t2write's "open" */
-	u8			optics_t2_tabsel;
-	/**
-	 * @optics_mode: the transmit power level mode the optics are set to:
-	 * 0 normal, 1 normal - 3 dB, 2 normal - 6 dB
-	 */
-	u8			optics_mode;
-	/**
-	 * @optics_p0: the transmitted power at mode 0 in 0.1 uW, measured
-	 * when a lower mode is first set; 0 while not measured
-	 */
-	u16			optics_p0;
-	/** @optics_level_work: sets the optics to @gpon_power_mode */
-	struct work_struct	optics_level_work;
-	/** @optics_reboot_nb: puts level mode 0 back before a restart */
-	struct notifier_block	optics_reboot_nb;
+	/** @optics_id_work: reads the header again until it reads */
+	struct delayed_work	optics_id_work;
 	/** @ptp_info: the switch clock as a PHC */
 	struct ptp_clock_info	ptp_info;
 	/** @ptp_clock: the PHC; NULL when none is registered */
@@ -2611,11 +2526,6 @@ void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p);
 void rtl9602c_svlan_setup(struct rtl9602c_priv *p);
 void rtl9602c_l34_notifiers_register(struct rtl9602c_priv *p);
 void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p);
-int rtl9602c_l_read(struct rtl9602c_priv *p, u16 reg, u8 *val);
-int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable);
-int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p);
-void rtl9602c_optics_level_work(struct work_struct *work);
-int rtl9602c_optics_level_register(struct rtl9602c_priv *p);
 void rtl9602c_meter_free(struct rtl9602c_priv *p, unsigned int meter);
 int rtl9602c_gem_ds_limit(struct rtl9602c_priv *p, unsigned int flow, u64 rate,
 			  u32 burst, struct netlink_ext_ack *extack);
@@ -2737,9 +2647,6 @@ int rtl9602c_pon_sn_get(struct rtl9602c_priv *p, char *buf, size_t len);
 int rtl9602c_pon_password_set(struct rtl9602c_priv *p, const char *s);
 bool rtl9602c_pon_password_is_set(struct rtl9602c_priv *p);
 bool rtl9602c_pon_us_ready(struct rtl9602c_priv *p, unsigned int flow);
-u8 rtl9602c_pon_power_mode(struct rtl9602c_priv *p);
-void rtl9602c_pon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
-				int err);
 int rtl9602c_pon_second_enable(struct rtl9602c_priv *p, bool on);
 
 #endif /* _RTL9602C_H */

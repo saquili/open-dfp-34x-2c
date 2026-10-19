@@ -28,6 +28,7 @@
 
 struct dentry;
 struct dsa_switch;
+struct fwnode_handle;
 struct net_device;
 struct netlink_ext_ack;
 struct pon_gem_rx_filter;
@@ -62,12 +63,6 @@ struct timespec64;
  * struct rtl9602c_pon_host_ops - what the switch driver does for the MAC
  * @irq_enable: change the sources of the switch interrupt: clear the bits of
  *	@clr, then set those of @set
- * @tx_disable: assert or release the laser's transmit-disable line
- * @hold_modulation: turn the laser driver's extinction-ratio loop off, before
- *	the first burst
- * @power_level_changed: the MAC wants another transmit power level: set the
- *	laser to what rtl9602c_pon_ops.power_mode() says, and report back with
- *	rtl9602c_pon_ops.power_applied(); may be called with the MAC's lock held
  * @gem_added: a flow now carries a GEM port
  * @gem_unbind: a GEM port is going: leave the bridge, give up its VLAN claims
  *	and the routed flows that name it
@@ -95,13 +90,10 @@ struct timespec64;
  *	(rtl9602c_pon_ops.second_enable())
  *
  * All are called in process context, with the PON driver's lock not held but
- * for @power_level_changed and @tod_arm.
+ * for @tod_arm.
  */
 struct rtl9602c_pon_host_ops {
 	void (*irq_enable)(void *host, u32 clr, u32 set);
-	int (*tx_disable)(void *host, bool disable);
-	int (*hold_modulation)(void *host);
-	void (*power_level_changed)(void *host);
 	void (*gem_added)(void *host, unsigned int flow);
 	void (*gem_unbind)(void *host, unsigned int flow);
 	void (*gem_forget)(void *host, unsigned int flow);
@@ -138,9 +130,6 @@ struct rtl9602c_pon_host_ops {
  * @password_set: set the ONU's registration password
  * @password_is_set: whether one is set
  * @us_ready: whether the GEM port in @flow has its upstream programmed
- * @power_mode: the transmit power level mode the MAC asks for
- * @power_applied: the laser was set to @mode when the MAC had asked @asked,
- *	with @err
  * @second_enable: whether the GPON interrupt comes once every 8000
  *	downstream frames, a second of the OLT's clock, for
  *	rtl9602c_pon_host_ops.second()
@@ -156,8 +145,6 @@ struct rtl9602c_pon_ops {
 	int (*password_set)(void *pon, const char *s);
 	bool (*password_is_set)(void *pon);
 	bool (*us_ready)(void *pon, unsigned int flow);
-	u8 (*power_mode)(void *pon);
-	void (*power_applied)(void *pon, u8 asked, u8 mode, int err);
 	void (*second_enable)(void *pon, bool on);
 };
 
@@ -169,6 +156,9 @@ struct rtl9602c_pon_ops {
  *	views to
  * @host: the cookie the host operations are called with
  * @host_ops: the switch driver's services
+ * @optics: the firmware node of the optics the switch node names in
+ *	realtek,pon-optics, which the MAC drives through the PON class; NULL
+ *	when it names none
  * @irq_ns: the time of the last GPON interrupt, which the switch driver notes
  *	in the interrupt's first half
  * @sem: held for reading while the switch driver calls @pon_ops; the PON
@@ -183,6 +173,7 @@ struct rtl9602c_pon_data {
 	struct dentry *debugfs;
 	void *host;
 	const struct rtl9602c_pon_host_ops *host_ops;
+	struct fwnode_handle *optics;
 	atomic64_t irq_ns;
 	struct rw_semaphore sem;
 	void *pon;

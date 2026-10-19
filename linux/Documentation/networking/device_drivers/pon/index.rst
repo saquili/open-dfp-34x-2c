@@ -12,7 +12,7 @@ PON class described in Documentation/networking/pon.rst.
 
    rtl9602c
    rtl9602c-gpon
-   rtl9602c-optics
+   gn25l95
 
 .. only::  subproject and html
 
