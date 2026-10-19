@@ -23,8 +23,9 @@ of the repository (`docs/policy/provenance.rst`).
 
 One person maintains the project. You get an answer as soon as they can give
 one; a fix goes into the tree and into the next update file, and the
-advisory names the commit that has it. There are no releases yet: the images
-are test builds (`README.rst`, "Status").
+advisory names the commit that has it. Releases are test builds, made by the
+repository's release workflow and listed with their SHA-256 digests
+(`README.rst`, "Releases").
 
 ## Scope
 
@@ -33,8 +34,11 @@ are test builds (`README.rst`, "Status").
   carried here, and the build and its update files.
 * Known and documented, so not a new finding: update files carry a checksum
   but no signature (ADR 0014); the panel's certificate is signed by the stick
-  itself (ADR 0013); the one account keeps its default password until one is
-  set (ADR 0009); the stick has no packet filter (`README.rst`, "Not done
-  yet").
+  itself (ADR 0013); the one account takes the shipped firmware's
+  administrator password at the first start, and while it is the default,
+  `admin`, the panel allows nothing but a change and ssh takes keys only
+  (ADR 0009); no packet filter guards the stick's own servers, which listen
+  only on its addresses on the router's side, since the firewall judges what
+  the stick routes (`README.rst`, "Not done yet").
 * Not in scope: the shipped firmware, the boot loader and the operator's
   equipment.

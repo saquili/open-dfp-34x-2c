@@ -41,6 +41,40 @@ BR2_ENV        = test "$$(uname -s)" = Linux || { \
 	export OPEN_DFP_34X_2C_KERNEL_ARCHIVE="$$(tools/kernel-archive/kernel-archive)" \
 	  GIT_CEILING_DIRECTORIES="$(CURDIR)" BR2_DL_DIR="$(BR2_DL_DIR)" &&
 
+# The toolchain the images are built with. TOOLCHAIN=release, the default, takes
+# the release of the toolchain workflow that br2-external/toolchain/PIN names:
+# br2-external/toolchain/fetch fetches it into BR2_DL_DIR, checks it against the
+# pin and unpacks it into TOOLCHAIN_RELEASE_OUT, and configs/
+# external-toolchain.config is merged over the board's defconfig. A pin that
+# names no release, or TOOLCHAIN=source, has the image's build make its own
+# toolchain from source, as the defconfig says. An output directory is built
+# with one of the two: .toolchain in IMAGE_OUT records which, and a build with
+# the other stops (make clean, or another IMAGE_OUT).
+TOOLCHAIN             ?= release
+TOOLCHAIN_RELEASE_OUT ?= $(CURDIR)/build/toolchain-release
+TOOLCHAIN_ENV = tc= && \
+	if [ "$(TOOLCHAIN)" = release ]; then \
+	  tc=$$(br2-external/toolchain/fetch -q --dl "$(BR2_DL_DIR)" --out "$(TOOLCHAIN_RELEASE_OUT)"); \
+	elif [ "$(TOOLCHAIN)" != source ]; then \
+	  echo 'open-dfp-34x-2c: TOOLCHAIN is release or source' >&2; exit 1; \
+	fi && export OPEN_DFP_34X_2C_TOOLCHAIN="$$tc" &&
+
+# The board's defconfig in IMAGE_OUT, with the toolchain of a release merged over
+# it when TOOLCHAIN_ENV found one.
+IMAGE_CONFIG = make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
+	  odi_dfp_34x_2c3_defconfig && \
+	used=$${tc:-source} && \
+	if [ -f "$(IMAGE_OUT)/.toolchain" ] && [ "$$(cat "$(IMAGE_OUT)/.toolchain")" != "$$used" ]; then \
+	  echo "open-dfp-34x-2c: $(IMAGE_OUT) was built with the toolchain $$(cat "$(IMAGE_OUT)/.toolchain"), not $$used: make clean, or name another IMAGE_OUT" >&2; \
+	  exit 1; \
+	fi && \
+	if [ -n "$$tc" ]; then \
+	  "$$br/support/kconfig/merge_config.sh" -m -O "$(IMAGE_OUT)" "$(IMAGE_OUT)/.config" \
+	    br2-external/configs/external-toolchain.config >/dev/null && \
+	  make -C "$$br" O="$(IMAGE_OUT)" olddefconfig >/dev/null; \
+	fi && \
+	echo "$$used" > "$(IMAGE_OUT)/.toolchain"
+
 # The images that must fit their partition for the build to pass: both, since
 # bank 0 is split for this system and the images were slimmed to fit it. An
 # empty value reports the sizes and fails on neither.
@@ -53,8 +87,7 @@ IMAGE_ENFORCE ?= k0 r0
 LOCAL_PACKAGES = omcid onu-utils pppoed dhcp6d timed pond netifd
 
 image:
-	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
-	  odi_dfp_34x_2c3_defconfig && \
+	$(BR2_ENV) $(TOOLCHAIN_ENV) $(IMAGE_CONFIG) && \
 	if [ "$$(cat "$(IMAGE_OUT)/.kernel-archive" 2>/dev/null)" != "$$OPEN_DFP_34X_2C_KERNEL_ARCHIVE" ]; then \
 	  make -C "$(IMAGE_OUT)" linux-dirclean linux-headers-dirclean && \
 	  echo "$$OPEN_DFP_34X_2C_KERNEL_ARCHIVE" > "$(IMAGE_OUT)/.kernel-archive"; \
@@ -138,32 +171,42 @@ buildroot:
 # and "make -C omcid check" runs its tests (omcid/README.rst).
 omcid:
 	@test -d "$(IMAGE_OUT)/target" || { echo 'open-dfp-34x-2c: run "make image" first' >&2; exit 1; }
-	$(BR2_ENV) rm -rf "$(IMAGE_OUT)/build/omcid-local" && make -C "$(IMAGE_OUT)" omcid
+	$(BR2_ENV) $(TOOLCHAIN_ENV) rm -rf "$(IMAGE_OUT)/build/omcid-local" && make -C "$(IMAGE_OUT)" omcid
 	ls -l "$(IMAGE_OUT)/target/usr/sbin/omcid"
 
 # The cross toolchain of configs/toolchain_defconfig, with static and shared
 # libraries, packed by the build system as a tarball that can be unpacked
-# anywhere: TOOLCHAIN_OUT/images/*.tar.gz (docs/handbook/toolchain.rst).
+# anywhere: TOOLCHAIN_OUT/images/*.tar.gz (docs/handbook/toolchain.rst). Before it
+# is packed, br2-external/toolchain/keep-uclibc puts the pieces of the C
+# library's link into it, for the cut of an image built with it.
 sdk:
 	$(BR2_ENV) make -C "$$br" O="$(TOOLCHAIN_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
-	  toolchain_defconfig && make sdk -C "$(TOOLCHAIN_OUT)" && \
+	  toolchain_defconfig && make -C "$(TOOLCHAIN_OUT)" && \
+	  br2-external/toolchain/keep-uclibc "$(TOOLCHAIN_OUT)" && \
+	  make sdk -C "$(TOOLCHAIN_OUT)" && \
 	  ls -l "$(TOOLCHAIN_OUT)"/images/*.tar.gz
 
 # The licence information a release owes, which the build system collects for
 # the board's configuration into IMAGE_OUT/legal-info: the licence of every
-# package, their licence texts and the sources it may hand on. The licences of
+# package, their licence texts and the sources it may hand on. An image built
+# with the toolchain of a release adds that release's own sources and licences
+# (gcc, binutils, uClibc-ng and the rest), in legal-info/toolchain. The licences of
 # the panel's packages are written by the panel's build (pond/web/licences.ts),
 # so they are taken from a built image: run make first.
 legal-info:
-	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
-	  odi_dfp_34x_2c3_defconfig && make -C "$(IMAGE_OUT)" legal-info
+	$(BR2_ENV) $(TOOLCHAIN_ENV) $(IMAGE_CONFIG) && make -C "$(IMAGE_OUT)" legal-info
 	@panel="$(IMAGE_OUT)/target/usr/share/pond/www/licenses.txt.gz"; \
 	if [ ! -f "$$panel" ]; then \
 	  echo "open-dfp-34x-2c: no $$panel: the panel's licences come from its build; run make first" >&2; \
 	  exit 1; \
 	fi; \
-	gzip -dc "$$panel" > "$(IMAGE_OUT)/legal-info/pond-panel-licenses.txt" && \
-	echo "open-dfp-34x-2c: the licence information is in $(IMAGE_OUT)/legal-info"
+	gzip -dc "$$panel" > "$(IMAGE_OUT)/legal-info/pond-panel-licenses.txt"
+	@if [ "$$(cat "$(IMAGE_OUT)/.toolchain")" != source ]; then \
+	  src=$$(br2-external/toolchain/fetch -q --sources --dl "$(BR2_DL_DIR)") && \
+	  mkdir -p "$(IMAGE_OUT)/legal-info/toolchain" && \
+	  cp "$$src" "$(IMAGE_OUT)/legal-info/toolchain/"; \
+	fi
+	@echo "open-dfp-34x-2c: the licence information is in $(IMAGE_OUT)/legal-info"
 
 # The repository's pages as HTML in DOCS_OUT, rendered by docutils, which fails
 # on any warning (tools/docs/README.rst); "make -C linux htmldocs" renders the
@@ -245,6 +288,8 @@ help:
 	@echo '  make buildroot     fetch, check and patch the pinned Buildroot'
 	@echo '  make omcid         after make: build the OMCI daemon again into the image'
 	@echo '  make sdk           build a relocatable cross toolchain tarball'
+	@echo '  TOOLCHAIN=source   build the image with a toolchain of its own instead of'
+	@echo '                     the release that br2-external/toolchain/PIN names'
 	@echo '  make legal-info    collect the licence information of a built image'
 	@echo '                     in build/image/legal-info (needs Linux)'
 	@echo '  make docs          render the pages to HTML in build/docs (needs docutils)'

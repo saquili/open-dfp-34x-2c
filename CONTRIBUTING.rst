@@ -83,7 +83,7 @@ host, against the user-space headers of this tree's kernel::
     make -C omcid check
     make -C onu-utils check CPPFLAGS=-I/tmp/uapi/include
 
-and likewise for ``pppoed``, ``dhcp6d`` and ``pond``. The tests that need the
+and likewise for ``pppoed``, ``dhcp6d``, ``timed`` and ``pond``. The tests that need the
 stick are in ``tests/device`` (``tests/device/README.rst``).
 
 Writing documentation

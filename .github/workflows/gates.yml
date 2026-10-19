@@ -189,6 +189,12 @@ jobs:
         run: |
           tools/flash-layout/tests/run -v
           tools/flash-layout/flash-layout
+      - name: Self-tests of the run files check, and the page of the run files
+        # Every file under /run that a script of the image names is on
+        # docs/handbook/run-files.rst, and every file there is named.
+        run: |
+          tools/run-files/tests/run -v
+          tools/run-files/run-files
       - name: The pinned release and the carried patches
         # The tests above use a tarball of their own. This one fetches the
         # pinned release from its URL, refuses it unless it is the pinned file,

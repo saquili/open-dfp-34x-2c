@@ -8,11 +8,24 @@
 # list of the findings that are known), and a second build in another directory
 # that has to be the same as the first. Two builds take the better part of an
 # hour on a runner, so the workflow runs only when it is started by hand.
+#
+# Started with "release" on (the default), it also makes a release of the
+# first build, tagged toolchain-<the time of the commit in UTC>: the tarball,
+# with the pieces of the C library's link in its sysroot, the sources and
+# licences of everything in it (make legal-info), and their SHA-256 digests.
+# The release's notes hold the lines of br2-external/toolchain/PIN that name
+# it; a commit that puts them there has the images built with it. The release
+# is not marked as the repository's latest: that is the firmware's.
 
 name: toolchain
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Make a release of the toolchain
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -31,10 +44,26 @@ env:
 jobs:
   toolchain:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     # The pinned host build environment: Debian 13, by digest.
-    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    container:
+      image: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+      # The runner's own tools that a build here does not use, mounted so that
+      # the first step can remove them: a build needs more of the runner's
+      # disk than it has free otherwise.
+      volumes:
+        - /usr/share/dotnet:/runner-unused/dotnet
+        - /usr/local/lib/android:/runner-unused/android
+        - /opt/ghc:/runner-unused/ghc
+        - /opt/hostedtoolcache:/runner-unused/toolcache
     timeout-minutes: 180
     steps:
+      - name: Make room on the runner
+        run: |
+          df -h / | tail -n 1
+          rm -rf /runner-unused/*/* || true
+          df -h / | tail -n 1
       - name: Install the tools
         # The packages Buildroot needs of its host, the cross binutils for the
         # objdump of the gate, the cross compiler for the negative control and
@@ -60,13 +89,19 @@ jobs:
             echo "GIT_CEILING_DIRECTORIES=$PWD"
           } >> "$GITHUB_ENV"
       - name: Build the toolchain
+        # make sdk, which also puts the pieces of the C library's link into
+        # the sysroot (br2-external/toolchain/keep-uclibc).
         run: |
           start=$(date +%s)
-          make -C "$(buildroot/fetch -q)" O="$PWD/build/toolchain-a" \
-            BR2_EXTERNAL="$PWD/br2-external" toolchain_defconfig
-          make sdk -C build/toolchain-a
+          make sdk TOOLCHAIN_OUT="$PWD/build/toolchain-a"
           echo "the first build took $(( $(date +%s) - start )) seconds"
           ls -l build/toolchain-a/images
+      - name: The version
+        id: version
+        run: |
+          version=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d-%H%M)
+          echo "version $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Unpack the toolchain tarball and relocate it
         run: |
           mkdir -p build/unpacked-a
@@ -116,16 +151,34 @@ jobs:
           br2-external/tests/toolchain/compare-findings /tmp/fewer-findings.txt "$TOOLCHAIN_A" \
             /tmp/gate.out > /dev/null || control=$?
           [ "$control" = 1 ] || { echo "the comparison did not see a difference (status $control)" >&2; exit 1; }
+      - name: The files of the release
+        if: inputs.release
+        run: |
+          version=${{ steps.version.outputs.version }}
+          make -C build/toolchain-a legal-info
+          mkdir dist
+          cp build/toolchain-a/images/open-dfp-34x-2c-toolchain.tar.gz dist/
+          tar -C build/toolchain-a --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$(git log -1 --format=%ct)" \
+            -cf "dist/open-dfp-34x-2c-toolchain-$version-sources.tar" legal-info
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+          ls -l dist
+      - name: Keep the files
+        if: inputs.release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: toolchain
+          path: dist/
+          if-no-files-found: error
       - name: Make room for the second build
         if: always()
-        run: rm -rf build/toolchain-a/build build/unpacked-a
+        run: rm -rf build/toolchain-a/build build/toolchain-a/legal-info build/unpacked-a dist
       - name: Build the toolchain again, in another directory
         if: always()
         run: |
           start=$(date +%s)
-          make -C "$(buildroot/fetch -q)" O="$PWD/build/toolchain-b" \
-            BR2_EXTERNAL="$PWD/br2-external" toolchain_defconfig
-          make sdk -C build/toolchain-b
+          make sdk TOOLCHAIN_OUT="$PWD/build/toolchain-b"
           echo "the second build took $(( $(date +%s) - start )) seconds"
       - name: The two builds are the same
         # The directories are named toolchain-a and toolchain-b, which have the
@@ -153,3 +206,45 @@ jobs:
         run: |
           ls -l build/toolchain-a/images build/toolchain-b/images
           sha256sum build/toolchain-a/images/*.tar.gz build/toolchain-b/images/*.tar.gz
+
+  release:
+    needs: toolchain
+    if: inputs.release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.toolchain.outputs.version }}
+    steps:
+      - name: The files, as the build kept them
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name toolchain --dir dist
+          cd dist && sha256sum -c SHA256SUMS
+      - name: The release
+        # Refused when the tag exists already: a version is released once.
+        run: |
+          cd dist
+          tarball=open-dfp-34x-2c-toolchain.tar.gz
+          sources="open-dfp-34x-2c-toolchain-$VERSION-sources.tar"
+          {
+            echo "The cross toolchain of commit ${GITHUB_SHA}, built and compared twice by"
+            echo "this repository's toolchain workflow (run ${GITHUB_RUN_ID})."
+            echo
+            echo "The lines of \`br2-external/toolchain/PIN\` that build the images with it:"
+            echo
+            echo '```'
+            echo "TAG=toolchain-$VERSION"
+            echo "TARBALL=$tarball"
+            echo "TARBALL_SIZE=$(stat -c %s "$tarball")"
+            echo "TARBALL_SHA256=$(sha256sum "$tarball" | cut -d' ' -f1)"
+            echo "SOURCES=$sources"
+            echo "SOURCES_SIZE=$(stat -c %s "$sources")"
+            echo "SOURCES_SHA256=$(sha256sum "$sources" | cut -d' ' -f1)"
+            echo '```'
+          } > ../notes.md
+          cat ../notes.md
+          gh release create "toolchain-$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Toolchain $VERSION" --latest=false --notes-file ../notes.md -- *

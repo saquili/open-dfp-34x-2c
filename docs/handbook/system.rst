@@ -370,7 +370,9 @@ Reaching the stick
 * The OLT, over OMCI, which provisions the data path and nothing else.
 
 There is one account to log in with, root, with one password for the console,
-ssh and the panel; until one is set it is ``admin`` (ADR 0009). The panel runs
+ssh and the panel. The first start takes the shipped firmware's administrator
+password for it; while it is the default, ``admin``, the panel allows nothing
+but a change and ssh takes keys only (ADR 0009). The panel runs
 as an account of its own, which no one logs in with (ADR 0011), and answers
 with a certificate it signs itself (ADR 0013). No packet filter guards the
 stick's own servers: the firewall (ADR 0019) judges what the stick forwards,

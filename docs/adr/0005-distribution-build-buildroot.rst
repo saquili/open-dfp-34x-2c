@@ -75,3 +75,5 @@ Consequences
   build, so a compiler change cannot regress the target unnoticed.
 * Should the MIPS I patch become unsustainable, option B is the fallback;
   the other components do not depend on this choice.
+* The images are built with a pinned release of the toolchain that this
+  defconfig tree builds (ADR 0020).

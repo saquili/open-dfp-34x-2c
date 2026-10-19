@@ -99,7 +99,9 @@ Status
 **It works on a lab OLT, and it needs more testing.** The system runs on a
 DFP-34X-2C3 against a laboratory OLT, where 24 runs of the device tests are
 recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
-2026-10-12, is of the image as it is now.
+2026-10-12, is of an earlier image: the firewall, the router, the new laser
+driver, the address on VLAN 4094 and the MAC address of the label came after
+it, and have been tried by hand.
 
 | 🟢 **Tested**: passed the recorded device tests on the lab OLT.
 | 🟡 **Bench**: works on the developer's stick; no recorded test run yet.
@@ -176,7 +178,7 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
        builds of the shipped firmware, started from the other bank, found
        their own files and left this system's alone (by hand)
    * - Install through the shipped firmware's web page
-     - 🟢 Tested
+     - 🟡 Bench
      - On 2026-10-19, from V1.2.2-221209 and from V1.0-220923 on a copy of a
        stick as sold: the identity, the MAC address and the administrator's
        password taken, and the way back to the shipped firmware with its
@@ -188,9 +190,9 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
 
 ..
 
-    ℹ️ **The latest run is of the current image, without the data path.**
-    On 2026-10-12 32 of 48 cases passed on the image as it is now, run from
-    the flash, and none failed. The 16 it skipped send frames from the ports
+    ℹ️ **The latest recorded run is of an earlier image, without the data
+    path.** On 2026-10-12 32 of 48 cases passed on the image of that day, run
+    from the flash, and none failed. The 16 it skipped send frames from the ports
     of a bench, one behind the OLT and one at the far end of the stick's host
     link, and the lab as it is has no such ports. They were last recorded on
     2026-10-07, on an image of before procd, netifd, the panel over HTTPS and
@@ -325,8 +327,12 @@ On RouterOS::
     /interface vlan add interface=sfp1 vlan-id=4094 name=onu-mgmt
     /ip address add address=192.168.1.2/24 interface=onu-mgmt
 
-The panel can move the stick to another VLAN or address; it keeps the old
-pair until the new one is confirmed from a panel opened at it.
+If the router's own network uses the same addresses, the two overlap:
+give the shipped firmware another address before the install, or give the
+router the VLAN's address only until the panel has moved the stick to a
+network of its own. The panel can move the stick to another VLAN or address;
+it keeps the old pair until the new one is confirmed from a panel opened at
+it.
 
 Releases
 --------
@@ -427,6 +433,8 @@ Repository map
      - The PPPoE client, one for each session
    * - `dhcp6d/ <dhcp6d/README.rst>`__
      - Hands a PPPoE session's IPv6 prefix on to the router behind the stick
+   * - `timed/ <timed/README.rst>`__
+     - The stick's clock: NTP or PTP from the host, or the OLT's time of day
    * - `netifd/ <netifd/README.rst>`__
      - OpenWrt's network interface daemon, carried as a fork
    * - `br2-external/ <br2-external/README.rst>`__

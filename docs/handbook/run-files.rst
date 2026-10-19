@@ -206,6 +206,16 @@ Private to one program or to onu-utils
      - The GEM interfaces that carry a rule handing their frames to a
        session's GEM interface, one per line, to take them off again, and the
        key of those rules, which says whether they are as they should be.
+   * - ``/run/onu-fw.conf``, ``/run/onu-fw.conf.new``
+     - The description of ``onu-fw``'s table of netfilter for the local
+       networks (NAT, the forwards, the DMZ and the firewall's defaults), as
+       ``onu-apply`` put it in place, and the next one while it is written;
+       gone with the table.
+   * - ``/run/onu-fw-acl.conf``, ``/run/onu-fw-acl.conf.new``, ``/run/onu-fw.acl``
+     - The firewall's rules as ``onu-fw acl`` puts them into the switch's ACL
+       (ADR 0019), the next set while it is written, and what became of each
+       rule, ``ID in|part|out ENTRIES [WHY]`` a line; gone with the last rule
+       in force.
    * - ``/run/onu-omcid``, ``/run/omcid.mode``
      - What ``omcid`` was last told (the held VLANs) and the shape it starts
        in, so that one started again after a crash comes up as it was.

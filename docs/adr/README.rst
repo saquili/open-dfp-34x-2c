@@ -118,3 +118,6 @@ The index
    * - 0019
      - Put firewall rules in the switch's ACL, defaults in netfilter
      - Accepted
+   * - 0020
+     - Build the images with a pinned toolchain release
+     - Accepted
