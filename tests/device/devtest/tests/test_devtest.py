@@ -146,6 +146,19 @@ class Redaction(unittest.TestCase):
         self.assertEqual(redact("ssh -J op@8.8.8.8 root@192.0.2.2 true; then 8.8.8.8 alone", settings),
                          "ssh -J <bench> root@<stick> true; then <address> alone")
 
+    def test_a_login_that_ssh_added_to_the_bench_goes_with_it(self):
+        # The settings name the bench by its address; ssh's own configuration
+        # puts a login in front of it.
+        settings = Settings(bench="8.8.8.8", stick="192.0.2.2")
+        self.assertEqual(redact("ssh -J op.name@8.8.8.8 root@192.0.2.2 true", settings),
+                         "ssh -J <bench> root@<stick> true")
+        self.assertEqual(redact("ssh -o X=1 -J op@bench.example.org root@192.0.2.2", settings),
+                         "ssh -o X=1 -J <bench> root@<stick>")
+
+    def test_a_login_at_an_address_that_was_taken_out_goes_too(self):
+        self.assertEqual(redact("scp op.name@8.8.8.8:x ."), "scp <login>@<address>:x .")
+        self.assertEqual(redact("root@192.0.2.2 and op@fe80::1"), "root@192.0.2.2 and <login>@<address6>")
+
     def test_ipv6_addresses_but_the_documentation_ones_are_taken_out(self):
         # A link-local address holds its interface's MAC address.
         text = ("sfp inet6 fe80::200:5eff:fe00:5301/64 scope link, global 2001:4860:4860::8888, "

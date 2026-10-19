@@ -95,6 +95,11 @@ def address(match: re.Match) -> str:
 # documentation prefix, multicast, the loopback and the unspecified address
 # name no unit and stay.
 ADDRESS6 = re.compile(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:.])")
+# ssh's jump host, whatever the settings named it by: a login that ssh's own
+# configuration added to the bench's address is the bench too.
+JUMP = re.compile(r"(-J\s+)(?!<bench>(?:\s|$))\S+")
+# A login in front of an address that was taken out names the person at it.
+LOGIN = re.compile(r"(?<![\w.-])[\w.-]+@(?=<address6?>)")
 KEPT6 = [ipaddress.ip_network(n) for n in ("2001:db8::/32", "ff00::/8")]
 
 
@@ -120,6 +125,8 @@ def redact(text: str, settings: Settings | None = None) -> str:
     text = SERIAL.sub("<serial>", text)
     text = ADDRESS.sub(address, text)
     text = ADDRESS6.sub(address6, text)
+    text = JUMP.sub(r"\1<bench>", text)
+    text = LOGIN.sub("<login>@", text)
     return text
 
 
