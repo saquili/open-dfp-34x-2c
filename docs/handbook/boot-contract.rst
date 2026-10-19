@@ -67,9 +67,10 @@ filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
        identity among them. This system mounts it on ``/config`` and keeps
        what the board keeps across updates, its settings, in a file of its
        own there, at most 64 KiB, and never writes the shipped firmware's
-       files (ADR 0014, step 9; the file's keys are listed in
-       ``onu-utils/README.rst``). A store of before step 9, two slots that
-       took the whole partition, goes into that file at the first boot.
+       files (ADR 0016; the file's keys are listed in
+       ``onu-utils/README.rst``). A two-slot store of builds before
+       2026-10-11, which took the whole partition, goes into that file at
+       the first boot.
      - Linux: ``onu-config``.
    * - ``k0``
      - ``0x080000``
@@ -538,7 +539,7 @@ The kernel leaves the loader's count running. The watchdog driver finds it
 enabled at its probe, restarts it with the driver's own timeout and feeds it
 until user space opens ``/dev/watchdog``, for 60 seconds at most; procd, the
 first process, opens it as it starts and feeds it for as long as it runs (ADR
-0013). Once procd feeds the watchdog, what ends a failed trial is
+0010). Once procd feeds the watchdog, what ends a failed trial is
 ``onu-trial``, which the boot script starts as its first step and which
 restarts the stick into the committed bank when the system does not come up
 (``updating.rst``), a boot script that hangs after it included. So a trial

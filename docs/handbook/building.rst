@@ -12,7 +12,7 @@ toolchain is described in ``toolchain.rst``, the flash layout in
 ``flashing.rst``; this page uses all three. The build system and its external
 tree are described in ``buildroot/README.rst`` and ``br2-external/README.rst``,
 and the decision that the programs share one C library, cut to what they use,
-in ``docs/adr/0011-target-executables-share-one-cut-c-library.rst``.
+in ``docs/adr/0008-target-executables-share-one-cut-c-library.rst``.
 
 What the build makes
 ====================
@@ -81,13 +81,13 @@ Sizes and budgets
      - 1698834
      - 1900544
      - 201710 bytes (10.6% of the partition), on 2026-10-11, once the
-       kernel took JFFS2 for the partition ``config`` (ADR 0014).
+       kernel took JFFS2 for the partition ``config`` (ADR 0016).
    * - ``r0``
      - 1287869
      - 2031616
      - 743747 bytes (36.6% of the partition), on 2026-10-11, once iproute2
-       left the flash's image (ADR 0014); the panel's TLS, which came after,
-       adds about 22 KiB (ADR 0016).
+       left the flash's image (ADR 0017); the panel's TLS, which came after,
+       adds about 22 KiB (ADR 0013).
 
 Both images fit, and the build fails when one stops fitting (``IMAGE_ENFORCE``,
 below). The budget of an image is the size of its partition
@@ -96,7 +96,7 @@ this system and not as the shipped firmware splits it, which left the kernel
 too little room, and because the kernel and the root filesystem
 leave out what the stick does not use ("The kernel's size" below, and "The root
 filesystem"). The programs share one C library, cut to what they use; with
-every program linked statically, as before ADR 0011, the root filesystem was
+every program linked statically, as before ADR 0008, the root filesystem was
 2004150 bytes on 2026-10-08.
 
 The numbers are printed by ``tools/image-budget/image-budget``, which ``make``
@@ -274,9 +274,9 @@ The network layer of OpenWrt
     each interface that comes up or goes down.
 procd
     OpenWrt's init and service supervisor, process 1, with the patches in
-    ``br2-external/package/procd`` (``docs/adr/0013-procd-is-the-first-process.rst``).
+    ``br2-external/package/procd`` (ADR 0010).
 iproute2
-    Built for the RAM image alone (ADR 0014): there ``tc``, ``devlink`` and
+    Built for the RAM image alone (ADR 0017): there ``tc``, ``devlink`` and
     ``bridge``, and iproute2's ``ip`` as ``ip-full``, so that ``ip`` is
     BusyBox's from RAM as it is from the flash. No script of the stick runs
     ``ip``: netifd sets the addresses and routes, and ``onu-nl`` the links,
@@ -367,10 +367,10 @@ The boot script
        ed25519 host key that ``onu-config ssh`` keeps in the store),
        ``onu-act``, and ``pond``,
        the status daemon and its panel, over HTTPS on port 443 and on port 80
-       to send a browser there (ADR 0016), as an account of its own, ``pond``,
+       to send a browser there (ADR 0013), as an account of its own, ``pond``,
        with which no one logs in; ``onu-act`` does, as root, what pond asks of
        the stick from a fixed list, and ubusd's access list lets pond ask
-       nothing else (ADR 0014). Then ``timed``. The stick has no packet filter,
+       nothing else (ADR 0011). Then ``timed``. The stick has no packet filter,
        so its servers keep off the PON side by where they listen;
     #. gives the PON driver the serial number and the PLOAM password through
        its devlink parameters (``onu-apply identity``, with ``onu-nl``) and
@@ -390,7 +390,7 @@ The boot script
     procd then starts the console's login prompt (``getty`` and ``login``).
 
     The stick has one account, root, with one password for the console, ssh
-    and the panel (``docs/adr/0012-one-account-root.rst``). Until one is set,
+    and the panel (``docs/adr/0009-one-account-root.rst``). Until one is set,
     the password is ``admin``; the panel asks for a new one at the first
     sign-in, and ``passwd`` sets one on the console or over ssh. Either way
     ``onu-config`` keeps its hash in the configuration store and writes root's
@@ -440,7 +440,7 @@ Known limitations
   "The token of scripts").
 * The panel answers over HTTPS, on port 443, with a key the stick makes at its
   first start and keeps in its store, and a certificate it signs itself (ADR
-  0016); port 80 sends a browser there. The browser warns at the first visit:
+  0013); port 80 sends a browser there. The browser warns at the first visit:
   the boot prints the certificate's fingerprint on the console, and the panel
   shows it under System, for a person to compare with the browser's.
 * If the configuration store cannot be read, or the partition ``config`` is
@@ -648,7 +648,7 @@ disk and kexec, and smaller parts that the board does not use, which the
 configuration's history names; it keeps IPv6, the symbol table, debugfs and
 dynamic debug, through which a problem on the operator's line is read. The
 kernel image was 1652846 bytes then, and 1698834 once it took JFFS2 for the
-partition ``config`` (ADR 0014); bank 0 as this system splits it gives the
+partition ``config`` (ADR 0016); bank 0 as this system splits it gives the
 kernel room for it (``boot-contract.rst``). Netfilter is back since the stick
 routes for the devices behind it: its connection tracking and NAT feed the
 switch's NAPT engine through the flowtable offload, while the rules of the

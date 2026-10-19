@@ -5,116 +5,116 @@
 Architecture decision records
 =============================
 
-Each record captures one decision: its context, the decision, and its
-consequences. A record is **Accepted** once the decision holds, **Proposed**
-while it still needs confirmation, and **Superseded** when a later record
-replaces it.
+Each record captures one decision: the problem it answers, the options that
+were weighed, what was decided and what follows from it. The records explain
+why the system is built as it is; how it works is in the handbook
+(``docs/handbook/``), and how a program is used is in its README.
 
-How an accepted record changes
-==============================
+The form of a record
+====================
 
-A record is the reasoning of the day it was written. Once it is Accepted its
-text is not rewritten, so that a reader of the history sees what was decided
-and why. Three things may still be done to it, and nothing else:
+Every record has the same parts, in this order:
 
-* **Its status line may change.** "Accepted" becomes "Accepted, amended by
-  0013" when a later record changes it (ADR 0012), or "Accepted, amended"
-  when its own amendments do (ADR 0015), and "Superseded by 0011" when a
-  record replaces it (ADR 0010).
-* **An amendment may be added at its end**, in a section called
-  "Amendments", one entry for each change, the oldest first. An entry begins
-  with its date and who decided, and says which part of the record it changes
-  and why. It carries the decision out, narrows it or gives a part of it up,
-  in a few sentences; it does not restate the record. A fact that the record
-  got wrong, a number, a name or a count, is corrected in an entry in the same
-  way, not in the text above it.
-* **A new decision is a new record.** A change that stands on its own, a
-  choice of another mechanism or one with a context and consequences of its
-  own, takes the next number and a line ``:Amends:`` that names the record it
-  changes, as ADR 0009 does for ADR 0006. The record it amends then says so
-  in its status line.
+The header
+    ``:Status:``, ``:Date:``, the day of the latest decision the record
+    holds, and ``:Deciders:``.
+Summary
+    The decision in a few plain sentences, for a reader who reads nothing
+    else.
+Context
+    The problem and the facts the decision rests on.
+Options considered
+    The alternatives that were weighed, and why each was or was not taken.
+    A record whose decision had no real alternative leaves this part out.
+Decision
+    What was decided, stated so that it can be checked.
+Consequences
+    What follows, the costs as well as the gains.
 
-What does not belong in a record is the result of a trial: a trial belongs
-to the handbook page of the thing it tried, or, for a run of the device tests,
-to ``docs/testing``. A record may say what a decision cost when it was taken,
-a size or a time with its date, since the decision rests on it.
+A record states the decision as it stands, and names programs and files by
+their current names. A status is **Proposed** while a decision still needs
+confirmation, **Accepted** once it holds, and **Superseded** when a later
+record replaces it.
+
+How a record changes
+====================
+
+* **A decision that changes a part of a record** is written into the record,
+  which takes the new date. The history of the file keeps the earlier text.
+* **A new decision is a new record.** A change that stands on its own, such
+  as the choice of another mechanism, takes the next number; the record it
+  replaces becomes **Superseded** and names its successor.
+* A number is never reused.
+
+The results of trials do not belong in a record: they belong in the handbook
+page of the thing that was tried, or, for a run of the device tests, in
+``docs/testing``. A record may state what a decision cost, such as a size
+with its date, because the decision rests on it.
 
 The index
 =========
 
 .. list-table::
    :header-rows: 1
-   :widths: 12 58 20
+   :widths: 10 72 18
 
    * - ADR
      - Title
      - Status
    * - 0001
-     - Repository name: ``rtl9601d-linux``
-     - Superseded by 0008
+     - Name the repository ``open-dfp-34x-2c``
+     - Accepted
    * - 0002
-     - Licence: GPL-2.0-only for everything we author
+     - Put our own work under GPL-2.0-only
      - Accepted
    * - 0003
-     - Mainline structure, device-maker scope
+     - Follow mainline structure, with a device maker's scope
      - Accepted
    * - 0004
-     - One repository of upstream-shaped components
+     - Keep one repository of upstream-shaped components
      - Accepted
    * - 0005
-     - Distribution build: a Buildroot external tree
+     - Build the distribution as a Buildroot external tree
      - Accepted
    * - 0006
-     - Register and identifier naming
-     - Accepted, amended by 0009
+     - Name registers and identifiers by function
+     - Accepted
    * - 0007
-     - Fresh git history, separate from the laboratory repository
+     - Start from a fresh git history
      - Accepted
    * - 0008
-     - Repository name: ``open-dfp-34x-2c``
+     - Share one C library, cut to what the programs use
      - Accepted
    * - 0009
-     - Register macros take the driver's prefix
+     - Use one account, root, for the console, ssh and the panel
      - Accepted
    * - 0010
-     - Target executables are linked statically
-     - Superseded by 0011
+     - Run procd as the first process and the supervisor
+     - Accepted
    * - 0011
-     - Target executables share one C library, cut to what they use
+     - Drive the stick through one control plane
      - Accepted
    * - 0012
-     - One account, root, for the console, ssh and the panel
-     - Accepted, amended by 0013 and 0014
+     - Name the stick's own programs after what they do
+     - Accepted
    * - 0013
-     - procd is the first process and watches the stick's programs
-     - Accepted, amended by 0014
+     - Serve the panel over HTTPS with the stick's own key
+     - Accepted
    * - 0014
-     - One control plane turns the settings into what procd and netifd keep
-     - Accepted, amended by 0019 and 0020
+     - Carry no signature in update files
+     - Accepted
    * - 0015
-     - The names of the stick's own programs say what they do
-     - Accepted, amended
+     - Hold the kernel series to mainline's rules without submitting it
+     - Accepted
    * - 0016
-     - The panel answers over HTTPS with its own key
-     - Accepted, amended
+     - Keep the settings as a file in the config partition's file system
+     - Accepted
    * - 0017
-     - Update files carry no signature
+     - Leave iproute2 out of the flash image
      - Accepted
    * - 0018
-     - The kernel series aims at mainline
-     - Accepted, amended, and amended by 0021
+     - Write our own PPPoE, DHCPv6 and time programs
+     - Accepted
    * - 0019
-     - The settings are a file in the config partition's file system
-     - Accepted
-   * - 0020
-     - The flash's image has no iproute2 and the scripts run no ip
-     - Accepted
-   * - 0021
-     - The kernel series keeps mainline's rules, without a submission
-     - Accepted
-   * - 0022
-     - Programs of our own for PPPoE, DHCPv6 and the time
-     - Accepted
-   * - 0023
-     - The firewall's rules are the switch's ACL; its defaults netfilter's
+     - Put firewall rules in the switch's ACL, defaults in netfilter
      - Accepted

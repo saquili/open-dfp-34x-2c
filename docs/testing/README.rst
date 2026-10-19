@@ -23,6 +23,10 @@ serial numbers, the status daemon's token, the bench's own addresses, and the
 names of the bench host and of the stick. ``tests/device/README.rst`` says how
 to make one.
 
+A record names the commit its image was built from. Records made before
+2026-10-20 name commits that are not in the published history, which was
+squashed before its first publication (ADR 0007); their dates place them.
+
 In the upstream burst (``data.upstream``) the sender offers about 2.4 Gb/s for
 some two seconds, above what the PON carries. The percentage of its line is
 the share of the frames that fit, and the Mb/s is the rate the PON carried,

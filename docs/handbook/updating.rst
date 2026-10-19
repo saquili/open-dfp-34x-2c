@@ -254,8 +254,8 @@ boot").
 This way in has tests on the host, which run ``fwu.sh`` against stand-ins of
 the stick's partitions and tools (``br2-external/tests/image/test_mkweb.py``),
 and was measured on a stick on 2026-10-19 (M), with the shipped firmware
-V1.2.2-221209 running from bank 1 and the package of b40aae0fde97 (3338240
-bytes):
+V1.2.2-221209 running from bank 1 and a package of this system built that
+day (3338240 bytes):
 
 * The page took the package and ran ``fwu.sh``, which logged ``into bank 0``,
   erased and wrote both partitions, and ``bank 0 is tried at the next
@@ -279,9 +279,9 @@ bytes):
 The same day both were measured on a stick whose whole flash, but for the
 boot loader, held a copy of a stick as it was sold: the shipped firmware
 V1.0-220923 in bank 0, V1.0-220304 in bank 1, and the shipped firmware's own
-files in ``config``, with no file of this system. The package was the one of
-0182c973dbf1, built without a bench's files but for the console's login
-(3338240 bytes):
+files in ``config``, with no file of this system. The package was one of that
+day, built without a bench's files but for the console's login (3338240
+bytes):
 
 * The page of V1.0-220923 took the package, and ``fwu.sh`` logged ``into bank
   1``, the bank the shipped firmware did not run. This system came up from
@@ -301,7 +301,7 @@ files in ``config``, with no file of this system. The package was the one of
   minutes with the page reachable. With the host's port set to 1000BASE-X
   without autonegotiation it kept the link, and the page answered throughout.
 
-It was measured again on the same copy with the package of 62e03037cfd7,
+It was measured again on the same copy with a later package of that day,
 whose first start also takes root's password, the host link's address and
 its MAC address from the shipped firmware's files, the host's port at
 1000BASE-X:
@@ -343,16 +343,17 @@ Keep a copy of the whole flash before the first update (``backup.rst``). The
 copy holds the unit's registration identity and this system's secrets: keep it
 private. ``backup.rst``, "Writing it back", says how to write it back.
 
-A store of before step 9
-========================
+A store from before 2026-10-11
+==============================
 
-Before step 9 of ADR 0014 the store took the whole partition ``config``, in two
-slots of its own, where the shipped firmware's file system had been; a stick
-that ran such a system keeps its settings, and the registration identity it
-took from the shipped firmware, there. The first start of a later system takes
-that store into the file ``/config/open-dfp-34x-2c.conf`` before it mounts the
-partition (``onu-config.sh``, ``mount_config()``): it reads the lines of the
-current slot into ``/run/onu-store.before``, erases the partition, mounts it
+Builds from before 2026-10-11 kept the store in the whole partition
+``config``, in two slots of its own, where the shipped firmware's file system
+had been; a stick that ran such a system keeps its settings, and the
+registration identity it took from the shipped firmware, there. The first
+start of a later system takes that store into the file
+``/config/open-dfp-34x-2c.conf`` before it mounts the partition
+(``onu-config.sh``, ``mount_config()``): it reads the lines of the current slot
+into ``/run/onu-store.before``, erases the partition, mounts it
 as an empty file system and writes the lines into the file. Between the erase
 and the end of that write the lines are in RAM only, and a power loss there
 loses the settings and the identity with them. The erase of the 240 KiB takes
@@ -371,15 +372,15 @@ So the first start after such an update is attended:
    anything restarts it, since ``/run`` does not outlive a restart. Its lines
    go back with ``onu-config import``.
 
-A stick that never ran a system of before step 9, one that took this system
-through the shipped firmware's web page or through the bench since, has no such
-store, and its first start writes nothing of the kind.
+A stick that never ran a build from before 2026-10-11, one that took this
+system through the shipped firmware's web page or through the bench since, has
+no such store, and its first start writes nothing of the kind.
 
 The shipped firmware's packages beside this system
 ==================================================
 
 The packages of the shipped firmware were tried against the partition
-``config`` that this system shares with it (ADR 0019; M: a stick of the
+``config`` that this system shares with it (ADR 0016; M: a stick of the
 bench, 2026-10-11): the eight builds that the repository Anime4000/RTL960x
 keeps for this stick, the one the stick shipped with among them.
 

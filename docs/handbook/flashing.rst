@@ -414,7 +414,8 @@ A RAM boot writes no bank. A kernel that fails costs one reset. Once a root
 filesystem of this system runs, from the RAM image or from the flash, its
 boot script mounts the partition ``config``, read-only, and, at its first
 start, writes this system's own file there, with the panel's key and the ssh
-host key, and takes a store of before step 9 into it (``boot-contract.rst``);
+host key, and takes a two-slot store of older builds into it
+(``boot-contract.rst``);
 it never writes the shipped firmware's files there.
 
 1. Build the kernel from the top of the repository::

@@ -7,7 +7,7 @@ The files of /run
 
 ``/run`` is the stick's memory-backed directory: what the programs of the
 stick tell each other in files, and what they keep across the start again of
-one of them (ADR 0014). It is empty at power-up and gone at the next one. This
+one of them (ADR 0011). It is empty at power-up and gone at the next one. This
 page lists every path of it that the programs of this tree write or read, who
 does which, and how far a reader may count on it.
 ``tools/run-files`` fails ``make check`` when a program of the tree names a
@@ -221,7 +221,8 @@ Private to one program or to onu-utils
      - The lock of the one ``onu-apply`` that changes the stick, a symbolic
        link to its holder's PID, and the note that a change came while it ran.
    * - ``/run/onu-store.before``
-     - The lines of a store of before step 9, while they are in RAM only
+     - The lines of a two-slot store of older builds, while they are in RAM
+       only
        (``updating.rst``).
    * - ``/run/onu-tls-key``, ``/run/onu-ssh-key``, ``/run/onu-pond-token``
      - The keys and the token as ``onu-config load`` took them out of the

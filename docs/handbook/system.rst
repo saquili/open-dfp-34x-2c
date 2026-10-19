@@ -28,11 +28,11 @@ The parts
    * - procd and ubusd
      - OpenWrt's first process and message bus. procd feeds the watchdog, runs
        the boot script, and starts each of the stick's programs again when it
-       ends (ADR 0013).
+       ends (ADR 0010).
    * - netifd
      - OpenWrt's network interface daemon, forked in ``netifd/``: the host
        side's addresses, the management VLAN, the PPPoE sessions and the links
-       that hand their addresses on to the host, with their routes (ADR 0014).
+       that hand their addresses on to the host, with their routes (ADR 0011).
    * - omcid
      - The OMCI daemon (ITU-T G.988): it answers the OLT, and builds the bridge,
        the VLAN rules and the GEM ports of what the OLT provisions
@@ -58,7 +58,7 @@ The parts
    * - BusyBox, dropbear
      - The shell and the tools, the log, the DHCP server; the ssh server.
 
-Every program loads one C library, cut to what the programs use (ADR 0011).
+Every program loads one C library, cut to what the programs use (ADR 0008).
 The root filesystem is a read-only SquashFS image (``building.rst``).
 
 The start
@@ -107,7 +107,7 @@ With local networks
     out unless ``FW_OUT`` blocks them, and they do not reach each other
     unless ``FW_BETWEEN`` allows it. A rule that allows opens netfilter's
     default too, for IPv4; a rule of IPv6 has no effect until the stick
-    routes IPv6 to the networks' devices (ADR 0023). The switch sees a
+    routes IPv6 to the networks' devices (ADR 0019). The switch sees a
     frame, not a connection, and no route: a rule to the internet is one to
     no local address, and a rule from the internet reaches a device only by
     the ports of its forwards and its DMZ, at the connection's own address.
@@ -189,6 +189,32 @@ Reading them:
 * **The RAM image is the kernel of the flash image**, with tools for diagnosis
   in its root file system. These runs did not use the flash image.
 
+The firewall, as measured
+=========================
+
+The firewall's rules (ADR 0019) were tried on the stick on 2026-10-19 (M: the
+bench's stick on a RAM image of that day; an IPoE connection; one local
+network with a forward of ports 8000-8003 to 9000-9003 and a DMZ; three
+rules: allow the network to 203.0.113.10 TCP 5201, off at first; block the
+networks to the internet TCP 5201; block 203.0.113.10 to the device's ports
+9000-9003):
+
+* A transfer to port 5201 did not connect, its three SYNs dropped, while
+  ping went through.
+* A connection to the forwarded port 8000 timed out, while one to 8004
+  reached the device through the DMZ.
+* With the first rule on, transfers ran at 938 Mb/s one way and 940 Mb/s the
+  other, and one through the forward of port 5201 at 937 Mb/s. The CPU's
+  interfaces moved by some fifteen frames, while the allow rule's two
+  entries matched about 463,000 and 467,000.
+* A rule on the IPv4 inside a PPPoE session counted 20 of 20 echo replies,
+  on the PON's port.
+
+Not measured on the stick yet: that every entry's set of fields finds a
+template among the seven that the ACL shares with the other writers' rules
+when many rules of different fields are on. A rule that finds none is
+reported in ``/run/onu-fw.acl``, with the rules after it.
+
 Who owns what
 =============
 
@@ -221,7 +247,7 @@ Who owns what
 Who runs as whom
 ================
 
-Root is the account to log in with (ADR 0012). The programs that face a
+Root is the account to log in with (ADR 0009). The programs that face a
 network run as accounts of their own, without a password or a shell, with
 only the powers they use: ``onu-drop`` starts them so, and they keep the
 powers for what they run. ubusd's lists (``/usr/share/acl.d``) say what each
@@ -296,7 +322,7 @@ A change of the settings
    back to the settings it had. Only a confirmed change is written to the
    store.
 
-ADR 0014 gives the design. A session goes down and up again only when what
+ADR 0011 gives the design. A session goes down and up again only when what
 it is made of changes (its GEM port, interface, family, MAC address, account,
 or what it hands down by which link, ``/run/session/N/makings``); the other
 sessions stay up.
@@ -334,16 +360,21 @@ Reaching the stick
 ==================
 
 * The console, on the UART (``board.rst``).
-* ssh, and the panel over HTTPS on port 443, on the two addresses of the host
-  side and nowhere else: one on the host link, one on a VLAN of it that the
-  switch keeps off the PON both ways. Port 80 sends a browser to port 443.
+* ssh, and the panel over HTTPS on port 443, on the stick's addresses on the
+  host side and nowhere else. By default that is one address, on VLAN 4094
+  of the host link, which the switch keeps off the PON both ways: the
+  address the shipped firmware's page had, or ``192.168.1.1/24``. A bench
+  may add one on the host link itself (``DATA_ADDRESS`` in
+  ``/etc/board.conf``, ``building.rst``), and each local network has its
+  gateway's address. Port 80 sends a browser to port 443.
 * The OLT, over OMCI, which provisions the data path and nothing else.
 
 There is one account to log in with, root, with one password for the console,
-ssh and the panel; until one is set it is ``admin`` (ADR 0012). The panel runs
-as an account of its own, which no one logs in with (ADR 0014), and answers
-with a certificate it signs itself (ADR 0016). The stick has no packet filter:
-its servers keep off the PON side by the addresses they listen on.
+ssh and the panel; until one is set it is ``admin`` (ADR 0009). The panel runs
+as an account of its own, which no one logs in with (ADR 0011), and answers
+with a certificate it signs itself (ADR 0013). No packet filter guards the
+stick's own servers: the firewall (ADR 0019) judges what the stick forwards,
+and the servers keep off the PON side by the addresses they listen on.
 
 What is kept where
 ==================
@@ -377,7 +408,7 @@ Where to read next
 * ``building.rst``: the image, its budget, and the boot script step by step.
 * ``updating.rst``: the banks, updates, trials and the way in through the
   shipped firmware's web page.
-* ``docs/adr/0013-procd-is-the-first-process.rst``,
+* ``docs/adr/0010-procd-is-the-first-process.rst``,
   ``0014-one-control-plane.rst``, ``0015-names-of-the-sticks-own-programs.rst``
   and ``0016-the-panel-over-https.rst``: why the system is built this way.
 * ``linux/Documentation/networking/pon.rst``: the kernel's interface to the

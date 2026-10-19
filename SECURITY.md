@@ -32,9 +32,9 @@ are test builds (`README.rst`, "Status").
   omcid, onu-utils, pond and its panel, pppoed, dhcp6d, timed, netifd as
   carried here, and the build and its update files.
 * Known and documented, so not a new finding: update files carry a checksum
-  but no signature (ADR 0017); the panel's certificate is signed by the stick
-  itself (ADR 0016); the one account keeps its default password until one is
-  set (ADR 0012); the stick has no packet filter (`README.rst`, "Not done
+  but no signature (ADR 0014); the panel's certificate is signed by the stick
+  itself (ADR 0013); the one account keeps its default password until one is
+  set (ADR 0009); the stick has no packet filter (`README.rst`, "Not done
   yet").
 * Not in scope: the shipped firmware, the boot loader and the operator's
   equipment.
