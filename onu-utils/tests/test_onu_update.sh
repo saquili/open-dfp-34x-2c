@@ -128,6 +128,13 @@ check 'echo "$out" | grep -qx BANK1_KERNEL_SIZE=65536'
 check 'echo "$out" | grep -qx BANK0_KERNEL_USED=30064'
 check 'echo "$out" | grep -qx BANK0_ROOTFS_USED=20000'
 check '! echo "$out" | grep -q BANK1_KERNEL_USED'
+# An image that names its version reads by it, not by its commit.
+printf 'NAME=test\nVERSION="2026.10.19-2130"\nVERSION_ID=2026.10.19-2130\nBUILD_ID=0123456789ab\n' \
+	>"$ONU_ROOT/etc/os-release"
+run status
+check 'echo "$out" | grep -qx BANK0_VERSION=2026.10.19-2130'
+"$BUILD/onu-update" read >"$T/back.bin" 2>/dev/null
+check '[ "$(dd if="$T/back.bin" bs=1 skip=96 count=15 2>/dev/null)" = 2026.10.19-2130 ]'
 teardown
 
 echo "a bank in the shipped firmware's split reads as shipped, not empty"

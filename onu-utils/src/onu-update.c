@@ -332,25 +332,42 @@ static int board_of(char *out, size_t cap)
 	return 0;
 }
 
-/* BUILD_ID of /etc/os-release, the version of the running system. */
-static int build_id(char *out, size_t cap)
+/* The value of @key at the start of a line of @text, without its quotes. */
+static int release_field(const char *text, const char *key, char *out, size_t cap)
 {
-	char text[2048], *p, *end;
+	size_t klen = strlen(key);
+	const char *p;
+
+	for (p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		const char *v, *end;
+
+		if (strncmp(p, key, klen) || p[klen] != '=')
+			continue;
+		v = p + klen + 1;
+		if (*v == '"')
+			v++;
+		end = v + strcspn(v, "\"\n");
+		if (end == v)
+			return -1;
+		snprintf(out, cap, "%.*s", (int)(end - v), v);
+		return 0;
+	}
+	return -1;
+}
+
+/*
+ * The version of the running system: VERSION_ID of /etc/os-release, or the
+ * BUILD_ID of an image that has none.
+ */
+static int running_version(char *out, size_t cap)
+{
+	char text[2048];
 
 	if (read_text("/etc/os-release", text, sizeof(text)))
 		return -1;
-	p = strstr(text, "BUILD_ID=");
-	if (!p || (p != text && p[-1] != '\n'))
-		return -1;
-	p += 9;
-	if (*p == '"')
-		p++;
-	end = p + strcspn(p, "\"\n");
-	*end = '\0';
-	if (!*p)
-		return -1;
-	snprintf(out, cap, "%s", p);
-	return 0;
+	if (!release_field(text, "VERSION_ID", out, cap))
+		return 0;
+	return release_field(text, "BUILD_ID", out, cap);
 }
 
 /* The boot loader's environment: its two copies and which is current. */
@@ -570,7 +587,7 @@ static int cmd_status(void)
 		else
 			state = "valid";
 		printf("BANK%d_STATE=%s\n", n, state);
-		if (n == running && !build_id(version, sizeof(version))) {
+		if (n == running && !running_version(version, sizeof(version))) {
 			printf("BANK%d_VERSION=%s\n", n, version);
 		} else if (have_env) {
 			const char *v;
@@ -873,7 +890,7 @@ static int cmd_read(int bank)
 		say("no /proc/device-tree/compatible: the board is not known");
 		return 1;
 	}
-	if (bank != running || build_id(h.version, sizeof(h.version))) {
+	if (bank != running || running_version(h.version, sizeof(h.version))) {
 		char key[16];
 		const char *v = NULL;
 
