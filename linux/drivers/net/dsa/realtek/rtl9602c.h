@@ -989,14 +989,22 @@ enum rtl9602c_ptp_tc {
  * and 30.
  */
 #define RTL9602C_FSEL_PPPOE_SID		2
-#define RTL9602C_FSEL_PPP_PROTO		3
-#define RTL9602C_FSEL_PPPOE_TTL_PROTO	4
-#define RTL9602C_FSEL_PPPOE_SRC_HI	5
-#define RTL9602C_FSEL_PPPOE_SRC_LO	6
-#define RTL9602C_FSEL_PPPOE_DST_HI	7
-#define RTL9602C_FSEL_PPPOE_DST_LO	8
-#define RTL9602C_FSEL_PPPOE_SPORT	9
-#define RTL9602C_FSEL_PPPOE_DPORT	10
+#define RTL9602C_FSEL_PPP_PROTO		4
+#define RTL9602C_FSEL_PPPOE_TTL_PROTO	5
+#define RTL9602C_FSEL_PPPOE_SRC_HI	6
+#define RTL9602C_FSEL_PPPOE_SRC_LO	7
+#define RTL9602C_FSEL_PPPOE_DST_HI	8
+#define RTL9602C_FSEL_PPPOE_DST_LO	9
+#define RTL9602C_FSEL_PPPOE_SPORT	10
+#define RTL9602C_FSEL_PPPOE_DPORT	11
+
+/*
+ * Selector 3 is kept as reset leaves it, origin and offset 0, and setup
+ * writes it so: pointed elsewhere, with any other selector unchanged, it had
+ * the L3 engine hand every frame it routed to the CPU with forwarding reason 8
+ * (measured).
+ */
+#define RTL9602C_FSEL_KEEP		3
 
 /*
  * ACL rules and templates; template 7 matches nothing. A rule is two entries:
