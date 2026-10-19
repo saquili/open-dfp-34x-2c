@@ -40,7 +40,13 @@ $(BUILD)/onu-nl: $(BUILD)/src/onu-nl.o $(BUILD)/src/tcrule.o $(BUILD)/src/dlpara
 		$(BUILD)/src/linkmsg.o $(BUILD)/src/genl.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
-$(BUILD)/onu-fw: $(BUILD)/src/onu-fw.o $(BUILD)/src/fwmsg.o
+# onu-fw puts the firewall's defaults into nf_tables, and its rules into the
+# switch's ACL as tc flower filters: libmnl.
+$(BUILD)/onu-fw: $(BUILD)/src/onu-fw.o $(BUILD)/src/fwmsg.o $(BUILD)/src/fwacl.o \
+		$(BUILD)/src/aclmsg.o $(BUILD)/src/tcrule.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+$(BUILD)/test_fwacl: $(BUILD)/tests/test_fwacl.o $(BUILD)/src/fwacl.o $(BUILD)/src/aclmsg.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_fwmsg: $(BUILD)/tests/test_fwmsg.o $(BUILD)/src/fwmsg.o
@@ -122,7 +128,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
 	$(BUILD)/onu-update \
 	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password \
-	$(BUILD)/test_fwmsg $(BUILD)/onu-fw
+	$(BUILD)/test_fwmsg $(BUILD)/test_fwacl $(BUILD)/onu-fw
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
@@ -136,6 +142,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	$(BUILD)/test_act
 	$(BUILD)/test_password
 	$(BUILD)/test_fwmsg
+	$(BUILD)/test_fwacl
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_settings.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_drop.sh
@@ -150,6 +157,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_nl.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_fw.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_fw_acl.sh
 
 clean:
 	rm -rf $(BUILD)
