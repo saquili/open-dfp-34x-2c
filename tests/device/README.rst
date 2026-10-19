@@ -78,7 +78,7 @@ today's image, but none has run on it. What a case expects of the image:
 * The cases that install rules of their own, read the switch or stop procd's
   feeding of the watchdog run iproute2's ``tc``, ``bridge``, ``devlink`` and
   ``dcb``, ``ethtool`` and ``ubus``, which the flash's image does not carry
-  (ADR 0014); only a RAM image does (``make ram-image``). Each such case names
+  (ADR 0017); only a RAM image does (``make ram-image``). Each such case names
   the tools it runs, and a run on the flash's image has them put on the stick
   for it: ``--tools build/image/diag`` (the directory that ``make image`` sets
   them aside in) unpacks the programs, the C library whole and a script for
@@ -93,10 +93,10 @@ today's image, but none has run on it. What a case expects of the image:
 * The stick has no packet filter (``docs/handbook/system.rst``): what keeps its
   servers off the PON side is the addresses they listen on, which
   ``net.listeners`` checks.
-* procd feeds the watchdog (ADR 0013): ``system.watchdog`` looks for procd
+* procd feeds the watchdog (ADR 0010): ``system.watchdog`` looks for procd
   holding the device, and ``system.watchdog-reset`` has procd let go of it
   without closing it properly, so that nobody feeds an armed watchdog.
-* The ssh server takes root's key and root's password (ADR 0012), which
+* The ssh server takes root's key and root's password (ADR 0009), which
   ``net.ssh-login`` checks.
 * ``omci.gem-ports`` knows both shapes of the stick: bridged by omcid, or
   holding PPPoE sessions that each run on a GEM port. ``data.igmp`` needs the
