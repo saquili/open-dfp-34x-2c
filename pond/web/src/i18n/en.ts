@@ -449,6 +449,7 @@ export const en = {
     address: "The stick's address",
     addressHint: "With its mask, e.g. /24. Devices get it as their gateway.",
     netOverlap: "Network {net} overlaps the local network of {name}.",
+    netMgmt: "Network {net} overlaps the management network {mgmt}, where the panel is.",
     dhcp: "DHCP server",
     dhcpOn: "On",
     dhcpOff: "Off",

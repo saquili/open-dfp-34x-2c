@@ -448,6 +448,7 @@ export const pl: Dictionary = {
     address: "Adres wkładki",
     addressHint: "Z maską, np. /24. Urządzenia dostaną go jako bramę.",
     netOverlap: "Sieć {net} nachodzi na sieć lokalną {name}.",
+    netMgmt: "Sieć {net} nachodzi na sieć zarządzania {mgmt}, w której jest panel.",
     dhcp: "Serwer DHCP",
     dhcpOn: "Włączony",
     dhcpOff: "Wyłączony",

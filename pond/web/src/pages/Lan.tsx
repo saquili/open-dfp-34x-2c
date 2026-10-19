@@ -26,7 +26,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil, Pin, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useFixedChange, useLanChange, useLeases, useLeasesRead } from "../api/config";
+import { useFixedChange, useLanChange, useLeases, useLeasesRead, useMgmt } from "../api/config";
 import { useLive } from "../api/live";
 import type { FixedInfo, LeaseInfo, Live } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
@@ -98,9 +98,18 @@ function pool(from: string, to: string) {
   return a.slice(0, 3).join(".") === z.slice(0, 3).join(".") ? `${from}–${z[3]}` : `${from}–${to}`;
 }
 
-/* A network for a new one: the first 192.168.N.0/24 that no other one takes. */
-function suggest(taken: LanView[]) {
-  const nets = taken.map((l) => net4(l.address)).filter((n) => n != null);
+type Span = { first: number; last: number; text: string };
+
+/* The networks of the management pair in use and of one on trial. */
+function mgmtNets(m: { address: string | null; pending: { address: string } | null } | undefined) {
+  return [m?.address, m?.pending?.address]
+    .map((a) => (a ? net4(a) : null))
+    .filter((n): n is Span => n != null);
+}
+
+/* A network for a new one: the first 192.168.N.0/24 that no other one takes, nor the management pair. */
+function suggest(taken: LanView[], mgmt: Span[]) {
+  const nets = [...taken.map((l) => net4(l.address)).filter((n) => n != null), ...mgmt];
   for (let n = 1; n < 255; n++) {
     const first = ip4(`192.168.${n}.0`) ?? 0;
     if (!nets.some((x) => first <= x.last && first + 255 >= x.first))
@@ -194,6 +203,8 @@ function LanFields({
   const change = useLanChange();
   const state = useChangeState(change);
   const others = all.filter((l) => l.id !== x?.id);
+  const { data: mgmt } = useMgmt();
+  const mgmtSpans = mgmtNets(mgmt);
   const pins = x ? fixed(live).filter((f) => f.lan === x.id) : [];
   const nameOf = (l: LanView) => netName(t, l, nets);
   /* The connection a network goes out through, whose IPv6 prefix it takes a /64 of. */
@@ -248,6 +259,11 @@ function LanFields({
           : undefined;
         if (net && over)
           fail("address", t("lan.netOverlap", { net: net.text, name: nameOf(over) }));
+        /* The stick reaches its panel by the management pair's network. */
+        const onMgmt = net
+          ? mgmtSpans.find((m) => net.first <= m.last && net.last >= m.first)
+          : undefined;
+        if (net && onMgmt) fail("address", t("lan.netMgmt", { net: net.text, mgmt: onMgmt.text }));
         /* The network's fixed addresses stay in it, none of them the stick's. */
         const stick = ip4(v.address.split("/")[0] ?? "");
         const out = net
@@ -309,7 +325,7 @@ function LanFields({
           lease: "86400",
           ipv6: wanOf(conn)?.x.family === "ipv4" ? "off" : "on",
           subnet: freeSubnet(conn, all, roomOf(wanOf(conn))),
-          ...suggest(all),
+          ...suggest(all, mgmtSpans),
         },
   });
   const { errors, isDirty } = form.formState;
@@ -1418,6 +1434,8 @@ function Nets({ onDevices }: { onDevices: (lan: number) => void }) {
 export function LanNets({ onDevices }: { onDevices: (lan: number) => void }) {
   const { t } = useI18n();
   const { data: live } = useLive();
+  /* Asked now, so that a new network's form has the management pair to keep off. */
+  useMgmt();
   if (!live) return null;
   if (!served(live, "lans")) return <NotYet>{t("notYet.nets")}</NotYet>;
   return <Nets onDevices={onDevices} />;
