@@ -24,6 +24,10 @@ description: |
   The PON MAC needs the system controller and the two DRAM areas of its packet
   buffer, given by realtek,sysctl and memory-region.
 
+  The optics of the ONU, a laser driver such as the Semtech GN25L95, sit on the
+  bus of the I2C master that the i2c node describes, and the GPON MAC drives
+  the optics that realtek,pon-optics names.
+
 $ref: /schemas/net/dsa/dsa.yaml#
 
 properties:
@@ -44,8 +48,25 @@ properties:
   tx-disable-gpios:
     description:
       The hard transmit-disable input of the optics' laser driver. While it is
-      asserted the transmitter emits no light.
+      asserted the transmitter emits no light. It belongs to the laser
+      driver's node; a tree that describes the optics in the i2c node gives it
+      there.
     maxItems: 1
+    deprecated: true
+
+  i2c:
+    $ref: /schemas/i2c/i2c-controller.yaml#
+    unevaluatedProperties: false
+    description:
+      The I2C master of the optics, one of the two that the register window
+      holds. The devices on its bus, the optics' laser driver, are its
+      children.
+
+  realtek,pon-optics:
+    description:
+      The optics that the GPON MAC drives, a laser driver on the bus of the
+      i2c node.
+    $ref: /schemas/types.yaml#/definitions/phandle
 
   realtek,sysctl:
     description:
@@ -87,10 +108,21 @@ examples:
         reg = <0x1b000000 0xf10000>;
         interrupt-parent = <&intc>;
         interrupts = <8>;
-        tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
         realtek,sysctl = <&sysctl>;
+        realtek,pon-optics = <&laser>;
         memory-region = <&pbo_us>, <&pbo_ds>;
         memory-region-names = "pbo-us", "pbo-ds";
+
+        i2c {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            laser: laser-driver@50 {
+                compatible = "semtech,gn25l95";
+                reg = <0x50>;
+                tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+            };
+        };
 
         ethernet-ports {
             #address-cells = <1>;
