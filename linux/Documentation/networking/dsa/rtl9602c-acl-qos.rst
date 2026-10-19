@@ -678,19 +678,15 @@ decision is one of them.
        drop at 10 above a pass at 20 let none through and counted 100. The
        trap of the management VLAN at priority 1 on ``sfp`` still took every
        frame of that VLAN with a pass at 10 for it.
-   * - But a frame that the L3 engine routes is not routed once a rule decides
-       its forwarding: the switch hands it to the CPU with forwarding reason 8.
-       This holds for the pass, ``RTL9602C_ACL_ACT_FWD_MIRROR`` to no port, and
-       for the forwarding decision 0, an egress mask, with every port in it
-       (tried in a test build), so a pass on routed traffic costs it the
-       hardware path; a drop drops it as for any frame.
+   * - A pass leaves a frame that the L3 engine routes on the hardware path,
+       and a pass above a drop lets it through there.
      - M
      - A TCP transfer from a LAN host through the stick's NAT to an IPoE WAN,
        its connection ``[HW_OFFLOAD]``, with a pass on ``sfp`` for its frames
-       and one on ``pon`` for the replies: about 42 Mbit/s each way instead of
-       some 930; the CPU's reason-8 count, 25,217 with the mirror and 50,430
-       with the egress mask, equalled the two passes' hits, 18,226 + 7,014 and
-       26,690 + 23,864.
+       above a drop of the same port, and a pass on ``pon`` for the replies:
+       939 Mbit/s one way and 940 the other. (Runs at 42 Mbit/s the same day,
+       first taken for an effect of the pass, were selector 3's: see "The
+       parser's field selectors".)
    * - Type ``RTL9602C_ACL_ACT_LOG_METER`` (0) of the log class hands each frame
        the rule decides for to meter ``RTL9602C_ACL_ACT_LOG_IDX_LSB`` names,
        which drops it above its rate, in packet mode and in byte mode alike.
@@ -1055,11 +1051,23 @@ of a UDP or TCP header, at the start of the IP payload, and never changes them.
        match misses.
      - I
      - RFC 791, section 3.1, "Internet Header Length"; not measured.
+   * - Selector 3 must keep the value reset leaves it, origin and offset 0:
+       pointed at the PPPoE header's octet 6, with no rule using it, it had the
+       L3 engine hand every frame it routed to the CPU with forwarding reason 8,
+       and the same window on selector 11 did not. So the PPPoE selectors skip
+       it, and setup writes it back, in case a kernel before moved it.
+     - M
+     - A TCP transfer routed through the stick's NAT, no ACL rule of a user:
+       42 Mbit/s with the PPPoE selectors in place, 939 with all of them back
+       at 0, and, moving them back one group at a time through ``fsel``, slow
+       exactly while selector 3 was moved; with selector 3 at 0 and its window
+       on 11, 941.
    * - ``fsel`` (debugfs, mode 0600) lists the 16 selectors as "<n> <origin>
        <offset>"; writing the same three numbers points selector n elsewhere,
        for measurement, and setup restores the driver's selectors.
      - M
-     - The listing read after setup; not used to move a selector yet.
+     - The listing read after setup, and the selectors moved and restored to
+       find selector 3's effect.
    * - UDP and TCP headers carry the source port in octets 0-1 and the
        destination port in octets 2-3.
      - P
