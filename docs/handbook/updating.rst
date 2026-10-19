@@ -296,7 +296,27 @@ files in ``config``, with no file of this system. The package was the one of
 * After its start the shipped firmware V1.0-220923 looks for the mode of the
   host link (SGMII, 2.5 Gbit/s SGMII, 1000BASE-X) over and over: the link was
   down for some 64 seconds at a time, between spells of 43 seconds to two
-  minutes with the page reachable.
+  minutes with the page reachable. With the host's port set to 1000BASE-X
+  without autonegotiation it kept the link, and the page answered throughout.
+
+It was measured again on the same copy with the package of 62e03037cfd7,
+whose first start also takes root's password, the host link's address and
+its MAC address from the shipped firmware's files, the host's port at
+1000BASE-X:
+
+* On the page of V1.0-220923 its owner changed the administrator's password,
+  which the shipped firmware wrote to its files, and the page took the
+  package into bank 1.
+* At the first start this system took that password for root's: the panel
+  signed its owner in with it and asked for no new one. The host link and
+  the switch's ports took the MAC address of the shipped firmware's files,
+  the unit's own, and the identity was taken as before.
+* The host link took the address of the shipped firmware's files as well, but
+  answered nothing there: the OLT's service had put the host link in a bridge
+  with a GEM port, where an address of the port itself takes no traffic. The
+  panel was reached on the management VLAN.
+* With ``sw_commit`` set to 0 and a restart, the shipped firmware started
+  from bank 0, and the password its owner had set signed them in to its page.
 
 The new system finds the shipped firmware's files in the partition
 ``config``, mounts them, takes the identity from them and starts with its
