@@ -8,4 +8,5 @@
 obj-$(CONFIG_PON) += pon.o
 pon-y := pon_core.o pon_gem.o pon_netlink.o pon_nl.o pon_optics.o
 obj-$(CONFIG_PON_SIM) += pon_sim.o
+obj-$(CONFIG_PON_GN25L95) += gn25l95.o
 obj-$(CONFIG_PON_RTL9602C) += rtl9602c/
