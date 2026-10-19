@@ -94,6 +94,22 @@ With PPPoE accounts
     it, and its delegated IPv6 prefix through ``dhcp6d``, or keeps them on the
     stick. ``omcid`` still bridges the rest of what the OLT provisions, such as
     television and telephone.
+With local networks
+    The stick routes up to eight networks of the host link out by a session
+    that keeps its address, or by an IPoE connection: a DHCP server for each,
+    NAT behind the connection's address, ports forwarded to the networks'
+    devices and a DMZ. Netfilter's table (``onu-fw``) translates and tracks a
+    connection's first packets, and its flowtable hands the flow to the
+    switch's NAPT engine. The firewall's rules are the switch's ACL, which
+    judges every frame as it enters a port; what happens where no rule
+    decides is netfilter's, which follows connections: nothing new comes in
+    from the internet but what a forward or the DMZ takes, the networks go
+    out unless ``FW_OUT`` blocks them, and they do not reach each other
+    unless ``FW_BETWEEN`` allows it. A rule that allows opens netfilter's
+    default too, for IPv4; a rule of IPv6 has no effect until the stick
+    routes IPv6 to the networks' devices (ADR 0023). The compiler of the
+    rules into the ACL is still to come, and until it is in, a rule that
+    blocks blocks nothing.
 
 What the data path carries
 ==========================

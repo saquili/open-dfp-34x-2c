@@ -115,3 +115,6 @@ The index
    * - 0022
      - Programs of our own for PPPoE, DHCPv6 and the time
      - Accepted
+   * - 0023
+     - The firewall's rules are the switch's ACL; its defaults netfilter's
+     - Accepted
