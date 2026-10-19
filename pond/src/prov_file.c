@@ -341,7 +341,7 @@ static int optics_hwmon_dir(char *out, size_t cap)
 		snprintf(path, sizeof(path), "%s/%s/name", base, de->d_name);
 		if (prov_read_line(path, name, sizeof(name)))
 			continue;
-		if (strcmp(name, "rtl9602c_optics"))
+		if (strcmp(name, "gn25l95"))
 			continue;
 		snprintf(out, cap, "%s/%s", base, de->d_name);
 		err = 0;
