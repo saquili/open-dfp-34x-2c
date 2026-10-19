@@ -28,10 +28,17 @@ setup() {
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
 	# chown is root's: the stand-in notes who is given what.
 	printf '#!/bin/sh\necho "chown $*" >>"%s/chown.log"\n' "$T" >"$T/bin/chown"
-	# ponid gives the shipped firmware's identity, until it is told to fail.
-	printf '#!/bin/sh\n[ -e "%s/ponid.fail" ] && exit 1\n%s\n' "$T" \
-		'printf "serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\nmodel=TEST-1\n"' \
-		>"$T/bin/ponid"
+	# ponid gives the shipped firmware's identity, until it is told to fail,
+	# and a key that is named from the lines of ponid.asked.
+	cat >"$T/bin/ponid" <<-EOF
+	#!/bin/sh
+	[ -e "$T/ponid.fail" ] && exit 1
+	if [ \$# -gt 0 ]; then
+		sed -n "s/^\$1=//p" "$T/ponid.asked" 2>/dev/null | grep .
+		exit
+	fi
+	printf "serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\nmodel=TEST-1\n"
+	EOF
 	# cryptpw -m sha256 -S SALT: "$5$SALT$" and the password's bytes in hex,
 	# which shows what it was given.
 	cat >"$T/bin/cryptpw" <<-'EOF'
@@ -352,6 +359,57 @@ printf 'tab\tinside it\n' | "$STORE_SCRIPT" password 2>/dev/null
 rc=$?
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 check 'cmp -s "$ONU_ROOT/run/shadow" "$T/shadow.before"'
+teardown
+
+echo "the first start takes the shipped firmware's administrator's password for root's"
+setup
+printf 'admin_password=own secret\n' >"$T/ponid.asked"
+run load
+check '[ $rc -eq 0 ]'
+hash=$(cat "$ONU_ROOT/run/onu-auth" 2>/dev/null)
+check 'case $hash in "\$5\$rounds=$ROUNDS\$"????????????????"\$6f776e20736563726574") true ;; *) false ;; esac'
+check 'stored "AUTH_HASH=$hash"'
+check '[ "$(root_hash)" = "$hash" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-auth" | cut -c1-10)" = -rw------- ]'
+# A later start takes nothing, though the shipped firmware's has changed.
+printf 'admin_password=another one\n' >"$T/ponid.asked"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = "$hash" ] && [ "$(root_hash)" = "$hash" ]'
+teardown
+
+echo "the shipped firmware's default, or a password with a control character, is not taken"
+setup
+printf 'admin_password=admin\n' >"$T/ponid.asked"
+run load
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ "$(root_hash)" = "$DEFAULT_HASH" ]'
+check '[ ! -s "$ONU_STORE" ]'
+printf 'admin_password=tab\tinside\n' >"$T/ponid.asked"
+run load
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ ! -s "$ONU_STORE" ]'
+rm -f "$T/ponid.asked"
+run load
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ ! -s "$ONU_STORE" ]'
+teardown
+
+echo "a password set over the default ends the ssh server that took keys only"
+setup
+# A stand-in of the server that ends by itself in 5 s: a signal ends it
+# sooner, which its status tells.
+sleep 5 &
+ssh=$!
+echo "$ssh" >"$ONU_ROOT/run/dropbear.pid"
+printf '%s\n' 'correct horse' | "$STORE_SCRIPT" password 2>/dev/null
+wait "$ssh"
+ended=$?
+check '[ $ended -gt 128 ]'
+# One that already took passwords is left alone.
+sleep 5 &
+ssh=$!
+echo "$ssh" >"$ONU_ROOT/run/dropbear.pid"
+printf '%s\n' 'battery staple' | "$STORE_SCRIPT" password 2>/dev/null
+check 'kill -0 "$ssh" 2>/dev/null'
+kill "$ssh" 2>/dev/null
+wait "$ssh" 2>/dev/null
 teardown
 
 echo "a hash of the panel's older form leaves root with keys only on ssh and no console password"

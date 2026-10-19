@@ -11,7 +11,9 @@
 #
 #   onu-config load      at boot: /config mounted, and the identity, the
 #                        settings and the PPPoE accounts from the store into
-#                        /run/onu-identity, /run/onu.conf and /run/onu-pppoeN
+#                        /run/onu-identity, /run/onu.conf and /run/onu-pppoeN;
+#                        at the first start, root's password from the shipped
+#                        firmware's administrator's
 #   onu-config save      the settings of /run/onu.conf and the accounts of
 #                        /run/onu-pppoeN into the store, in one write
 #   onu-config identity  the identity of the KEY=VALUE lines of the standard
@@ -318,6 +320,7 @@ load() {
 	else
 		rm -f "$TOKEN"
 	fi
+	[ -n "$known" ] && [ -z "$list" ] && first_password
 	shadow
 	if [ -e "$SYSTEM.new" ]; then
 		chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
@@ -442,8 +445,9 @@ pd() {
 # hash in force. A hash of the older form the status daemon made (PBKDF2),
 # which crypt() cannot check, gives root no password for the console and
 # ssh, only keys, until a sign-in to the panel stores the password again.
-# A password not known ("!") is the default one here, for the console only:
-# the ssh server is started without passwords then (onu-run, onu-mgmt).
+# A password not known ("!") is the default one here, for the console only.
+# The ssh server takes no password then, nor while the default is in force,
+# as that is printed in this repository: keys only (onu-run, onu-mgmt).
 shadow() {
 	hash=
 	[ -r "$AUTH" ] && read -r hash <"$AUTH"
@@ -468,9 +472,55 @@ auth() {
 	*[!A-Za-z0-9\$./=_-]* | "") return 1 ;;
 	esac
 	[ -n "$STORE" ] || return 1
+	was=
+	[ -r "$AUTH" ] && read -r was <"$AUTH"
 	echo "AUTH_HASH=$1" | onu-config --store "$STORE" import || return 1
 	(umask 077 && echo "$1" >"$AUTH.new" && mv "$AUTH.new" "$AUTH")
 	shadow
+	# The ssh server took no password while the default was in force
+	# (onu-run): procd starts it again once it ends, now with passwords.
+	if [ -z "$was" ]; then
+		pid=$(cat "$RUN/dropbear.pid" 2>/dev/null)
+		[ -n "$pid" ] && kill "$pid" 2>/dev/null
+	fi
+	return 0
+}
+
+# The SHA-256 crypt hash of the password $1, with a salt of 16 random
+# characters.
+hash_secret() {
+	salt=$(tr -dc 'A-Za-z0-9./' </dev/urandom | head -c 16)
+	[ ${#salt} -eq 16 ] || return 1
+	hash=$(printf '%s\n' "$1" | cryptpw -m sha256 -S "rounds=$ROUNDS\$$salt") ||
+		return 1
+	case $hash in
+	"\$5\$rounds=$ROUNDS\$$salt\$"?*) echo "$hash" ;;
+	*)
+		log "the password could not be hashed"
+		return 1
+		;;
+	esac
+}
+
+# At the first start, while the store holds nothing yet, root's password
+# becomes the one of the shipped firmware's administrator, which its owner
+# knows, so that the panel, ssh and the console take it. The shipped
+# firmware's own default, "admin", is this system's default as well, printed
+# in this repository: then nothing is taken, and the panel asks for a
+# password. A password with a control character, or longer than this
+# system's limit, is not taken either. Later starts, and a password cleared
+# to have the default back (ADR 0012), take nothing.
+first_password() {
+	secret=$(ponid admin_password 2>/dev/null) || return 0
+	[ -n "$secret" ] && [ "$secret" != admin ] && [ ${#secret} -le 128 ] ||
+		return 0
+	case $secret in
+	*[[:cntrl:]]*) return 0 ;;
+	esac
+	hash=$(hash_secret "$secret")
+	unset secret
+	[ -n "$hash" ] && auth "$hash" || return 0
+	log "root's password is the shipped firmware's administrator's"
 }
 
 # Root's new password, the line of the standard input: 8 to 128 characters
@@ -487,17 +537,7 @@ password() {
 		return 1
 		;;
 	esac
-	salt=$(tr -dc 'A-Za-z0-9./' </dev/urandom | head -c 16)
-	[ ${#salt} -eq 16 ] || return 1
-	hash=$(printf '%s\n' "$secret" | cryptpw -m sha256 -S "rounds=$ROUNDS\$$salt") ||
-		return 1
-	case $hash in
-	"\$5\$rounds=$ROUNDS\$$salt\$"?*) ;;
-	*)
-		log "the password could not be hashed"
-		return 1
-		;;
-	esac
+	hash=$(hash_secret "$secret") || return 1
 	auth "$hash"
 }
 

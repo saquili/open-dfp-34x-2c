@@ -192,9 +192,13 @@ ssh)
 		}
 	fi
 	# Without a store that could be read, root's password is not known
-	# (onu-config load): keys only.
+	# (onu-config load), and until one is set it is the default, which is
+	# printed in this repository: keys only then. onu-config ends this
+	# server when a password is set, and procd starts it again with them.
 	nopw=
-	[ "$(cat "$RUN/onu-auth" 2>/dev/null)" = '!' ] && nopw=-s
+	case $(cat "$RUN/onu-auth" 2>/dev/null) in
+	'' | '!') nopw=-s ;;
+	esac
 	exec dropbear -F $nopw -r "$KEY" -P "$RUN/dropbear.pid" -p "$mgmt:22" ${data:+-p "$data:22"}
 	;;
 pond)

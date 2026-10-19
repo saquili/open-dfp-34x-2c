@@ -121,8 +121,15 @@ by its whole path where procd starts it.
    ``onu-config auth HASH`` stores a hash made elsewhere. Root's line of
    ``/run/shadow``, which ``/etc/shadow`` names, carries the hash for the
    console's login and the ssh server: one account, root, with one password
-   for the console, ssh and the panel. Until one is set, the password is
-   ``admin`` (a fixed hash of it); a hash of the panel's older form, which
+   for the console, ssh and the panel. At the first start, while the store
+   holds nothing yet, ``onu-config load`` takes the password of the shipped
+   firmware's administrator (``ponid admin_password``) for root's, unless it
+   is ``admin``, the shipped firmware's own default and this system's, or
+   holds a control character; later starts take nothing. Until one is set,
+   the password is ``admin`` (a fixed hash of it), the panel allows nothing
+   but setting one, and the ssh server takes keys only: ``admin`` is printed
+   in this repository. A password set over the default ends the ssh server,
+   which procd starts again, now with passwords. A hash of the panel's older form, which
    ``crypt()`` cannot check, leaves root without a password on the console and
    ssh (``*``), keys only, until a sign-in to the panel stores it again.
    Without a store that can be read (``/config`` not mounted, or the file
@@ -191,7 +198,8 @@ by its whole path where procd starts it.
         - ``/run/onu-auth``: the hash of root's password, which the console's
           login, the ssh server and the status daemon's sign-in all check.
           Without the key the default password is in force; without a store
-          that can be read the file holds ``!``.
+          that can be read the file holds ``!``. The first start may set it
+          from the shipped firmware's administrator's password.
       * - ``SYS_<NAME>``
         - ``onu-config system``
         - The line ``NAME=value`` of ``/run/onu-system``, for ``HOSTNAME``,

@@ -31,6 +31,8 @@ setup() {
 		>"$ONU_ROOT/proc/net/vlan/config"
 	printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=\n' \
 		>"$ONU_ROOT/run/onu-mgmt"
+	# Root has a password of its own: the ssh servers take it.
+	echo '$5$rounds=20000$salt$hash' >"$ONU_ROOT/run/onu-auth"
 	# The ssh server of the boot: a process to be stopped.
 	sleep 60 &
 	OLD_SSH=$!
@@ -177,6 +179,14 @@ teardown
 echo "the pending pair's ssh server takes keys only while root's password is not known"
 setup
 echo '!' >"$ONU_ROOT/run/onu-auth"
+run add 100 192.0.2.6/30
+check '[ $rc -eq 0 ] && grep -q "^dropbear -s .* -p 192.0.2.6:22$" "$LOG"'
+run cancel
+teardown
+
+echo "the pending pair's ssh server takes keys only while root's password is the default"
+setup
+rm -f "$ONU_ROOT/run/onu-auth"
 run add 100 192.0.2.6/30
 check '[ $rc -eq 0 ] && grep -q "^dropbear -s .* -p 192.0.2.6:22$" "$LOG"'
 run cancel

@@ -248,8 +248,11 @@ add() {
 		[ "$iface" = "$old_iface" ] || rules_del "$pref"
 		return 1
 	fi
+	# Keys only while root's password is the default or not known (onu-run).
 	nopw=
-	[ "$(cat "$RUN/onu-auth" 2>/dev/null)" = '!' ] && nopw=-s
+	case $(cat "$RUN/onu-auth" 2>/dev/null) in
+	'' | '!') nopw=-s ;;
+	esac
 	dropbear $nopw -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
 		log "no ssh on $address"
 	log "the management address $address in VLAN $vlan added beside the old one"
