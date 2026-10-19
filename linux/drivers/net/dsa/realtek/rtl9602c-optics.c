@@ -1342,8 +1342,10 @@ static int rtl9602c_gn_t2_open(struct rtl9602c_priv *p)
 
 	if (p->optics_t2_open)
 		return -EBUSY;
-	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel) ?:
-	      rtl9602c_gn_t2_show(p) ?:
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
+	if (err)
+		return err;
+	err = rtl9602c_gn_t2_show(p) ?:
 	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
 			      &eectl) ?:
 	      rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
