@@ -431,9 +431,6 @@ static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int a2, u16 *val
  * as sfp.c reports them: the alarm thresholds as crit and lcrit, the
  * warning thresholds as max and min.  The module fitted here holds values
  * there that its own readings sit well within (measured on this board).
- *
- * A value is computed even when its read fails; the error returned keeps
- * the hwmon core from using it.
  */
 static int rtl9602c_hwmon_read(struct device *dev,
 			       enum hwmon_sensor_types type, u32 attr,
@@ -483,6 +480,8 @@ static int rtl9602c_hwmon_read(struct device *dev,
 			 RTL9602C_OPTICS_A2_LIMIT(ddm, limit);
 	scoped_guard(rtl9602c_i2c, p)
 		err = rtl9602c_l_a2_word(p, a2, &raw);
+	if (err)
+		return err;
 
 	switch (ddm) {
 	case RTL9602C_OPTICS_TEMP:
@@ -498,7 +497,7 @@ static int rtl9602c_hwmon_read(struct device *dev,
 		*val = DIV_ROUND_CLOSEST((long)raw, 10);
 		break;
 	}
-	return err;
+	return 0;
 }
 
 /* The labels drivers/net/phy/sfp.c gives the same readings. */
