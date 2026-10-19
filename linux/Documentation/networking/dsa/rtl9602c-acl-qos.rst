@@ -678,6 +678,19 @@ decision is one of them.
        drop at 10 above a pass at 20 let none through and counted 100. The
        trap of the management VLAN at priority 1 on ``sfp`` still took every
        frame of that VLAN with a pass at 10 for it.
+   * - But a frame that the L3 engine routes is not routed once a rule decides
+       its forwarding: the switch hands it to the CPU with forwarding reason 8.
+       This holds for the pass, ``RTL9602C_ACL_ACT_FWD_MIRROR`` to no port, and
+       for the forwarding decision 0, an egress mask, with every port in it
+       (tried in a test build), so a pass on routed traffic costs it the
+       hardware path; a drop drops it as for any frame.
+     - M
+     - A TCP transfer from a LAN host through the stick's NAT to an IPoE WAN,
+       its connection ``[HW_OFFLOAD]``, with a pass on ``sfp`` for its frames
+       and one on ``pon`` for the replies: about 42 Mbit/s each way instead of
+       some 930; the CPU's reason-8 count, 25,217 with the mirror and 50,430
+       with the egress mask, equalled the two passes' hits, 18,226 + 7,014 and
+       26,690 + 23,864.
    * - Type ``RTL9602C_ACL_ACT_LOG_METER`` (0) of the log class hands each frame
        the rule decides for to meter ``RTL9602C_ACL_ACT_LOG_IDX_LSB`` names,
        which drops it above its rate, in packet mode and in byte mode alike.
