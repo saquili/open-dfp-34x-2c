@@ -67,6 +67,12 @@ int prov_forward_set(const char *val, char *err, size_t errcap);
 int prov_dmz_write(const char *val, char *err, size_t errcap, prov_done done,
 		   void *ctx);
 int prov_dmz_set(const char *val, char *err, size_t errcap);
+int prov_rule_write(const char *val, char *err, size_t errcap, prov_done done,
+		    void *ctx);
+int prov_rule_set(const char *val, char *err, size_t errcap);
+int prov_fw_write(const char *val, char *err, size_t errcap, prov_done done,
+		  void *ctx);
+int prov_fw_set(const char *val, char *err, size_t errcap);
 int prov_omci(struct prov_buf *out);
 int prov_omci_frames(struct prov_buf *out);
 int prov_omci_frames_from(struct prov_buf *out, unsigned long since);

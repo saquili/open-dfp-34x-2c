@@ -47,6 +47,14 @@
  * its fixed address in the same write when it has none, as the panel's
  * stand-in does it. A network removed takes its forwards and its DMZs with
  * it, and so does a fixed address taken away, those of its device.
+ *
+ * So are the firewall's rules, RULEn, n their place in the order, and what
+ * it does where no rule decides, FW_OUT and FW_BETWEEN. A rule keeps its ID
+ * wherever it moves, and a write that adds, removes or moves one writes the
+ * rules again in their order, from 1. A device a rule goes to keeps its
+ * address as a forward's does, which the switch's ACL judges it by; a
+ * network removed takes the rules that name it or a device of it with it,
+ * and a fixed address taken away the rules that go to its device.
  */
 
 #define _GNU_SOURCE
@@ -76,6 +84,10 @@
 #define FIXED_MAX 512
 #define FORWARDS 96
 #define DMZS CONNS
+#define RULES 96
+/* A rule's value and its name, 40 characters of UTF-8, as onu-config takes them. */
+#define RULE_MAX 128
+#define RULE_NAME_MAX 164
 #define NAME_MAX 132
 #define USER_MAX 63
 #define SECRET_MAX 255
@@ -763,6 +775,130 @@ static bool dmz_of(const char *line, int *n, char conn[16], int *lan, char mac[1
 	return true;
 }
 
+/**
+ * struct rule - A rule of the firewall, RULEn,
+ * "ID_ACTION_FROM_TO_PROTO_PORTS_FAMILY_ON", which onu-config has judged.
+ * @n: its place in the order
+ * @id: its ID
+ * @action: allow or block
+ * @from: where the traffic comes from, an end as the panel writes it
+ * @to: where it goes to
+ * @proto: any, tcp, udp, both or icmp
+ * @ports: a port, or a range FROM-LAST, or "" for every one
+ * @family: any, ipv4 or ipv6
+ * @on: whether it is in force
+ */
+struct rule {
+	int n;
+	int id;
+	char action[8];
+	char from[64];
+	char to[64];
+	char proto[8];
+	char ports[16];
+	char family[8];
+	bool on;
+};
+
+/* A rule of the settings, the line RULEn=...: false for one that is none. */
+static bool rule_of(const char *line, struct rule *r)
+{
+	const char *p = line + 4, *eq;
+	size_t d = strspn(p, "0123456789");
+	char v[RULE_MAX], *f[8], *q;
+	size_t len;
+	int i = 0;
+
+	if (strncmp(line, "RULE", 4) || !d || p[d] != '=')
+		return false;
+	eq = p + d;
+	len = strcspn(eq + 1, "\n");
+	if (!len || len >= sizeof(v))
+		return false;
+	memcpy(v, eq + 1, len);
+	v[len] = '\0';
+	for (q = v; i < 8; i++) {
+		f[i] = q;
+		q = strchr(q, '_');
+		if (!q)
+			break;
+		*q++ = '\0';
+	}
+	if (i != 7)
+		return false;
+	r->n = atoi(p);
+	r->id = atoi(f[0]);
+	snprintf(r->action, sizeof(r->action), "%s", f[1]);
+	snprintf(r->from, sizeof(r->from), "%s", f[2]);
+	snprintf(r->to, sizeof(r->to), "%s", f[3]);
+	snprintf(r->proto, sizeof(r->proto), "%s", f[4]);
+	snprintf(r->ports, sizeof(r->ports), "%s", f[5]);
+	snprintf(r->family, sizeof(r->family), "%s", f[6]);
+	r->on = !strcmp(f[7], "on");
+	return true;
+}
+
+/* The rules of the firewall, in their order, each with its name. */
+static void pv_rules(struct prov_buf *out, const char *text)
+{
+	char k[32], name[RULE_NAME_MAX];
+	bool first = true;
+	struct rule r;
+
+	pv_open(out, '[');
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		if (!rule_of(p, &r))
+			continue;
+		snprintf(k, sizeof(k), "RULE%d_NAME", r.n);
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "id");
+		pv_num(out, r.id);
+		pv_comma(out);
+		pv_key(out, "name");
+		pv_str(out, line_value(text, k, name, sizeof(name)) ? name : "");
+		pv_comma(out);
+		pv_key(out, "action");
+		pv_str(out, r.action);
+		pv_comma(out);
+		pv_key(out, "from");
+		pv_str(out, r.from);
+		pv_comma(out);
+		pv_key(out, "to");
+		pv_str(out, r.to);
+		pv_comma(out);
+		pv_key(out, "proto");
+		pv_str(out, r.proto);
+		pv_comma(out);
+		pv_key(out, "ports");
+		pv_str(out, r.ports);
+		pv_comma(out);
+		pv_key(out, "family");
+		pv_str(out, r.family);
+		pv_comma(out);
+		pv_key(out, "on");
+		pv_bool(out, r.on);
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
+/* What the firewall does where no rule decides: its defaults, where the settings name none. */
+static void pv_fw(struct prov_buf *out, const char *text)
+{
+	char v[VALUE_MAX];
+
+	pv_open(out, '{');
+	pv_key(out, "out");
+	pv_str(out, line_value(text, "FW_OUT", v, sizeof(v)) ? v : "allow");
+	pv_comma(out);
+	pv_key(out, "between");
+	pv_str(out, line_value(text, "FW_BETWEEN", v, sizeof(v)) ? v : "block");
+	pv_close(out, '}');
+}
+
 /* The ports forwarded from the internet, each with its name. */
 static void pv_forwards(struct prov_buf *out, const char *text)
 {
@@ -895,7 +1031,7 @@ int prov_settings(struct prov_buf *out)
 
 		if (!eq || !strncmp(p, "SESSION", 7) || !strncmp(p, "FIXED", 5) ||
 		    !strncmp(p, "IPOE", 4) || !strncmp(p, "FORWARD", 7) ||
-		    !strncmp(p, "DMZ", 3) ||
+		    !strncmp(p, "DMZ", 3) || !strncmp(p, "RULE", 4) || !strncmp(p, "FW_", 3) ||
 		    (!strncmp(p, "LAN", 3) && p[3] >= '1' && p[3] <= '9'))
 			continue;
 		klen = (size_t)(eq - p);
@@ -930,6 +1066,12 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 	pv_key(out, "dmz");
 	pv_dmzs(out, text);
+	pv_comma(out);
+	pv_key(out, "rules");
+	pv_rules(out, text);
+	pv_comma(out);
+	pv_key(out, "fw");
+	pv_fw(out, text);
 	pv_comma(out);
 	explicit_bzero(acct, sizeof(acct));
 
@@ -1073,6 +1215,13 @@ static const char *line_value(const char *text, const char *key, char *out,
 	return NULL;
 }
 
+/* Whether the end @e of a rule is network @n, lan:N, or a device of it, dev:N:MAC. */
+static bool rule_names(const char *e, int n)
+{
+	return (!strncmp(e, "lan:", 4) || !strncmp(e, "dev:", 4)) && e[4] == '0' + n &&
+	       (e[5] == '\0' || e[5] == ':');
+}
+
 /*
  * Network @n removed in @change, which holds @len bytes of @cap: LANn_CONN
  * empty, and the fixed addresses in it, the forwards to its devices and the
@@ -1081,6 +1230,7 @@ static const char *line_value(const char *text, const char *key, char *out,
 static void lan_drop(const char *text, int n, char *change, size_t cap, size_t *len)
 {
 	char mac[18], ip[16], conn[16];
+	struct rule r;
 	struct fwd w;
 
 	append(change, cap, len, "LAN%d_CONN=\n", n);
@@ -1093,6 +1243,8 @@ static void lan_drop(const char *text, int n, char *change, size_t cap, size_t *
 			append(change, cap, len, "FORWARD%d=\n", w.n);
 		else if (dmz_of(p, &f, conn, &lan, mac) && lan == n)
 			append(change, cap, len, "DMZ%d=\n", f);
+		else if (rule_of(p, &r) && (rule_names(r.from, n) || rule_names(r.to, n)))
+			append(change, cap, len, "RULE%d=\n", r.n);
 	}
 }
 
@@ -1389,14 +1541,16 @@ int prov_ipoe_set(const char *val, char *err, size_t errcap)
 }
 
 /*
- * The forwards to the device @mac of network @lan and the DMZ that is the
- * device removed in @change, which holds @len bytes of @cap, of the settings
- * @text: they go to its fixed address, which goes.
+ * The forwards to the device @mac of network @lan, the DMZ that is the
+ * device and the rules of the firewall that go to it removed in @change,
+ * which holds @len bytes of @cap, of the settings @text: they go to its
+ * fixed address, which goes.
  */
 static void device_drop(const char *text, int lan, const char *mac, char *change,
 			size_t cap, size_t *len)
 {
 	char conn[16], m[18];
+	struct rule r;
 	struct fwd w;
 
 	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
@@ -1406,6 +1560,9 @@ static void device_drop(const char *text, int lan, const char *mac, char *change
 			append(change, cap, len, "FORWARD%d=\n", w.n);
 		else if (dmz_of(p, &d, conn, &l, m) && l == lan && !strcasecmp(m, mac))
 			append(change, cap, len, "DMZ%d=\n", d);
+		else if (rule_of(p, &r) && !strncmp(r.to, "dev:", 4) && rule_names(r.to, lan) &&
+			 !strcasecmp(r.to + 6, mac))
+			append(change, cap, len, "RULE%d=\n", r.n);
 	}
 }
 
@@ -1690,4 +1847,212 @@ int prov_dmz_set(const char *val, char *err, size_t errcap)
 	struct prov_wait w = { .err = err, .errcap = errcap };
 
 	return prov_wait(prov_dmz_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * An end of a rule as the panel writes it: internet, internet:ADDR, lans,
+ * lan:N or dev:N:MAC, its MAC in small letters in @out; the rest is
+ * onu-config's to judge. False, with why in @err, for one that would not
+ * stay one field of the rule's value.
+ */
+static bool rule_end(const char *v, char out[64], char *err, size_t errcap)
+{
+	size_t n = v ? strlen(v) : 0;
+
+	if (!n || n >= 64 || strspn(v, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+				     "0123456789.:/-") != n) {
+		snprintf(err, errcap, "a rule goes FROM somewhere TO somewhere");
+		return false;
+	}
+	for (size_t i = 0; i <= n; i++)
+		out[i] = !strncmp(v, "dev:", 4) && v[i] >= 'A' && v[i] <= 'F' ?
+				 (char)(v[i] - 'A' + 'a') :
+				 v[i];
+	return true;
+}
+
+/* A rule of the list being written: its value without its place, and its name. */
+struct rule_item {
+	char spec[RULE_MAX];
+	char name[RULE_NAME_MAX];
+	int id;
+};
+
+/*
+ * A rule of the firewall: added at the end without ID, changed by ID,
+ * removed by ACTION= empty, or moved one place by MOVE=up or MOVE=down;
+ * NAME, ACTION (allow or block), FROM and TO, PROTO (any when none), PORTS,
+ * FAMILY (any when none) and ON (on when none). A new rule takes the ID
+ * after the largest there is, or the first free one past 96. The rules are
+ * written again in their order, from RULE1, so that 96 always fit; a
+ * device a rule goes to keeps its address (pin()). onu-config judges the
+ * rest, as the panel's form does.
+ */
+int prov_rule_write(const char *val, char *err, size_t errcap, prov_done done, void *ctx)
+{
+	static char text[TEXT_MAX], change[TEXT_MAX];
+	static struct rule_item list[RULES + 1];
+	char id[VALUE_MAX], mv[VALUE_MAX], act[VALUE_MAX], name[512], spec[512],
+		fromv[VALUE_MAX + 8], tov[VALUE_MAX + 8], proto[VALUE_MAX], ports[VALUE_MAX],
+		fam[VALUE_MAX], on[VALUE_MAX], from[64], to[64], k[32];
+	const char *i = line_value(val, "ID", id, sizeof(id));
+	const char *m = line_value(val, "MOVE", mv, sizeof(mv));
+	const char *a = line_value(val, "ACTION", act, sizeof(act));
+	const char *nm = line_value(val, "NAME", name, sizeof(name));
+	const char *f = line_value(val, "FROM", fromv, sizeof(fromv));
+	const char *t = line_value(val, "TO", tov, sizeof(tov));
+	const char *pr = line_value(val, "PROTO", proto, sizeof(proto));
+	const char *po = line_value(val, "PORTS", ports, sizeof(ports));
+	const char *fa = line_value(val, "FAMILY", fam, sizeof(fam));
+	const char *o = line_value(val, "ON", on, sizeof(on));
+	int count = 0, last = 0, at = -1, want = 0, rc;
+	bool used[RULES + 1] = { false };
+	size_t len = 0;
+	struct rule r;
+
+	if (i) {
+		if (*i && strlen(i) <= 2 && strspn(i, "0123456789") == strlen(i))
+			want = atoi(i);
+		if (want < 1 || want > RULES) {
+			snprintf(err, errcap, "ID: 1 to %d", RULES);
+			return -EINVAL;
+		}
+	}
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	/* The rules in their order, as onu-config writes them. */
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		const char *eq;
+
+		if (!rule_of(p, &r) || count == RULES)
+			continue;
+		eq = strchr(p, '=');
+		snprintf(list[count].spec, sizeof(list[count].spec), "%.*s",
+			 (int)strcspn(eq + 1, "\n"), eq + 1);
+		snprintf(k, sizeof(k), "RULE%d_NAME", r.n);
+		if (!line_value(text, k, list[count].name, sizeof(list[count].name)))
+			list[count].name[0] = '\0';
+		list[count].id = r.id;
+		if (r.id >= 1 && r.id <= RULES)
+			used[r.id] = true;
+		if (want && r.id == want)
+			at = count;
+		last = r.n > last ? r.n : last;
+		count++;
+	}
+	change[0] = '\0';
+	if (m && (!strcmp(m, "up") || !strcmp(m, "down"))) {
+		int to_at = at + (!strcmp(m, "up") ? -1 : 1);
+		struct rule_item x;
+
+		if (at < 0 || to_at < 0 || to_at >= count)
+			return prov_settings_write(change, err, errcap, done, ctx);
+		x = list[at];
+		list[at] = list[to_at];
+		list[to_at] = x;
+	} else if (a && !*a) {
+		if (at < 0)
+			return prov_settings_write(change, err, errcap, done, ctx);
+		memmove(&list[at], &list[at + 1], sizeof(list[0]) * (size_t)(count - at - 1));
+		count--;
+	} else {
+		/* As the panel's stand-in, a rule that says nothing else allows. */
+		if (!a)
+			a = "allow";
+		if (strcmp(a, "allow") && strcmp(a, "block")) {
+			snprintf(err, errcap, "ACTION: allow or block, or empty to remove the rule");
+			return -EINVAL;
+		}
+		if (nm && strlen(nm) >= sizeof(list[0].name)) {
+			snprintf(err, errcap, "NAME: up to 40 characters");
+			return -EINVAL;
+		}
+		if (!rule_end(f, from, err, errcap) || !rule_end(t, to, err, errcap))
+			return -EINVAL;
+		if (po && strspn(po, "0123456789-") != strlen(po)) {
+			snprintf(err, errcap, "PORTS: a port, or the first and the last of a range");
+			return -EINVAL;
+		}
+		if (at < 0) {
+			if (count == RULES) {
+				snprintf(err, errcap, "all %d rules are taken", RULES);
+				return -EINVAL;
+			}
+			if (!want) {
+				int top = 0;
+
+				for (int x = 1; x <= RULES; x++)
+					top = used[x] ? x : top;
+				want = top < RULES ? top + 1 : 0;
+				for (int x = 1; x <= RULES && !want; x++)
+					if (!used[x])
+						want = x;
+			}
+			at = count++;
+		}
+		/* Every field is of [A-Za-z0-9./:-]: none holds the '_' between them. */
+		snprintf(spec, sizeof(spec), "%d_%s_%s_%s_%s_%s_%s_%s", want, a, from, to,
+			 pr && *pr && !strchr(pr, '_') ? pr : "any", po ? po : "",
+			 fa && *fa && !strchr(fa, '_') ? fa : "any",
+			 o && !strcmp(o, "off") ? "off" : "on");
+		if (strlen(spec) >= sizeof(list[at].spec)) {
+			snprintf(err, errcap, "the rule is too long");
+			return -EINVAL;
+		}
+		list[at].id = want;
+		memcpy(list[at].spec, spec, strlen(spec) + 1);
+		snprintf(list[at].name, sizeof(list[at].name), "%s", nm ? nm : "");
+		if (!strncmp(to, "dev:", 4) && to[4] >= '1' && to[4] <= '0' + LANS && to[5] == ':') {
+			rc = pin(text, to[4] - '0', to + 6, change, sizeof(change), &len, err, errcap);
+			if (rc)
+				return rc;
+		}
+	}
+	for (int x = 0; x < count; x++) {
+		append(change, sizeof(change), &len, "RULE%d=%s\n", x + 1, list[x].spec);
+		append(change, sizeof(change), &len, "RULE%d_NAME=%s\n", x + 1, list[x].name);
+	}
+	for (int x = count + 1; x <= last; x++)
+		append(change, sizeof(change), &len, "RULE%d=\n", x);
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_rule_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_rule_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * What the firewall does where no rule decides: OUT, to the internet, and
+ * BETWEEN the networks, allow or block; one not given stays as it is.
+ */
+int prov_fw_write(const char *val, char *err, size_t errcap, prov_done done, void *ctx)
+{
+	static const char *const keys[][2] = { { "OUT", "FW_OUT" }, { "BETWEEN", "FW_BETWEEN" } };
+	char change[64], v[VALUE_MAX];
+	size_t len = 0;
+
+	change[0] = '\0';
+	for (size_t x = 0; x < sizeof(keys) / sizeof(keys[0]); x++) {
+		if (!line_value(val, keys[x][0], v, sizeof(v)))
+			continue;
+		if (strcmp(v, "allow") && strcmp(v, "block")) {
+			snprintf(err, errcap, "%s: allow or block", keys[x][0]);
+			return -EINVAL;
+		}
+		append(change, sizeof(change), &len, "%s=%s\n", keys[x][1], v);
+	}
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_fw_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_fw_write(val, err, errcap, prov_waited, &w), &w);
 }

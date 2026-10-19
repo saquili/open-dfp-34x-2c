@@ -2678,6 +2678,224 @@ static void test_forwards(void)
 	unsetenv("POND_ONU_APPLY");
 }
 
+/* Whether the file @path holds @text, a file as large as the settings. */
+static bool big_file_has(const char *path, const char *text)
+{
+	static char buf[65536];
+
+	return !prov_slurp(path, buf, sizeof(buf), NULL) && strstr(buf, text) != NULL;
+}
+
+/* The rule of ID @id among the rules that @s serves, or NULL. */
+static const char *rule_at(const char *s, int id)
+{
+	const char *rules = strstr(s, "\"rules\":["), *end = rules ? strchr(rules, ']') : NULL;
+	char want[16];
+	const char *at;
+
+	snprintf(want, sizeof(want), "{\"id\":%d,", id);
+	at = rules ? strstr(rules, want) : NULL;
+	return at && at < end ? at : NULL;
+}
+
+static void test_rules(void)
+{
+	static char buf[65536], many[32768];
+	unsigned char leases[8 + 36];
+	char file[512], err[256], stub[512];
+	uint64_t written = (uint64_t)time(NULL) - 10;
+	const char *s, *a, *b;
+	size_t at = 0;
+	FILE *f;
+	int rc;
+
+	puts("the firewall's rules and its defaults");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		char path[32];
+
+		snprintf(path, sizeof(path), "/run/onu-pppoe%d", n);
+		unlink(prov_path(path, file, sizeof(file)));
+	}
+	rc = prov_session_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\nPASS=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_lan_set("CONN=pppoe:1\nVLAN=100\nADDRESS=192.168.1.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_lan_set("CONN=pppoe:1\nVLAN=200\nADDRESS=192.168.2.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && strstr(s, "\"rules\":[]") &&
+		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\"}"),
+	      "a stick without rules serves none, and the defaults: out allowed, between blocked");
+
+	/* The printer of network 1, with an hour of its lease left. */
+	for (int i = 0; i < 8; i++)
+		leases[i] = (unsigned char)(written >> (56 - 8 * i));
+	lease_at(leases + 8, 3600, "\xc0\xa8\x01\x64", 0x03, "printer");
+	f = fopen(prov_path("/run/udhcpd-net1.leases", file, sizeof(file)), "w");
+	if (f) {
+		fwrite(leases, 1, sizeof(leases), f);
+		fclose(f);
+	}
+
+	rc = prov_rule_set("NAME=Drukarka dla Biura\nACTION=allow\nFROM=lan:2\n"
+			   "TO=dev:1:00:00:5E:00:53:A3\nPROTO=tcp\nPORTS=9100\nFAMILY=any\nON=on\n",
+			   err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 &&
+		      file_has("/run/onu.conf",
+			       "RULE1=1_allow_lan:2_dev:1:00:00:5e:00:53:a3_tcp_9100_any_on\n"
+			       "RULE1_NAME=Drukarka dla Biura\n") &&
+		      strstr(s, "\"rules\":[{\"id\":1,\"name\":\"Drukarka dla Biura\",\"action\":\"allow\","
+				"\"from\":\"lan:2\",\"to\":\"dev:1:00:00:5e:00:53:a3\",\"proto\":\"tcp\","
+				"\"ports\":\"9100\",\"family\":\"any\",\"on\":true}]"),
+	      "a rule is taken, its device's MAC in small letters, and served as the panel reads it");
+	check(file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a3/192.168.1.100") &&
+		      !strstr(s, "\"RULE1\"") && !strstr(s, "\"FW_"),
+	      "the device it goes to keeps the address of its lease, and the rule is not among the other settings");
+
+	rc = prov_rule_set("ACTION=block\nFROM=lans\nTO=internet\nPROTO=tcp\nPORTS=25\n", err,
+			   sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_rule_set("NAME=Biuro z zewn\xc4\x85trz\nACTION=allow\nFROM=internet:203.0.113.0/24\n"
+			    "TO=lan:1\nPROTO=any\nPORTS=\nFAMILY=ipv4\nON=off\n",
+			    err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "RULE2=2_block_lans_internet_tcp_25_any_on\n") &&
+		      file_has("/run/onu.conf",
+			       "RULE3=3_allow_internet:203.0.113.0/24_lan:1_any__ipv4_off\n"
+			       "RULE3_NAME=Biuro z zewn\xc4\x85trz\n") &&
+		      strstr(s, "\"id\":3,\"name\":\"Biuro z zewn\xc4\x85trz\",\"action\":\"allow\","
+				"\"from\":\"internet:203.0.113.0/24\",\"to\":\"lan:1\",\"proto\":\"any\","
+				"\"ports\":\"\",\"family\":\"ipv4\",\"on\":false}"),
+	      "rules are added at the end, each with the next ID, the defaults filled in");
+
+	rc = prov_rule_set("ID=3\nMOVE=up\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	a = rule_at(s, 3);
+	b = rule_at(s, 2);
+	check(rc == 0 && file_has("/run/onu.conf", "RULE2=3_allow_internet") &&
+		      file_has("/run/onu.conf", "RULE3=2_block_lans") &&
+		      file_has("/run/onu.conf", "RULE2_NAME=Biuro") && a && b && a < b,
+	      "MOVE=up moves a rule one place, with its name and its ID");
+	rc = prov_rule_set("ID=1\nMOVE=up\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_rule_set("ID=2\nMOVE=down\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "RULE1=1_allow") &&
+		      file_has("/run/onu.conf", "RULE3=2_block"),
+	      "and the first goes no higher, the last no lower");
+
+	rc = prov_rule_set("ID=2\nNAME=Bez SMTP\nACTION=block\nFROM=dev:2:00:00:5e:00:53:a7\n"
+			   "TO=internet\nPROTO=both\nPORTS=25-26\nFAMILY=any\nON=on\n",
+			   err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 &&
+		      file_has("/run/onu.conf",
+			       "RULE3=2_block_dev:2:00:00:5e:00:53:a7_internet_both_25-26_any_on\n"
+			       "RULE3_NAME=Bez SMTP\n") &&
+		      !file_has("/run/onu.conf", "FIXED2"),
+	      "a rule is changed by its ID, in its place; a device it comes from needs no fixed address");
+
+	check(prov_rule_set("ACTION=allow\nFROM=internet\nTO=internet:10.0.0.0/8\n", err,
+			    sizeof(err)) == -EINVAL &&
+		      strstr(err, "rule 4: from the internet to the internet"),
+	      "a rule from the internet to the internet is refused, as onu-config judges it");
+	check(prov_rule_set("ACTION=allow\nFROM=lan:1\nTO=dev:1:00:00:5e:00:53:a3\n", err,
+			    sizeof(err)) == -EINVAL &&
+		      strstr(err, "within one network"),
+	      "and one within one network");
+	check(prov_rule_set("ACTION=allow\nFROM=lans\nTO=internet:192.0.2.0/24\nFAMILY=ipv6\n", err,
+			    sizeof(err)) == -EINVAL &&
+		      strstr(err, "an address of IPv4 in a rule of ipv6"),
+	      "and one whose address is not of its family");
+	check(prov_rule_set("ACTION=allow\nFROM=lans_x\nTO=internet\n", err, sizeof(err)) ==
+			      -EINVAL &&
+		      strstr(err, "FROM"),
+	      "an end that would not stay one field is refused by pond");
+	check(prov_rule_set("ACTION=pass\nFROM=lans\nTO=internet\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "ACTION"),
+	      "and so is an action that is none");
+	check(prov_rule_set("ID=97\nACTION=\n", err, sizeof(err)) == -EINVAL && strstr(err, "ID"),
+	      "and an ID past the 96th");
+	check(prov_rule_set("ACTION=allow\nFROM=lan:2\nTO=dev:1:00:00:5e:00:53:a9\n", err,
+			    sizeof(err)) == -EINVAL &&
+		      strstr(err, "00:00:5e:00:53:a9 has no address in network 1 to keep"),
+	      "a device a rule goes to without an address to keep is refused");
+
+	rc = prov_rule_set("ID=3\nACTION=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "RULE2=2_block_dev:2") &&
+		      !file_has("/run/onu.conf", "RULE3") && !rule_at(s, 3),
+	      "ACTION= takes a rule away, and the rules after it move up");
+	rc = prov_rule_set("ACTION=allow\nFROM=lans\nTO=internet:2001:db8::/32\nPROTO=icmp\n", err,
+			   sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "RULE3=3_allow_lans_internet:2001:db8::/32_icmp__any_on"),
+	      "a new rule takes the ID after the largest");
+
+	/* The defaults. */
+	rc = prov_fw_set("OUT=block\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "FW_OUT=block") &&
+		      strstr(s, "\"fw\":{\"out\":\"block\",\"between\":\"block\"}"),
+	      "OUT=block blocks the networks' new connections to the internet where no rule decides");
+	rc = prov_fw_set("BETWEEN=allow\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && strstr(s, "\"fw\":{\"out\":\"block\",\"between\":\"allow\"}"),
+	      "BETWEEN=allow lets them reach each other, and OUT stays");
+	check(prov_fw_set("OUT=maybe\n", err, sizeof(err)) == -EINVAL && strstr(err, "OUT"),
+	      "a default that is none is refused");
+	rc = prov_fw_set("OUT=allow\nBETWEEN=block\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "FW_") &&
+		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\"}"),
+	      "the defaults again are not written");
+
+	/* A fixed address taken away takes the rules that go to its device. */
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a3\nIP=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "dev:1:00:00:5e:00:53:a3") &&
+		      file_has("/run/onu.conf", "RULE2=2_block_dev:2") && !rule_at(s, 1),
+	      "a fixed address taken away takes the rules that go to its device");
+	/* A network removed takes the rules that name it or a device of it. */
+	rc = prov_lan_set("ID=2\nCONN=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "dev:2") &&
+		      file_has("/run/onu.conf", "_allow_lans_internet:2001:db8::/32") &&
+		      strstr(s, "\"rules\":[{\"id\":3,"),
+	      "a network removed takes the rules that name it or its devices");
+
+	/* 96 rules, and no 97th. */
+	for (int i = 1; i <= 96; i++)
+		at += (size_t)snprintf(many + at, sizeof(many) - at,
+				       "RULE%d=%d_block_lan:1_internet_tcp_%d_any_on\n", i, i, 1000 + i);
+	rc = prov_settings_set(many, err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && rule_at(s, 96) && big_file_has("/run/onu.conf", "RULE96="),
+	      "96 rules are taken");
+	check(prov_rule_set("ACTION=allow\nFROM=lans\nTO=internet\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "all 96 rules are taken"),
+	      "and a 97th is refused, as the panel's stand-in refuses it");
+	rc = prov_rule_set("ID=1\nACTION=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_rule_set("ACTION=allow\nFROM=lans\nTO=internet\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && big_file_has("/run/onu.conf", "RULE96=1_allow_lans_internet_any__any_on") &&
+		      big_file_has("/run/onu.conf", "RULE1=2_block"),
+	      "one taken away makes room at the end, and the new rule takes the first free ID");
+
+	unlink(prov_path("/run/udhcpd-net1.leases", file, sizeof(file)));
+	prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	(void)s;
+	unsetenv("POND_ONU_APPLY");
+}
+
 /* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
 static const char update_stub[] =
 	"#!/bin/sh\n"
@@ -3211,6 +3429,7 @@ int main(void)
 	test_session_pass();
 	test_largest_settings();
 	test_forwards();
+	test_rules();
 	test_omci();
 	test_omci_frames();
 	test_system();

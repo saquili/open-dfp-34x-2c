@@ -56,6 +56,12 @@ const struct prov pond_provs[] = {
 	{ "dmz", "Mode",
 	  "A connection's DMZ, the device that takes what no forward takes: "
 	  "set or remove", NULL, prov_dmz_write, 0 },
+	{ "rule", "Mode",
+	  "A rule of the firewall: add, change, remove or move one place", NULL,
+	  prov_rule_write, 0 },
+	{ "fw", "Mode",
+	  "What the firewall does where no rule decides: to the internet and "
+	  "between the local networks", NULL, prov_fw_write, 0 },
 	{ "settings", "Mode",
 	  "The data path: the sessions and where they hand their addresses down, "
 	  "kept in the configuration store",

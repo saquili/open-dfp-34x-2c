@@ -296,6 +296,21 @@ wrong sign-in, 429 while sign-ins are stopped.
   address taken away, the device's. They take no entry of the switch's
   ACL table: netfilter translates a connection's first packet, and its
   flowtable then offers the flow to the switch as any other.
+* ``rule``: a rule of the firewall, the first that traffic matches deciding:
+  ``ID`` (none adds one at the end, with the ID after the largest),
+  ``NAME``, ``ACTION`` (``allow`` or ``block``; empty removes the rule),
+  ``FROM`` and ``TO`` (``internet``, ``internet:ADDR``, ``lans``, ``lan:N``
+  or ``dev:N:MAC``), ``PROTO`` (``any``, ``tcp``, ``udp``, ``both`` or
+  ``icmp``), ``PORTS`` (a port or ``A-B``), ``FAMILY`` (``any``, ``ipv4``
+  or ``ipv6``) and ``ON``; ``MOVE=up`` or ``MOVE=down`` with ``ID`` moves it
+  one place. A rule keeps its ID wherever it moves; 96 at most. A device a
+  rule goes to keeps its address, as a forward's does; a network removed
+  takes the rules that name it or a device of it, and a fixed address taken
+  away the rules that go to its device. ``fw``: what the firewall does where
+  no rule decides, ``OUT`` to the internet and ``BETWEEN`` the networks,
+  ``allow`` or ``block``. A read gives them as ``rules``, in their order,
+  and ``fw``. The rules are the switch's ACL's, the defaults netfilter's;
+  a rule that allows opens netfilter's default for IPv4 as well (ADR 0023).
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
   ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION``,
