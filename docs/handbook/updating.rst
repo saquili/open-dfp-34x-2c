@@ -253,8 +253,8 @@ boot").
 
 This way in has tests on the host, which run ``fwu.sh`` against stand-ins of
 the stick's partitions and tools (``br2-external/tests/image/test_mkweb.py``),
-and was measured on a stick on 2026-10-19 (M), with the shipped firmware
-V1.2.2-221209 running from bank 1 and a package of this system built that
+and was measured on a stick on 2026-10-19 (M), with a later build of the
+shipped firmware running from bank 1 and a package of this system built that
 day (3338240 bytes):
 
 * The page took the package and ran ``fwu.sh``, which logged ``into bank 0``,
@@ -277,14 +277,14 @@ day (3338240 bytes):
   round trip.
 
 The same day both were measured on a stick whose whole flash, but for the
-boot loader, held a copy of a stick as it was sold: the shipped firmware
-V1.0-220923 in bank 0, V1.0-220304 in bank 1, and the shipped firmware's own
-files in ``config``, with no file of this system. The package was one of that
+boot loader, held a copy of a stick as it was sold: the build of the shipped
+firmware it was sold with in bank 0, an earlier one in bank 1, and the
+shipped firmware's own files in ``config``, with no file of this system. The package was one of that
 day, built without a bench's files but for the console's login (3338240
 bytes):
 
-* The page of V1.0-220923 took the package, and ``fwu.sh`` logged ``into bank
-  1``, the bank the shipped firmware did not run. This system came up from
+* The shipped firmware's page took the package, and ``fwu.sh`` logged ``into
+  bank 1``, the bank the shipped firmware did not run. This system came up from
   bank 1, reached O5 9.4 seconds after the kernel started and committed its
   bank.
 * At this first start it took the serial number, the vendor ID and the PLOAM
@@ -295,20 +295,20 @@ bytes):
   written them.
 * With ``sw_commit`` set to 0 and a restart, the shipped firmware started
   from bank 0 with its own files, and its factory login opened its page.
-* After its start the shipped firmware V1.0-220923 looks for the mode of the
-  host link (SGMII, 2.5 Gbit/s SGMII, 1000BASE-X) over and over: the link was
-  down for some 64 seconds at a time, between spells of 43 seconds to two
-  minutes with the page reachable. With the host's port set to 1000BASE-X
-  without autonegotiation it kept the link, and the page answered throughout.
+* With the host's port at 2500BASE-X the link to the shipped firmware went
+  down for about a minute at a time, and its page was reachable in between.
+  With the host's port at 1000BASE-X without autonegotiation the link stayed
+  up and the page answered throughout: set the host's port so for an
+  install.
 
 It was measured again on the same copy with a later package of that day,
 whose first start also takes root's password, the host link's address and
 its MAC address from the shipped firmware's files, the host's port at
 1000BASE-X:
 
-* On the page of V1.0-220923 its owner changed the administrator's password,
-  which the shipped firmware wrote to its files, and the page took the
-  package into bank 1.
+* On the shipped firmware's page its owner changed the administrator's
+  password, which the shipped firmware wrote to its files, and the page took
+  the package into bank 1.
 * At the first start this system took that password for root's: the panel
   signed its owner in with it and asked for no new one. The host link and
   the switch's ports took the MAC address of the shipped firmware's files,
@@ -316,7 +316,9 @@ its MAC address from the shipped firmware's files, the host's port at
 * The host link took the address of the shipped firmware's files as well, but
   answered nothing there: the OLT's service had put the host link in a bridge
   with a GEM port, where an address of the port itself takes no traffic. The
-  panel was reached on the management VLAN.
+  panel was reached on the management VLAN. Since then the shipped firmware's
+  address is the management VLAN's, VLAN 4094, and the host link itself has
+  none.
 * With ``sw_commit`` set to 0 and a restart, the shipped firmware started
   from bank 0, and the password its owner had set signed them in to its page.
 
@@ -339,9 +341,16 @@ and asks before it writes over it. ``onu-update write`` on the command line
 does not ask. The first update writes this system there, and the shipped
 firmware is gone; the way back with it.
 
-Keep a copy of the whole flash before the first update (``backup.rst``). The
-copy holds the unit's registration identity and this system's secrets: keep it
-private. ``backup.rst``, "Writing it back", says how to write it back.
+Keep a copy of the whole flash before the first update: the panel's System
+page makes one with "Copy the whole flash" (``backup.rst``). The copy holds
+the unit's registration identity and this system's secrets: keep it private.
+``backup.rst``, "Writing it back", says how to write it back.
+
+While the other bank holds the shipped firmware, the same page has "Go back to
+the shipped firmware", which asks for root's password, commits that bank and
+restarts, so that this start and every one after it are the shipped
+firmware's, with its own settings (``POST /api/firmware/return``, ``onu-update return``).
+It refuses a bank whose kernel is not whole.
 
 A store from before 2026-10-11
 ==============================

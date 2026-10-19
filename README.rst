@@ -179,8 +179,8 @@ it, and have been tried by hand.
        their own files and left this system's alone (by hand)
    * - Install through the shipped firmware's web page
      - 🟡 Bench
-     - On 2026-10-19, from V1.2.2-221209 and from V1.0-220923 on a copy of a
-       stick as sold: the identity, the MAC address and the administrator's
+     - On 2026-10-19, from two builds of the shipped firmware, one of them on
+       a copy of a stick as sold: the identity, the MAC address and the administrator's
        password taken, and the way back to the shipped firmware with its
        settings (by hand)
    * - The panel's copy of the whole flash, and its way back to the shipped

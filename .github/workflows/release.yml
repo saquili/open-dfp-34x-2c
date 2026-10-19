@@ -11,9 +11,10 @@
 # named by the image's own version, the time of the commit in UTC
 # (post-build.sh): its tag is v2026.10.19-2130 for 2026.10.19-2130. The last
 # job, the only one that may write to the repository, makes a draft release of
-# that tag on that commit, with the files and their SHA-256 digests, for a
-# person to test on a stick and publish; the tag comes into being when it is
-# published. Nothing built elsewhere goes into a release.
+# that tag on that commit, marked as a pre-release (a test build), with the
+# files and their SHA-256 digests, for a person to test on a stick and
+# publish; the tag comes into being when it is published. Nothing built
+# elsewhere goes into a release.
 
 name: release
 
@@ -196,8 +197,10 @@ jobs:
         # is released once.
         run: |
           cat > notes.md <<EOF
-          The images of commit ${GITHUB_SHA}, built twice and compared by
-          this repository's release workflow (run ${GITHUB_RUN_ID}).
+          A test build: the images of commit ${GITHUB_SHA}, built twice
+          and compared by this repository's release workflow (run
+          ${GITHUB_RUN_ID}), and tested on one stick and one line before
+          they were published.
 
           - \`web-install.tar\`: installs this system through the shipped
             firmware's web page (docs/handbook/updating.rst).
@@ -214,4 +217,4 @@ jobs:
           EOF
           cd dist
           gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --draft --title "open-dfp-34x-2c $VERSION" --notes-file ../notes.md -- *
+            --draft --prerelease --title "open-dfp-34x-2c $VERSION" --notes-file ../notes.md -- *
