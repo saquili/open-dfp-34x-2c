@@ -179,8 +179,8 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The ACL, the classifier entries, the meters, storm control, the ingress
        policer, the scheduler and the shaper, the priority maps, and the debugfs
-       views ``cf``, ``qos``, ``qdepth`` and ``egress_capture``. The L3/NAT engine of the
-       same file is the *l3-nat* page's, and its views ``rma``, ``svlan`` and
+       views ``cf``, ``qos``, ``qdepth``, ``egress_capture`` and ``fsel``. The
+       L3/NAT engine of the same file is the *l3-nat* page's, and its views ``rma``, ``svlan`` and
        ``l2learn`` are the *bridging* page's.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - The steps of ``rtl9602c_setup()`` that reset or arm these blocks, the
@@ -263,9 +263,10 @@ Interfaces to user space
 - ``devlink`` on the handle ``platform/1b000000.switch``: the parameters
   ``dos_*``, ``storm_*``, ``loop_detect*`` and ``pktdbg_*``, and the region
   ``frame_capture``. The *devlink* page lists the parameters.
-- Four debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``cf`` and ``qos``
-  (mode 0400), ``qdepth`` and ``egress_capture`` (mode 0600, because a write changes the
-  hardware). ``qos`` shows, raw, the words that setup returns to their reset
+- Five debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``cf`` and ``qos``
+  (mode 0400), ``qdepth``, ``egress_capture`` and ``fsel`` (mode 0600,
+  because a write changes the hardware); ``fsel`` lists the field selectors
+  (see "The parser's field selectors"). ``qos`` shows, raw, the words that setup returns to their reset
   values: per port the priority-to-queue word, the scheduler's weighted-queue
   bits, the queue weights, the egress shaper and the ingress policer; then the
   ACL's port enables and default permits, the classifier's control word, port
@@ -749,9 +750,12 @@ to an ACL rule.
        ports, and the type and code of ICMP and ICMPv6 (see "The parser's
        field selectors"); the EtherType of a PPPoE session, which flower
        carries in its PPPoE key rather than as the EtherType, compared as the
-       EtherType; or an 802.1Q tag, its VID from 1 to 4094 and its priority if
-       named, with the MAC addresses and nothing else, since what the other
-       fields hold for a tagged frame is not verified. Each field is
+       EtherType, with the session's number and, as IPv4, the PPP protocol,
+       and behind that the IP protocol, IPv4 addresses, L4 ports and ICMP type
+       and code, all through the PPPoE field selectors; or an 802.1Q tag,
+       its VID from 1 to 4094 and its priority if named, with the MAC
+       addresses and nothing else, since a C-tag compared together with the
+       other fields is not verified. Each field is
        cut into 16-bit slots and a slot whose mask is zero is left out. The IP
        protocol of an IPv6 rule, one with the exact EtherType ``0x86dd``, is
        compared in ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, which holds the
@@ -769,8 +773,8 @@ to an ACL rule.
        port); more than eight slots; an L4 port or an ICMP type without an
        exact IPv4 or IPv6 EtherType and an exact IP protocol; a tag rule on VID
        0 (an untagged frame reads 0), on an 802.1ad tag, on what follows the
-       tag, or with any field but the addresses; a PPPoE session's number or
-       PPP protocol. Refused with
+       tag, or with any field but the addresses; a PPP protocol other than
+       IPv4. Refused with
        ``-ENOSPC``: no template
        covers the fields and none is free; all 96 entries are in use, four of
        them by the driver's own rules (see "Rules of the driver's own").
@@ -814,7 +818,9 @@ to an ACL rule.
        ``nstat``), traffic routed by the stick both ways.
    * - The IPv4 fields do not reach into a PPPoE session frame: they hold no
        IPv4 addresses for one, so a rule on them misses the IPv4 that a PPPoE
-       session carries.
+       session carries. A flower rule on ``protocol ppp_ses`` with
+       ``ppp_proto ip`` compares it through the PPPoE field selectors instead
+       (see "The parser's field selectors").
      - M
      - On ``pon``, ``src_ip 203.0.113.1 ip_proto icmp`` counted none of 20 echo
        replies that the concentrator sent over a PPPoE session in VLAN 2001,
@@ -1012,6 +1018,35 @@ of a UDP or TCP header, at the start of the IP payload, and never changes them.
        hop-by-hop header's next header (``0x3a00``); at offset 8, nothing
        matched the type. At origin 5 offset 6, the window held ``0x0001``, the
        next header 0 and the hop limit 1.
+   * - Origin ``RTL9602C_FIELDSEL_CFG_ORIGIN_PPPOE`` (2) is the start of the
+       PPPoE header of a session frame, behind any C-tag. At setup
+       (``rtl9602c_fsel_pppoe_setup()``) the driver points nine selectors
+       there: ``RTL9602C_FSEL_PPPOE_SID`` at offset 2, the session's number;
+       ``RTL9602C_FSEL_PPP_PROTO`` at 6, the PPP protocol; and into the IPv4
+       header that starts at 8, ``RTL9602C_FSEL_PPPOE_TTL_PROTO`` at 16 (the
+       protocol in the low octet), the source address at 20 and 22, the
+       destination at 24 and 26, and, for a header of five words, the L4
+       ports, or an ICMP type and code, at 28 and 30. A flower rule on
+       ``protocol ppp_ses`` compares its session, ``ppp_proto ip`` and the
+       fields behind it through them.
+     - M
+     - On ``pon``, echo replies from the concentrator over a PPPoE session in
+       VLAN 2001: ``ppp_proto ip src_ip 203.0.113.1 dst_ip 203.0.113.22 ip_proto
+       icmp type 0 code 0`` counted 20 of 20, the same rule on ``src_ip
+       203.0.113.2`` none; ``pppoe_sid 4800 ppp_proto ip ip_proto icmp``
+       counted 10 of 10 and the stick's other session, 4864, none. The
+       destination port's window, at 30, is inferred from the source port's
+       at 28 and the UDP and TCP layouts below.
+   * - The PPPoE windows assume an IPv4 header of five words: behind a longer
+       one, with options, the L4 windows hold option octets and a port or ICMP
+       match misses.
+     - I
+     - RFC 791, section 3.1, "Internet Header Length"; not measured.
+   * - ``fsel`` (debugfs, mode 0600) lists the 16 selectors as "<n> <origin>
+       <offset>"; writing the same three numbers points selector n elsewhere,
+       for measurement, and setup restores the driver's selectors.
+     - M
+     - The listing read after setup; not used to move a selector yet.
    * - UDP and TCP headers carry the source port in octets 0-1 and the
        destination port in octets 2-3.
      - P

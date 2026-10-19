@@ -52,6 +52,7 @@
 #include <linux/etherdevice.h>
 #include <linux/if_vlan.h>
 #include <linux/if_pppox.h>
+#include <linux/ppp_defs.h>
 #include <linux/inet.h>
 #include <linux/inetdevice.h>
 #include <net/netevent.h>
@@ -2283,6 +2284,18 @@ static int rtl9602c_acl_ctag(struct flow_rule *rule,
 	return 0;
 }
 
+/* An IPv4 address inside a PPPoE session, through its two selectors. */
+static void rtl9602c_acl_pppoe_addr(struct rtl9602c_acl_match *m, u8 hi,
+				    u8 lo, u32 v, u32 c)
+{
+	if (c >> 16)
+		rtl9602c_acl_push(m, RTL9602C_ACL_TMPL_FIELD_USER0 + hi,
+				  v >> 16, c >> 16);
+	if (c & 0xffffu)
+		rtl9602c_acl_push(m, RTL9602C_ACL_TMPL_FIELD_USER0 + lo,
+				  v & 0xffff, c & 0xffff);
+}
+
 /*
  * A flower rule whose one action is drop, trap or pass, as one ACL rule; a rule
  * that passes mirrors its frames to no port, so that they go on as the switch
@@ -2301,7 +2314,7 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	struct netlink_ext_ack *extack = cls->common.extack;
 	struct flow_rule *rule = flow_cls_offload_flow_rule(cls);
 	struct rtl9602c_acl_match m = {};
-	bool ipv4 = false, ipv6 = false, ipproto = false;
+	bool ipv4 = false, ipv6 = false, ipproto = false, pppoe = false;
 	int err;
 
 	if (rule->match.dissector->used_keys &
@@ -2320,22 +2333,34 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	}
 
 	/*
-	 * A rule on the EtherType of a PPPoE session carries it as the type of
-	 * the PPPoE key, the basic EtherType left out; the session and the PPP
-	 * protocol behind it are not matched.
+	 * A rule on a PPPoE session carries its EtherType as the type of the
+	 * PPPoE key, the basic EtherType left out or set to the PPP protocol's.
+	 * The session and the PPP protocol are compared through the PPPoE
+	 * selectors, and with the PPP protocol IPv4 so are the protocol,
+	 * addresses and ports behind it (see RTL9602C_FSEL_PPPOE_SID).
 	 */
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PPPOE)) {
-		struct flow_match_pppoe pppoe;
+		struct flow_match_pppoe ppp;
 
-		flow_rule_match_pppoe(rule, &pppoe);
-		if (pppoe.mask->session_id || pppoe.mask->ppp_proto) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "a PPPoE rule matches the EtherType of the session alone");
-			return -EOPNOTSUPP;
-		}
+		flow_rule_match_pppoe(rule, &ppp);
 		rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
-				  ntohs(pppoe.key->type),
-				  ntohs(pppoe.mask->type));
+				  ntohs(ppp.key->type), ntohs(ppp.mask->type));
+		if (ppp.mask->session_id)
+			rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_USER0 +
+					  RTL9602C_FSEL_PPPOE_SID,
+					  ntohs(ppp.key->session_id),
+					  ntohs(ppp.mask->session_id));
+		if (ppp.mask->ppp_proto) {
+			if (ppp.key->ppp_proto != htons(PPP_IP)) {
+				NL_SET_ERR_MSG_MOD(extack,
+						   "a PPPoE rule names no PPP protocol or IPv4");
+				return -EOPNOTSUPP;
+			}
+			rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_USER0 +
+					  RTL9602C_FSEL_PPP_PROTO, PPP_IP, 0xffff);
+			ipv4 = true;
+		}
+		pppoe = true;
 	}
 
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN)) {
@@ -2372,7 +2397,7 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 		struct flow_match_basic basic;
 
 		flow_rule_match_basic(rule, &basic);
-		if (basic.mask->n_proto) {
+		if (basic.mask->n_proto && !pppoe) {
 			rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
 					  ntohs(basic.key->n_proto),
 					  ntohs(basic.mask->n_proto));
@@ -2386,7 +2411,13 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 		 * holds the protocol behind any extension headers, as the
 		 * flower match does.
 		 */
-		if (basic.mask->ip_proto) {
+		if (basic.mask->ip_proto && pppoe) {
+			rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_USER0 +
+					  RTL9602C_FSEL_PPPOE_TTL_PROTO,
+					  basic.key->ip_proto,
+					  basic.mask->ip_proto);
+			ipproto = basic.mask->ip_proto == 0xff;
+		} else if (basic.mask->ip_proto) {
 			ipv6 = basic.mask->n_proto == htons(0xffff) &&
 			       basic.key->n_proto == htons(ETH_P_IPV6);
 			rtl9602c_acl_push(&m, ipv6 ?
@@ -2416,6 +2447,17 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 		u32 v, c;
 
 		flow_rule_match_ipv4_addrs(rule, &ip);
+		if (pppoe) {
+			rtl9602c_acl_pppoe_addr(&m, RTL9602C_FSEL_PPPOE_SRC_HI,
+						RTL9602C_FSEL_PPPOE_SRC_LO,
+						ntohl(ip.key->src),
+						ntohl(ip.mask->src));
+			rtl9602c_acl_pppoe_addr(&m, RTL9602C_FSEL_PPPOE_DST_HI,
+						RTL9602C_FSEL_PPPOE_DST_LO,
+						ntohl(ip.key->dst),
+						ntohl(ip.mask->dst));
+			goto no_addrs;
+		}
 		v = ntohl(ip.key->src);
 		c = ntohl(ip.mask->src);
 		if (c & 0xffffu)
@@ -2449,13 +2491,15 @@ no_addrs:
 		if (ports.mask->src)
 			rtl9602c_acl_push(&m,
 					  RTL9602C_ACL_TMPL_FIELD_USER0 +
-					  RTL9602C_FSEL_SPORT,
+					  (pppoe ? RTL9602C_FSEL_PPPOE_SPORT :
+					   RTL9602C_FSEL_SPORT),
 					  ntohs(ports.key->src),
 					  ntohs(ports.mask->src));
 		if (ports.mask->dst)
 			rtl9602c_acl_push(&m,
 					  RTL9602C_ACL_TMPL_FIELD_USER0 +
-					  RTL9602C_FSEL_DPORT,
+					  (pppoe ? RTL9602C_FSEL_PPPOE_DPORT :
+					   RTL9602C_FSEL_DPORT),
 					  ntohs(ports.key->dst),
 					  ntohs(ports.mask->dst));
 	}
@@ -2479,7 +2523,8 @@ no_addrs:
 		if (icmp.mask->type || icmp.mask->code)
 			rtl9602c_acl_push(&m,
 					  RTL9602C_ACL_TMPL_FIELD_USER0 +
-					  RTL9602C_FSEL_SPORT,
+					  (pppoe ? RTL9602C_FSEL_PPPOE_SPORT :
+					   RTL9602C_FSEL_SPORT),
 					  icmp.key->type << 8 | icmp.key->code,
 					  icmp.mask->type << 8 |
 					  icmp.mask->code);
@@ -2527,6 +2572,46 @@ out:
  */
 #define RTL9602C_ACL_SNOOP_PRIO		U16_MAX
 #define RTL9602C_ACL_SNOOP_COOKIE(i)	(1UL + (i))
+
+/* The windows of the PPPoE selectors, from the start of the PPPoE header. */
+static const struct {
+	u8 sel;
+	u8 offset;
+} rtl9602c_fsel_pppoe[] = {
+	{ RTL9602C_FSEL_PPPOE_SID,	 2 },
+	{ RTL9602C_FSEL_PPP_PROTO,	 6 },
+	{ RTL9602C_FSEL_PPPOE_TTL_PROTO, 16 },
+	{ RTL9602C_FSEL_PPPOE_SRC_HI,	20 },
+	{ RTL9602C_FSEL_PPPOE_SRC_LO,	22 },
+	{ RTL9602C_FSEL_PPPOE_DST_HI,	24 },
+	{ RTL9602C_FSEL_PPPOE_DST_LO,	26 },
+	{ RTL9602C_FSEL_PPPOE_SPORT,	28 },
+	{ RTL9602C_FSEL_PPPOE_DPORT,	30 },
+};
+
+/**
+ * rtl9602c_fsel_pppoe_setup() - point field selectors into PPPoE sessions
+ * @p: the switch
+ *
+ * The fixed IPv4 fields hold nothing for the IPv4 that a PPPoE session
+ * carries, so a flower rule on it is compared through these windows: the
+ * session, the PPP protocol, and the protocol, addresses and ports of the IPv4
+ * header behind it (see RTL9602C_FSEL_PPPOE_SID).
+ *
+ * Context: setup.
+ */
+void rtl9602c_fsel_pppoe_setup(struct rtl9602c_priv *p)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(rtl9602c_fsel_pppoe); i++)
+		rtl9602c_w(p, RTL9602C_FIELDSEL_CFG +
+			   4 * rtl9602c_fsel_pppoe[i].sel,
+			   FIELD_PREP(RTL9602C_FIELDSEL_CFG_OFFSET,
+				      rtl9602c_fsel_pppoe[i].offset) |
+			   FIELD_PREP(RTL9602C_FIELDSEL_CFG_ORIGIN,
+				      RTL9602C_FIELDSEL_CFG_ORIGIN_PPPOE));
+}
 
 /**
  * rtl9602c_acl_snoop_setup() - copy IGMP and MLD to the CPU for snooping
@@ -7290,6 +7375,67 @@ static ssize_t rtl9602c_l3capture_write(struct file *file, const char __user *ub
 	return len;
 }
 
+/*
+ * fsel: the 16 user field selectors, each as "<n> <origin> <offset>". Writing
+ * the same three numbers points selector n elsewhere, for measurement: the
+ * rules that compare its window then compare the new one, and setup restores
+ * the driver's selectors.
+ */
+static int rtl9602c_fsel_show(struct seq_file *s, void *unused)
+{
+	struct rtl9602c_priv *p = s->private;
+	unsigned int n;
+	u32 v;
+
+	for (n = 0; n < RTL9602C_FIELDSEL_COUNT; n++) {
+		v = rtl9602c_r(p, RTL9602C_FIELDSEL_CFG + 4 * n);
+		seq_printf(s, "%2u %lu %3lu\n", n,
+			   FIELD_GET(RTL9602C_FIELDSEL_CFG_ORIGIN, v),
+			   FIELD_GET(RTL9602C_FIELDSEL_CFG_OFFSET, v));
+	}
+	return 0;
+}
+
+static int rtl9602c_fsel_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rtl9602c_fsel_show, inode->i_private);
+}
+
+static ssize_t rtl9602c_fsel_write(struct file *file, const char __user *ubuf,
+				   size_t len, loff_t *ppos)
+{
+	struct rtl9602c_priv *p = file_inode(file)->i_private;
+	unsigned int n, origin, offset;
+	char buf[32];
+
+	if (len >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, len))
+		return -EFAULT;
+	buf[len] = '\0';
+
+	if (sscanf(strim(buf), "%u %u %u", &n, &origin, &offset) != 3 ||
+	    n >= RTL9602C_FIELDSEL_COUNT ||
+	    origin > FIELD_MAX(RTL9602C_FIELDSEL_CFG_ORIGIN) ||
+	    offset > FIELD_MAX(RTL9602C_FIELDSEL_CFG_OFFSET))
+		return -EINVAL;
+
+	rtl9602c_w(p, RTL9602C_FIELDSEL_CFG + 4 * n,
+		   FIELD_PREP(RTL9602C_FIELDSEL_CFG_OFFSET, offset) |
+		   FIELD_PREP(RTL9602C_FIELDSEL_CFG_ORIGIN, origin));
+	pr_info("fsel: selector %u at origin %u offset %u\n", n, origin, offset);
+	return len;
+}
+
+static const struct file_operations rtl9602c_fsel_fops = {
+	.owner		= THIS_MODULE,
+	.open		= rtl9602c_fsel_open,
+	.read		= seq_read,
+	.write		= rtl9602c_fsel_write,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 static const struct file_operations rtl9602c_l3capture_fops = {
 	.owner		= THIS_MODULE,
 	.open		= rtl9602c_l3capture_open,
@@ -7652,8 +7798,8 @@ void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p)
  * @p: the switch, with its debugfs directory created
  *
  * Creates rma, svlan, l3nat, l3flow, l2learn, qos and cf, mode 0400, and
- * qdepth, egress_capture and l3capture, mode 0600, since a write to them changes the
- * hardware's state.
+ * qdepth, egress_capture, l3capture and fsel, mode 0600, since a write to them
+ * changes the hardware's state.
  */
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 {
@@ -7676,6 +7822,7 @@ void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_cf_fops);
 	debugfs_create_file("l3capture", 0600, p->debugfs, p,
 			    &rtl9602c_l3capture_fops);
+	debugfs_create_file("fsel", 0600, p->debugfs, p, &rtl9602c_fsel_fops);
 }
 
 #if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_KUNIT_TEST)

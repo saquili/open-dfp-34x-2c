@@ -1696,6 +1696,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 		   FIELD_PREP(RTL9602C_FIELDSEL_CFG_OFFSET, 2) |
 		   FIELD_PREP(RTL9602C_FIELDSEL_CFG_ORIGIN,
 			      RTL9602C_FIELDSEL_CFG_ORIGIN_IP_PAYLOAD));
+	rtl9602c_fsel_pppoe_setup(p);
 
 	/* IGMP and MLD reach the bridge for multicast snooping. */
 	rtl9602c_acl_snoop_setup(p);

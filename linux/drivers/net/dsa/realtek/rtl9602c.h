@@ -971,12 +971,32 @@ enum rtl9602c_ptp_tc {
  * type and code of an ICMPv6 message.
  */
 #define RTL9602C_FIELDSEL_CFG	0x023144
+#define RTL9602C_FIELDSEL_COUNT	16
 #define RTL9602C_FIELDSEL_CFG_OFFSET	GENMASK(10, 3)
 #define RTL9602C_FIELDSEL_CFG_ORIGIN	GENMASK(2, 0)
+#define RTL9602C_FIELDSEL_CFG_ORIGIN_PPPOE	2
 #define RTL9602C_FIELDSEL_CFG_ORIGIN_IP_PAYLOAD	6
 #define RTL9602C_ACL_TMPL_FIELD_USER0		0x40
 #define RTL9602C_FSEL_SPORT		0
 #define RTL9602C_FSEL_DPORT		1
+
+/*
+ * Selectors into a PPPoE session frame, whose IPv4 the fixed IPv4 fields miss.
+ * ORIGIN_PPPOE is the start of the PPPoE header (measured): the session ID at
+ * octet 2, the PPP protocol at 6, and from octet 8 an IPv4 header (RFC 2516
+ * section 4; RFC 1661 section 2), its TTL and protocol at 16, source address at
+ * 20, destination at 24, and, for a header of five words, the L4 ports at 28
+ * and 30.
+ */
+#define RTL9602C_FSEL_PPPOE_SID		2
+#define RTL9602C_FSEL_PPP_PROTO		3
+#define RTL9602C_FSEL_PPPOE_TTL_PROTO	4
+#define RTL9602C_FSEL_PPPOE_SRC_HI	5
+#define RTL9602C_FSEL_PPPOE_SRC_LO	6
+#define RTL9602C_FSEL_PPPOE_DST_HI	7
+#define RTL9602C_FSEL_PPPOE_DST_LO	8
+#define RTL9602C_FSEL_PPPOE_SPORT	9
+#define RTL9602C_FSEL_PPPOE_DPORT	10
 
 /*
  * ACL rules and templates; template 7 matches nothing. A rule is two entries:
@@ -2599,6 +2619,7 @@ void rtl9602c_l2_moves_init(struct rtl9602c_priv *p);
 void rtl9602c_mcast_refresh(struct rtl9602c_priv *p);
 void rtl9602c_gem_hosts_sync(struct rtl9602c_priv *p);
 void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p);
+void rtl9602c_fsel_pppoe_setup(struct rtl9602c_priv *p);
 void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p);
 int rtl9602c_port_bridge_join(struct dsa_switch *ds, int port, struct dsa_bridge bridge,
 			      bool *tx_fwd_offload, struct netlink_ext_ack *extack);
