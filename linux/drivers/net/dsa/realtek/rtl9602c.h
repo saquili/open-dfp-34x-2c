@@ -601,8 +601,8 @@ struct rtl9602c_field {
 #define RTL9602C_NAPT_VALID		RTL9602C_FIELD(12, 1)
 
 /*
- * Inbound NAPT entry. The engine does not check REMOTE_HASH on replies, and
- * that TCP is 1 for a TCP flow is not verified.
+ * Inbound NAPT entry. The engine does not check REMOTE_HASH on replies, the
+ * outbound lookup does, and that TCP is 1 for a TCP flow is not verified.
  */
 #define RTL9602C_NAPT_IN_INTERNAL_ADDR		RTL9602C_FIELD(0, 32)
 #define RTL9602C_NAPT_IN_INTERNAL_PORT		RTL9602C_FIELD(32, 16)

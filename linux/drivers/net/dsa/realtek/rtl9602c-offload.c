@@ -4119,8 +4119,9 @@ static unsigned int rtl9602c_napt_bucket(u32 lip, u16 lport, u32 rip, u16 rport,
 
 /*
  * A 16-bit digest of the remote end, kept in the inbound entry. The engine does
- * not check it on replies; the function, and whether the outbound lookup
- * compares the field, are not verified.
+ * not check it on replies, but the outbound lookup compares it with the
+ * digest of the frame's remote end: a flow pointing at an entry with another
+ * remote end's digest is not carried.
  */
 static u16 rtl9602c_napt_rem_hash(u32 rip, u16 rport)
 {
@@ -6425,15 +6426,21 @@ static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 			continue;
 		}
 		/*
-		 * The remote end is no input of the inbound hash and the engine
-		 * ignores the digest, so replies to two flows sharing external
+		 * The remote end is no input of the inbound hash and replies
+		 * ignore the digest, so replies to two flows sharing external
 		 * port, address row and protocol could not be told apart: this
-		 * flow stays in software. That entries differing in these are
-		 * told apart is not verified.
+		 * flow stays in software. Unless both go back to the same LAN
+		 * address and port, as the connections to a forwarded port do:
+		 * either entry translates a reply right, and this flow takes
+		 * its own in another way, since its outbound frames must find
+		 * their own digest. That entries differing in these are told
+		 * apart is not verified.
 		 */
 		if (rtl9602c_flow_get(e, RTL9602C_NAPT_IN_EXTERNAL_PORT) == extport &&
 		    rtl9602c_flow_get(e, RTL9602C_NAPT_IN_EXTADDR_IDX) == extidx &&
-		    rtl9602c_flow_get(e, RTL9602C_NAPT_IN_TCP) == tcp) {
+		    rtl9602c_flow_get(e, RTL9602C_NAPT_IN_TCP) == tcp &&
+		    (rtl9602c_flow_get(e, RTL9602C_NAPT_IN_INTERNAL_ADDR) != lip ||
+		     rtl9602c_flow_get(e, RTL9602C_NAPT_IN_INTERNAL_PORT) != lport)) {
 			pr_debug("<flow> %pI4:%u is napt-in %u's external port too; declining, the engine could not tell their replies apart\n",
 				 &extip, extport, idx);
 			goto out;
