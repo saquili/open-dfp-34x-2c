@@ -94,14 +94,18 @@ Consequences
     takes two, and a rule to the internet more.
   - The ACL's IPv4 fields do not reach into a PPPoE session's frames
     (measured 2026-10-19, the table's rows for tagged, GEM and PPPoE
-    frames): a rule on the addresses of what comes in from the internet by
-    a session cannot be judged at the PON's port; frames of the networks on
-    the host link, tagged or not, and of an IPoE connection's GEM port are.
+    frames). The driver compares the IPv4 that a session carries through
+    field selectors instead, since 3da08e03a: a flower rule on
+    ``protocol ppp_ses`` with ``ppp_proto ip`` names its addresses, protocol
+    and ports, measured on the PON's port the same day. So a rule on what
+    comes in from the internet by a session is judged there too, as frames
+    of the networks on the host link, tagged or not, and of an IPoE
+    connection's GEM port are.
   - What comes in from the internet carries the stick's address until
     netfilter translates it for a forward or the DMZ, after the ACL judged
     the frame.
 
-  How part 2 meets the last two is its own to decide.
+  How part 2 meets the last one is its own to decide.
 * Between the networks the default is now to block: networks that reached
   each other through the stick before no longer do, unless a rule or
   ``FW_BETWEEN=allow`` lets them.
