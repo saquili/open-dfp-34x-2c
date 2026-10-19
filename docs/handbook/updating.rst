@@ -274,6 +274,30 @@ bytes):
   firmware's files, and the shipped firmware's own settings kept across the
   round trip.
 
+The same day both were measured on a stick whose whole flash, but for the
+boot loader, held a copy of a stick as it was sold: the shipped firmware
+V1.0-220923 in bank 0, V1.0-220304 in bank 1, and the shipped firmware's own
+files in ``config``, with no file of this system. The package was the one of
+0182c973dbf1, built without a bench's files but for the console's login
+(3338240 bytes):
+
+* The page of V1.0-220923 took the package, and ``fwu.sh`` logged ``into bank
+  1``, the bank the shipped firmware did not run. This system came up from
+  bank 1, reached O5 9.4 seconds after the kernel started and committed its
+  bank.
+* At this first start it took the serial number, the vendor ID and the PLOAM
+  password from the shipped firmware's files, the values of
+  ``lastgood_hs.xml`` and ``lastgood.xml``. Its own file in ``config`` held
+  the panel's TLS key and the ssh server's host key and nothing else, and the
+  shipped firmware's files kept the times the shipped firmware had last
+  written them.
+* With ``sw_commit`` set to 0 and a restart, the shipped firmware started
+  from bank 0 with its own files, and its factory login opened its page.
+* After its start the shipped firmware V1.0-220923 looks for the mode of the
+  host link (SGMII, 2.5 Gbit/s SGMII, 1000BASE-X) over and over: the link was
+  down for some 64 seconds at a time, between spells of 43 seconds to two
+  minutes with the page reachable.
+
 The new system finds the shipped firmware's files in the partition
 ``config``, mounts them, takes the identity from them and starts with its
 settings' defaults, which it then keeps in a file of its own there
