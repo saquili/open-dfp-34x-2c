@@ -119,6 +119,17 @@ class WithAStandIn(Scratch):
         self.assertEqual(data[256 + len(kernel):-32], rootfs)
         self.assertEqual(data[-32:], hashlib.sha256(data[:-32]).digest())
 
+    def test_the_update_files_carry_the_version_a_person_reads(self):
+        # VERSION_ID, where the image has one, over BUILD_ID.
+        with open(os.path.join(self.target, "etc", "os-release"), "w") as handle:
+            handle.write("NAME=test\nVERSION_ID=2026.10.19-2130\nBUILD_ID=0123456789ab\n")
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(self.read("update.bin")[96:160].rstrip(b"\0"), b"2026.10.19-2130")
+        with tarfile.open(os.path.join(self.images, "web-install.tar")) as tar:
+            fwu = tar.extractfile("fwu.sh").read()
+        self.assertIn(b"2026.10.19-2130", fwu)
+        self.assertNotIn(b"0123456789ab", fwu)
+
     def test_no_build_id_no_update_file(self):
         os.remove(os.path.join(self.target, "etc", "os-release"))
         done = self.run_script()

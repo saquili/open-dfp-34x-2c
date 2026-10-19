@@ -19,7 +19,11 @@
 # "-dirty" when the working tree holds changes that are not committed, or
 # "unknown" when the sources are not a git checkout. The status daemon and the
 # device tests read it, so that a result names the build it was measured on.
-# Two builds of one commit write the same line.
+# As VERSION and VERSION_ID it writes the version a person reads: the time of
+# that commit, in UTC, as YEAR.MONTH.DAY-HOURMINUTE (2026.10.19-2130), with
+# "-dirty" after it as after the hash, or "unknown". The update files carry it,
+# and a release is tagged with it. Two builds of one commit write the same
+# lines.
 #
 # The cut needs what the build system gives a post-build script: HOST_DIR and
 # STAGING_DIR for the cross tools, BUILD_DIR for uClibc-ng's build directory.
@@ -36,11 +40,16 @@ release=$1/etc/os-release
 top=$(cd "$(dirname "$0")/../../.." && pwd)
 git=${GIT:-git}
 if rev=$("$git" -C "$top" rev-parse --short=12 HEAD 2>/dev/null); then
+	version=$(TZ=UTC0 "$git" -C "$top" log -1 --format=%cd \
+		--date=format-local:%Y.%m.%d-%H%M 2>/dev/null) || version=
+	[ -n "$version" ] || version=unknown
 	if [ -n "$("$git" -C "$top" status --porcelain 2>/dev/null)" ]; then
 		rev=$rev-dirty
+		version=$version-dirty
 	fi
 else
 	rev=unknown
+	version=unknown
 fi
 
 # The package installs every program of iproute2, and the stick runs none of
@@ -158,6 +167,10 @@ account "$1/etc/shadow" dhcpc "dhcpc:*:::::::"
 # directory or an IPoE connection's, which onu-apply makes the group's.
 account "$1/etc/group" onu "onu:x:210:dhcp6d,pppoed,dhcpc"
 
-grep -v '^BUILD_ID=' "$release" > "$release.new" || true
-echo "BUILD_ID=$rev" >> "$release.new"
+grep -v -e '^VERSION=' -e '^VERSION_ID=' -e '^BUILD_ID=' "$release" > "$release.new" || true
+{
+	echo "VERSION=\"$version\""
+	echo "VERSION_ID=$version"
+	echo "BUILD_ID=$rev"
+} >> "$release.new"
 mv "$release.new" "$release"

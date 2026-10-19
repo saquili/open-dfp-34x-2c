@@ -17,8 +17,9 @@
 #   r0.squashfs  the root filesystem for bank 0, a SquashFS image
 #   update.bin   the two in one update file, which the stick's onu-update
 #                writes into the bank it did not start from: made by
-#                mkupdate.py, with the board, the version (BUILD_ID of the
-#                image's /etc/os-release) and the build's time in its header
+#                mkupdate.py, with the board, the version (VERSION_ID of the
+#                image's /etc/os-release, or BUILD_ID where it has none) and
+#                the build's time in its header
 #   web-install.tar
 #                the two in the package that the web page of the stick's
 #                shipped firmware installs into the bank it did not start
@@ -105,8 +106,9 @@ mv "$images/r0.squashfs.part" "$images/r0.squashfs"
 
 # The version is the one the image names itself by; mkupdate.py writes its
 # output under a name of its own and moves it into place.
-version=$(sed -n 's/^BUILD_ID=//p' "$root/etc/os-release" 2>/dev/null || true)
-[ -n "$version" ] || die "no BUILD_ID in $root/etc/os-release"
+version=$(sed -n 's/^VERSION_ID=//p' "$root/etc/os-release" 2>/dev/null || true)
+[ -n "$version" ] || version=$(sed -n 's/^BUILD_ID=//p' "$root/etc/os-release" 2>/dev/null || true)
+[ -n "$version" ] || die "no VERSION_ID or BUILD_ID in $root/etc/os-release"
 "$python" "$(dirname "$0")/mkupdate.py" --board "$board" --version "$version" \
 	--time "$epoch" "$images/k0.uImage" "$images/r0.squashfs" "$images/update.bin" ||
 	die "mkupdate.py failed"

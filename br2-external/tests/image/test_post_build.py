@@ -18,9 +18,13 @@ SCRIPT = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-
 
 STUB = """\
 #!/bin/sh
-# Stands in for git: rev-parse prints a hash or fails, status prints changes.
+# Stands in for git: rev-parse prints a hash or fails, log the commit's time
+# in the form asked for, in the zone asked for, status prints changes.
 case "$3" in
 rev-parse) [ -n "$STUB_NO_REPO" ] && exit 128; echo 0123456789ab ;;
+log)
+	[ "$TZ $5 $6" = "UTC0 --format=%cd --date=format-local:%Y.%m.%d-%H%M" ] || exit 2
+	echo 2026.10.19-2130 ;;
 status) [ -n "$STUB_DIRTY" ] && echo " M somefile" ;;
 esac
 exit 0
@@ -58,22 +62,26 @@ class PostBuild(unittest.TestCase):
         with open(self.release, encoding="utf-8") as handle:
             return handle.read()
 
-    def test_a_clean_checkout_gives_its_commit(self):
+    def test_a_clean_checkout_gives_its_commit_and_its_time(self):
         self.assertEqual(self.run_script().returncode, 0)
-        self.assertEqual(self.read(), RELEASE + "BUILD_ID=0123456789ab\n")
+        self.assertEqual(self.read(), RELEASE + 'VERSION="2026.10.19-2130"\n'
+                         "VERSION_ID=2026.10.19-2130\nBUILD_ID=0123456789ab\n")
 
     def test_uncommitted_changes_are_said(self):
         self.assertEqual(self.run_script(STUB_DIRTY="1").returncode, 0)
-        self.assertTrue(self.read().endswith("BUILD_ID=0123456789ab-dirty\n"))
+        self.assertTrue(self.read().endswith("VERSION_ID=2026.10.19-2130-dirty\n"
+                                             "BUILD_ID=0123456789ab-dirty\n"))
 
     def test_sources_without_git_are_unknown(self):
         self.assertEqual(self.run_script(STUB_NO_REPO="1").returncode, 0)
-        self.assertTrue(self.read().endswith("BUILD_ID=unknown\n"))
+        self.assertTrue(self.read().endswith('VERSION="unknown"\nVERSION_ID=unknown\n'
+                                             "BUILD_ID=unknown\n"))
 
-    def test_a_second_run_replaces_the_line(self):
+    def test_a_second_run_replaces_the_lines(self):
         self.run_script(STUB_DIRTY="1")
         self.run_script()
-        self.assertEqual(self.read().count("BUILD_ID="), 1)
+        for key in ("VERSION=", "VERSION_ID=", "BUILD_ID="):
+            self.assertEqual(self.read().count("\n" + key), 1, key)
         self.assertTrue(self.read().endswith("BUILD_ID=0123456789ab\n"))
 
     IPROUTE2 = ("ip", "tc", "bridge", "devlink", "ctstat", "dcb", "genl", "ifstat", "lnstat",
