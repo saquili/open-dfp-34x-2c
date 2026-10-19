@@ -29,7 +29,8 @@ The parts
    * - ``update.bin``
      - The update file that ``make image`` leaves beside ``k0.uImage`` and
        ``r0.squashfs`` (``building.rst``): a header with the board, the version
-       (the image's ``BUILD_ID``), the build's time and the two lengths, the
+       (the image's ``VERSION_ID``: the time of its commit in UTC, as
+       ``2026.10.19-2130``), the build's time and the two lengths, the
        kernel image, the root filesystem image, and the SHA-256 of the three.
        ``onu-utils/src/update.h`` gives the layout. The file is not signed: its
        checksum guards against damage only.
@@ -86,7 +87,8 @@ writes only a bank that is named, and ``onu-trial`` does nothing.
        environment or 1328 KiB into the bank) or ``empty`` (no kernel image
        or no root filesystem image where they belong).
    * - ``BANK<N>_VERSION``
-     - The running bank's ``BUILD_ID``; for the other bank the version that
+     - The running bank's ``VERSION_ID`` (its ``BUILD_ID``, the commit, for
+       an image of before the versions); for the other bank the version that
        ``onu-update`` recorded when it wrote it.
    * - ``BANK<N>_TIME``, ``_KERNEL_SIZE``, ``_ROOTFS_SIZE``
      - The time in the bank's kernel image, and the sizes of its partitions.
