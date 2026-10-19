@@ -9,6 +9,10 @@
  *   GET  /api/firmware/download  the running bank as an update file
  *   POST /api/firmware/try       start a bank once, the one the body names
  *                                or the other, by a restart
+ *   POST /api/firmware/return    start the shipped firmware from now on, the
+ *                                bank the body names or the other, by a
+ *                                restart
+ *   GET  /api/firmware/backup    the whole flash, partition by partition
  *
  * An update file is some 3.7 MB and the stick has 25 MB of memory, so the
  * body of an upload is never gathered. Once its headers are in, the
@@ -19,7 +23,9 @@
  * and answers; the answer, and what the value "firmware" shows of the
  * upload, come from its exit status and its last message. One upload runs
  * at a time. A download streams the output of "onu-update read" the same
- * way, in chunks, as fast as the browser takes it. onu-act runs onu-update
+ * way, in chunks, as fast as the browser takes it, and a copy of the flash
+ * that of "onu-update backup", which needs root's password, as the copy holds
+ * the unit's credentials. onu-act runs onu-update
  * (bus.h): pond passes it one end of the pipe, and holds the other.
  */
 
@@ -322,29 +328,36 @@ static void download_ended(void *ctx, int status, const char *said)
 	down.status = status;
 }
 
-void firmware_download(struct mg_connection *c)
+/* The version of the running bank, fit for a file's name, or "system". */
+static void running_version(char *version, size_t cap)
 {
 	static const char *const status_args[] = { "status", NULL };
-	char text[2048], running[8], key[32], version[64] = "";
-	int fds[2], rc;
+	char text[2048], running[8], key[32];
 
-	if (up.running || down.running) {
-		reply(c, 409, "busy", "an update or a download is under way");
-		return;
-	}
+	version[0] = '\0';
 	if (fw_run(status_args, NULL, text, sizeof(text)) == 0 &&
 	    fw_field(text, "RUNNING", running, sizeof(running))) {
 		snprintf(key, sizeof(key), "BANK%s_VERSION", running);
-		fw_field(text, key, version, sizeof(version));
+		fw_field(text, key, version, cap);
 	}
 	if (!version[0] || strspn(version, "0123456789abcdefghijklmnopqrstuvwxyz-._") !=
 				   strlen(version))
-		snprintf(version, sizeof(version), "%s", "system");
+		snprintf(version, cap, "%s", "system");
+}
+
+/*
+ * Stream the output of onu-act's method @method, which runs with @password
+ * (NULL for none), to @c as the file @name.
+ */
+static void stream_out(struct mg_connection *c, const char *method, const char *password,
+		       const char *name)
+{
+	int fds[2], rc;
 
 	rc = pipe2(fds, O_CLOEXEC) ? -errno : 0;
 	if (!rc) {
 		/* The writing end goes to onu-act, whatever comes of it. */
-		rc = bus_act_start("update_read", fds[1], NULL, download_ended, NULL);
+		rc = bus_act_start(method, fds[1], password, download_ended, NULL);
 		if (rc)
 			close(fds[0]);
 	}
@@ -361,12 +374,41 @@ void firmware_download(struct mg_connection *c)
 	mg_printf(c,
 		  "HTTP/1.1 200 OK\r\n"
 		  "Content-Type: application/octet-stream\r\n"
-		  "Content-Disposition: attachment; filename=\"buchos-gpon-%s.bin\"\r\n"
+		  "Content-Disposition: attachment; filename=\"%s\"\r\n"
 		  "Cache-Control: no-store\r\n"
 		  "X-Content-Type-Options: nosniff\r\n"
 		  "Transfer-Encoding: chunked\r\n"
 		  "Connection: close\r\n\r\n",
-		  version);
+		  name);
+}
+
+void firmware_download(struct mg_connection *c)
+{
+	char version[64], name[96];
+
+	if (up.running || down.running) {
+		reply(c, 409, "busy", "an update or a download is under way");
+		return;
+	}
+	running_version(version, sizeof(version));
+	snprintf(name, sizeof(name), "buchos-gpon-%s.bin", version);
+	stream_out(c, "update_read", NULL, name);
+}
+
+void firmware_backup(struct mg_connection *c, struct mg_http_message *hm)
+{
+	char version[64], name[96], pw[AUTH_SECRET_MAX + 1];
+
+	if (up.running || down.running) {
+		reply(c, 409, "busy", "an update or a download is under way");
+		return;
+	}
+	if (!confirmed(c, hm, pw, sizeof(pw)))
+		return;
+	running_version(version, sizeof(version));
+	snprintf(name, sizeof(name), "buchos-gpon-flash-%s.bin", version);
+	stream_out(c, "update_backup", pw, name);
+	explicit_bzero(pw, sizeof(pw));
 }
 
 /* The download's end: the last chunk when onu-update did well, a cut otherwise. */
@@ -385,9 +427,15 @@ static void download_done(int status)
 	down.c = NULL;
 }
 
-bool firmware_try(struct mg_connection *c, struct mg_http_message *hm)
+/*
+ * onu-update's @verb, "try" or "return", of the bank the body names, "0" or
+ * "1", or of the other with an empty body; @done is the answer that the
+ * stick restarts. Return: whether it did, so that the stick restarts.
+ */
+static bool firmware_bank(struct mg_connection *c, struct mg_http_message *hm,
+			  const char *verb, const char *done)
 {
-	const char *args[3] = { "try", NULL, NULL };
+	const char *args[3] = { verb, NULL, NULL };
 	char out[512], bank[2] = "", pw[AUTH_SECRET_MAX + 1];
 	int rc;
 
@@ -419,8 +467,19 @@ bool firmware_try(struct mg_connection *c, struct mg_http_message *hm)
 		reply(c, 409, "not armed", why);
 		return false;
 	}
-	reply(c, 200, "armed", "the stick restarts into the bank once");
+	reply(c, 200, "armed", done);
 	return true;
+}
+
+bool firmware_try(struct mg_connection *c, struct mg_http_message *hm)
+{
+	return firmware_bank(c, hm, "try", "the stick restarts into the bank once");
+}
+
+bool firmware_return(struct mg_connection *c, struct mg_http_message *hm)
+{
+	return firmware_bank(c, hm, "return",
+			     "the stick restarts into the shipped firmware, from now on");
 }
 
 void firmware_poll(void)

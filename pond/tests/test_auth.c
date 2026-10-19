@@ -218,6 +218,8 @@ static void test_confirm(void)
 	      "nor without any");
 	check(bus_act("update_try", names, &wrong, 1, NULL, out, sizeof(out)) == -EACCES,
 	      "and starts no other bank without it");
+	check(bus_act("update_return", names, &wrong, 1, NULL, out, sizeof(out)) == -EACCES,
+	      "nor goes back to the shipped firmware");
 }
 
 static void test_unknown(void)

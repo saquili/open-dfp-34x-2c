@@ -196,10 +196,16 @@ connection leaves the HTTP parser and the body streams into ``onu-update write
 bank was written and read back. One upload runs at a time. ``GET
 /api/firmware/download`` streams the running bank as an update file, in chunks.
 ``POST /api/firmware/try`` arms a start of the bank in the body, ``0`` or ``1``,
-or of the other bank with an empty body, and restarts. The upload and the
-start need root's password as well as a session, in the header
-``X-Pond-Password``, percent-encoded: 403 for a wrong one, which counts as a
-wrong sign-in, 429 while sign-ins are stopped.
+or of the other bank with an empty body, and restarts. ``POST
+/api/firmware/return`` makes the shipped firmware of the bank in the body, or
+of the other bank, the one the boot loader starts from now on, and restarts:
+the way back, which ``onu-update return`` refuses for a bank that does not
+hold the shipped firmware whole. ``GET /api/firmware/backup`` streams a copy of
+the whole flash, every partition in its order on the chip, to keep before an
+update writes over the shipped firmware; it holds the unit's credentials. The
+upload, the start, the way back and the copy need root's password as well as a
+session, in the header ``X-Pond-Password``, percent-encoded: 403 for a wrong
+one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
 
 ``/api/set/ID`` takes ``KEY=VALUE`` lines:
 

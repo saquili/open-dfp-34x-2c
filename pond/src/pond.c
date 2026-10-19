@@ -19,7 +19,9 @@
  *   /api/firmware/upload   a POST of an update file: into the other bank
  *   /api/firmware/download the running bank as an update file
  *   /api/firmware/try      a POST: start a bank once, by a restart
- *                          (firmware.c)
+ *   /api/firmware/return   a POST: start the shipped firmware from now on,
+ *                          by a restart
+ *   /api/firmware/backup   the whole flash (firmware.c)
  *
  * Over HTTPS (tls.h), a request that comes over HTTP is sent on to the same
  * path over HTTPS, but for /api/health. Every other route of /api needs a
@@ -665,10 +667,17 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		reply_err(c, 405, "use POST", "upload an update file with a POST");
 	} else if (mg_match(hm->uri, mg_str("/api/firmware/download"), NULL)) {
 		firmware_download(c);
+	} else if (mg_match(hm->uri, mg_str("/api/firmware/backup"), NULL)) {
+		firmware_backup(c, hm);
 	} else if (mg_match(hm->uri, mg_str("/api/firmware/try"), NULL)) {
 		if (!post)
 			reply_err(c, 405, "use POST", "start a bank with a POST");
 		else if (firmware_try(c, hm))
+			g_restart_at = time(NULL) + 1;
+	} else if (mg_match(hm->uri, mg_str("/api/firmware/return"), NULL)) {
+		if (!post)
+			reply_err(c, 405, "use POST", "go back to the shipped firmware with a POST");
+		else if (firmware_return(c, hm))
 			g_restart_at = time(NULL) + 1;
 	} else if (mg_match(hm->uri, mg_str("/api/schema"), NULL))
 		value_schema(c);

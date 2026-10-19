@@ -5,7 +5,8 @@
  * The flash's two banks and the updates of the system, which onu-update of
  * onu-utils carries out. prov_firmware.c holds what the value "firmware"
  * shows, the banks and the update under way; firmware.c the HTTP routes that
- * upload an update file, download one and start the other bank.
+ * upload an update file, download one, start the other bank, go back to the
+ * shipped firmware and copy the whole flash.
  */
 
 #ifndef POND_FIRMWARE_H
@@ -37,8 +38,9 @@ struct fw_upload {
 extern struct fw_upload fw_upload;
 
 /*
- * onu-update's status, @args { "status", NULL }, or its try of a bank,
- * { "try", BANK or NULL for the other }, which needs root's @password,
+ * onu-update's status, @args { "status", NULL }, its try of a bank,
+ * { "try", BANK or NULL for the other }, or its return to the shipped
+ * firmware, { "return", BANK or NULL }, which need root's @password,
  * through onu-act (bus.h): its standard output and error, together, in
  * @out, NUL-terminated.
  * Return: its exit status, or a negative errno when it could not run,
@@ -54,12 +56,15 @@ struct mg_http_message;
 
 /*
  * The routes of firmware.c. firmware_upload() takes over a connection whose
- * headers are in, once the request is let through; firmware_try() answers and
- * says whether to restart; firmware_poll() runs at every turn of the loop.
+ * headers are in, once the request is let through; firmware_try() and
+ * firmware_return() answer and say whether to restart; firmware_poll() runs
+ * at every turn of the loop.
  */
 void firmware_upload(struct mg_connection *c, struct mg_http_message *hm);
 void firmware_download(struct mg_connection *c);
+void firmware_backup(struct mg_connection *c, struct mg_http_message *hm);
 bool firmware_try(struct mg_connection *c, struct mg_http_message *hm);
+bool firmware_return(struct mg_connection *c, struct mg_http_message *hm);
 void firmware_poll(void);
 
 #endif

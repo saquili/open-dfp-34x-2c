@@ -10,6 +10,7 @@
 			"settings_current", "settings_state", "settings_change", "settings_try",
 			"password_check", "password_state", "password_set",
 			"update_status", "update_write", "update_read", "update_try",
+			"update_return", "update_backup",
 			"restart"
 		] },
 		"omcid": { "methods": [ "status", "mib", "frames" ] },
