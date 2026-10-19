@@ -181,8 +181,9 @@ export function useFirmware() {
 }
 
 /*
- * Root's password, which writing an update and starting the other bank need
- * besides the session: percent-encoded, since a header carries Latin-1 only.
+ * Root's password, which writing an update, starting the other bank, going
+ * back to the shipped firmware and copying the flash need besides the
+ * session: percent-encoded, since a header carries Latin-1 only.
  */
 const PASSWORD_HEADER = "X-Pond-Password";
 const passwordHeader = (secret: string) => ({ [PASSWORD_HEADER]: encodeURIComponent(secret) });
@@ -197,6 +198,50 @@ export function useTryBank() {
         passwordHeader(secret),
       ),
   });
+}
+
+/** Go back to the shipped firmware of @bank for good: pond keeps it and restarts. */
+export function useReturnBank() {
+  return useMutation({
+    mutationFn: ({ bank, secret }: { bank: number; secret: string }) =>
+      request<{ ok: boolean }>("/api/firmware/return", String(bank), passwordHeader(secret)),
+  });
+}
+
+/*
+ * A copy of the whole flash, as a file the browser saves. It needs root's
+ * password, which a link cannot send, so the copy comes through fetch, some
+ * 8 MiB held in the page until it is saved; no time limit, as the stick reads
+ * its flash as it sends it.
+ */
+export async function downloadFlash(secret: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch("/api/firmware/backup", {
+      headers: { "X-Pond": "1", ...passwordHeader(secret) },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  } catch {
+    throw new OfflineError();
+  }
+  if (!response.ok) {
+    const reply = (await response.json().catch(() => null)) as {
+      error?: string;
+      detail?: string;
+    } | null;
+    throw new ApiError(response.status, reply?.error ?? response.statusText, reply?.detail);
+  }
+  const blob = await response.blob();
+  const name =
+    /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") ?? "")?.[1] ??
+    "flash.bin";
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /*

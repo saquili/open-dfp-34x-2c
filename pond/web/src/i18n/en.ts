@@ -1027,7 +1027,8 @@ export const en = {
     builtOn: "built {date}",
     upload: "Upload new software",
     password: "Root password",
-    passwordHint: "Writing a new system and starting the other one need it again.",
+    passwordHint:
+      "Writing a new system, starting the other one, going back to the shipped firmware and copying the flash need it again.",
     wrongPassword: "Wrong password. Root's password is needed for this.",
     uploadHintShipped:
       "System {letter} holds the firmware the stick shipped with: the update.bin file erases it. Keep a copy of the whole flash first if you may want it back.",
@@ -1043,6 +1044,17 @@ export const en = {
     switchConfirm:
       "The stick restarts from system {letter}, on trial. If it does not come up within 5\u00a0minutes, it goes back to system {back} by itself. Go on?",
     switching: "The stick is restarting from system {letter}. This page reconnects by itself.",
+    returnTo: "Go back to the shipped firmware (system {letter})",
+    returnConfirm:
+      "The stick restarts into the firmware it shipped with, in system {letter}, and starts it from now on. Its own page is where it was before, and this system stays in the other bank until an update through that page writes over it. Go on?",
+    returning:
+      "The stick is restarting into the shipped firmware. Its page is where it was before this system was installed.",
+    copyFlash: "Copy the whole flash",
+    copyFlashHint:
+      "A copy of the whole flash, 8 MiB, holds the stick's registration and its passwords: keep it private. Take one before an update writes over the shipped firmware.",
+    copying: "Reading the flash, about a minute…",
+    copied: "The copy of the flash is saved.",
+    notCopied: "No copy: {reason}",
     trialNow: "System {letter} runs on trial and is kept once the stick is fully up.",
     failedNote:
       "The last trial of system {letter} did not come up, so the stick went back to the other system.",

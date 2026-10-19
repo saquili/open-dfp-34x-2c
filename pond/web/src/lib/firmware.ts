@@ -74,6 +74,13 @@ export function otherBank(f: Firmware): number | null {
   return f.banks.find((b) => b.bank === target)?.state === "valid" ? target : null;
 }
 
+/** The other bank, when it holds the firmware the stick shipped with: the way back. */
+export function shippedBank(f: Firmware): number | null {
+  const target = updateTarget(f);
+  if (target === null) return null;
+  return f.banks.find((b) => b.bank === target)?.state === "shipped" ? target : null;
+}
+
 /** Whether an upload is under way, on this page or another. */
 export function uploading(f: Firmware | undefined): boolean {
   return f?.update.state === "receiving" || f?.update.state === "writing";

@@ -8,6 +8,7 @@ import {
   bankViews,
   otherBank,
   overShipped,
+  shippedBank,
   updateTarget,
   uploading,
 } from "./firmware";
@@ -114,6 +115,17 @@ describe("what can be done", () => {
     expect(overShipped(f, updateTarget(f))).toBe(true);
     expect(overShipped(f, null)).toBe(false);
     expect(otherBank(f)).toBeNull();
+  });
+
+  it("goes back only to the shipped firmware of the other bank", () => {
+    const f = firmware();
+    expect(shippedBank(f)).toBeNull();
+    bank(f, 1).state = "shipped";
+    expect(shippedBank(f)).toBe(1);
+    expect(shippedBank({ ...f, running: null })).toBeNull();
+    bank(f, 0).state = "shipped";
+    bank(f, 1).state = "valid";
+    expect(shippedBank(f)).toBeNull();
   });
 
   it("starts the other bank only when it holds a system", () => {

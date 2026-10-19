@@ -1025,7 +1025,8 @@ export const pl: Dictionary = {
     builtOn: "zbudowany {date}",
     upload: "Wgraj nowe oprogramowanie",
     password: "Hasło roota",
-    passwordHint: "Wgranie nowego systemu i uruchomienie drugiego wymagają go jeszcze raz.",
+    passwordHint:
+      "Wgranie nowego systemu, uruchomienie drugiego, powrót do oryginalnego firmware i kopia flasha wymagają go jeszcze raz.",
     wrongPassword: "Złe hasło: potrzebne jest hasło roota.",
     uploadHintShipped:
       "W systemie {letter} jest firmware, z którym wkładka przyszła: plik update.bin go skasuje. Jeśli możesz chcieć do niego wrócić, najpierw zrób kopię całego flasha.",
@@ -1041,6 +1042,17 @@ export const pl: Dictionary = {
     switchConfirm:
       "Wkładka uruchomi się ponownie z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5\u00a0minut, sama wróci do systemu {back}. Kontynuować?",
     switching: "Wkładka uruchamia się z systemu {letter}. Strona połączy się sama.",
+    returnTo: "Wróć do oryginalnego firmware (system {letter})",
+    returnConfirm:
+      "Wkładka uruchomi się ponownie z firmware, z którym przyszła, w systemie {letter}, i będzie go uruchamiać od teraz. Jego strona będzie tam, gdzie była wcześniej, a ten system zostanie w drugim banku, dopóki nie nadpisze go aktualizacja przez tamtą stronę. Kontynuować?",
+    returning:
+      "Wkładka uruchamia się z oryginalnego firmware. Jego strona jest tam, gdzie była przed instalacją tego systemu.",
+    copyFlash: "Kopia całego flasha",
+    copyFlashHint:
+      "Kopia całego flasha, 8 MiB, zawiera dane rejestracji wkładki i jej hasła: trzymaj ją u siebie. Zrób ją, zanim aktualizacja nadpisze oryginalne firmware.",
+    copying: "Czytanie flasha, około minuty…",
+    copied: "Kopia flasha zapisana.",
+    notCopied: "Brak kopii: {reason}",
     trialNow: "System {letter} działa na próbę i zostanie zachowany, gdy wkładka w pełni wstanie.",
     failedNote:
       "Ostatnia próba systemu {letter} nie powiodła się, więc wkładka wróciła do drugiego systemu.",

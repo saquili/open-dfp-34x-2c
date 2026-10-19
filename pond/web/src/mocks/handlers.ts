@@ -57,12 +57,18 @@ const SCENARIO = typeof process === "undefined" ? undefined : process.env.POND_M
 /*
  * POND_MOCK_SCENARIO=stick: the stick as its software serves it today, with
  * none of the routing (no static or DHCP connections, networks, forwards or
- * rules), and a person signed in already, for a look at what the panel says
- * of what is not on the stick yet.
+ * rules), the firmware it shipped with still in the other bank, as after an
+ * install through that firmware's page, and a person signed in already, for a
+ * look at what the panel says of what is not on the stick yet.
  */
 if (SCENARIO === "stick") {
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
+  Object.assign(firmware.banks[1] ?? {}, {
+    state: "shipped",
+    version: "V1.2.2-221209",
+    rootfs_used_b: null,
+  });
 }
 
 /* The VID on the fibre of each service the stand-in OLT translates, as onu-apply names its interface. */
@@ -1260,6 +1266,36 @@ export const handlers = [
     const text = await request.text();
     firmware.next = text === "" ? 1 - (firmware.running ?? 0) : Number(text);
     return HttpResponse.json({ ok: true, detail: "the stick restarts into the bank once" });
+  }),
+
+  http.post("*/api/firmware/return", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    const bank = Number(await request.text());
+    if (firmware.banks.find((b) => b.bank === bank)?.state !== "shipped")
+      return HttpResponse.json(
+        { error: "not armed", detail: `bank ${bank} holds no shipped firmware` },
+        { status: 409 },
+      );
+    firmware.committed = bank;
+    firmware.next = bank;
+    return HttpResponse.json({
+      ok: true,
+      detail: "the stick restarts into the shipped firmware, from now on",
+    });
+  }),
+
+  http.get("*/api/firmware/backup", async ({ request }) => {
+    await delay(600);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    return new HttpResponse(new Uint8Array(4096).fill(0xff), {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": 'attachment; filename="buchos-gpon-flash-325213d07776.bin"',
+      },
+    });
   }),
 
   http.get("*/api/firmware/download", async () => {

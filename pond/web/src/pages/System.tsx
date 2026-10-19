@@ -13,18 +13,20 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Download, KeyRound, LogOut, Play, RotateCw, Upload } from "lucide-react";
+import { Download, HardDrive, KeyRound, LogOut, Play, RotateCw, Undo2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useSignOut } from "../api/auth";
 import { ApiError, request } from "../api/client";
 import {
+  downloadFlash,
   uploadFirmware,
   useBanks,
   useClock,
   useFirmware,
   useHostnameChange,
   useRestart,
+  useReturnBank,
   useTls,
   useTryBank,
 } from "../api/config";
@@ -42,6 +44,7 @@ import {
   bankViews,
   otherBank,
   overShipped,
+  shippedBank,
   updateTarget,
   uploading,
 } from "../lib/firmware";
@@ -315,7 +318,10 @@ function Updates() {
   const qc = useQueryClient();
   const firmware = useFirmware();
   const tryBank = useTryBank();
+  const returnBank = useReturnBank();
   const input = useRef<HTMLInputElement>(null);
+  /* The copy of the whole flash: under way, or what came of it. */
+  const [copy, setCopy] = useState<"idle" | "busy" | "done" | string>("idle");
   const [phase, setPhase] = useState<Phase>("idle");
   const [share, setShare] = useState(0);
   const [result, setResult] = useState("");
@@ -325,6 +331,7 @@ function Updates() {
   const f = firmware.data;
   const target = f ? updateTarget(f) : null;
   const other = f ? otherBank(f) : null;
+  const shipped = f ? shippedBank(f) : null;
   const elsewhere = uploading(f) && phase !== "sending" && phase !== "writing";
 
   async function send(file: File) {
@@ -369,6 +376,27 @@ function Updates() {
     )
       return;
     tryBank.mutate({ bank, secret: password });
+  }
+
+  function goBack(bank: number) {
+    if (!window.confirm(t("system.returnConfirm", { letter: bankLetter(bank) }))) return;
+    returnBank.mutate({ bank, secret: password });
+  }
+
+  async function copyFlash() {
+    setCopy("busy");
+    try {
+      await downloadFlash(password);
+      setCopy("done");
+    } catch (e) {
+      setCopy(
+        e instanceof ApiError && e.status === 403
+          ? t("system.wrongPassword")
+          : e instanceof ApiError
+            ? (e.detail ?? e.message)
+            : String(e),
+      );
+    }
   }
 
   function pickFile() {
@@ -464,6 +492,26 @@ function Updates() {
             {t("system.switching", { letter: bankLetter(tryBank.variables.bank) })}
           </p>
         )}
+        {returnBank.isSuccess && <p className="text-sm text-info">{t("system.returning")}</p>}
+        {returnBank.isError && (
+          <p className="text-sm text-error">
+            {returnBank.error instanceof ApiError && returnBank.error.status === 403
+              ? t("system.wrongPassword")
+              : returnBank.error instanceof ApiError
+                ? (returnBank.error.detail ?? returnBank.error.message)
+                : String(returnBank.error)}
+          </p>
+        )}
+        {copy === "busy" && (
+          <p className="flex items-center gap-2 text-sm">
+            <span className="loading loading-spinner loading-xs" />
+            {t("system.copying")}
+          </p>
+        )}
+        {copy === "done" && <p className="text-sm text-success">{t("system.copied")}</p>}
+        {copy !== "idle" && copy !== "busy" && copy !== "done" && (
+          <p className="text-sm text-error">{t("system.notCopied", { reason: copy })}</p>
+        )}
         {tryBank.isError && (
           <p className="text-sm text-error">
             {tryBank.error instanceof ApiError && tryBank.error.status === 403
@@ -550,7 +598,28 @@ function Updates() {
               {t("system.switchTo", { letter: bankLetter(other) })}
             </button>
           )}
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!password || copy === "busy" || elsewhere}
+            onClick={copyFlash}
+          >
+            <HardDrive className="size-4" />
+            {t("system.copyFlash")}
+          </button>
+          {shipped !== null && (
+            <button
+              type="button"
+              className="btn btn-sm btn-outline btn-warning"
+              disabled={!password || returnBank.isPending || returnBank.isSuccess || elsewhere}
+              onClick={() => goBack(shipped)}
+            >
+              <Undo2 className="size-4" />
+              {t("system.returnTo", { letter: bankLetter(shipped) })}
+            </button>
+          )}
         </div>
+        <p className="text-xs text-base-content/60">{t("system.copyFlashHint")}</p>
         {target !== null && f && overShipped(f, target) ? (
           <p className="text-xs text-warning">
             {t("system.uploadHintShipped", { letter: bankLetter(target) })}
