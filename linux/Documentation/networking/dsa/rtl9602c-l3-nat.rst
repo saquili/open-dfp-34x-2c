@@ -1844,6 +1844,17 @@ is sent to.
      - M
      - The digest inverted and restored by hand; the LAN-side count and the CPU
        port's counter.
+   * - The outbound lookup does check it: a flow whose outbound entry points at
+       an inbound entry holding another remote end's digest is not carried, and
+       one pointing at an entry identical but for its own digest is. A second
+       connection to a forwarded port pointed at the first one's inbound entry
+       went to the CPU both ways with forwarding reason 34; with its own entry
+       in another way it ran at 937 Mbit/s one way and 934 the other, with 10
+       and 15 frames of reason 34.
+     - M
+     - Two connections from one remote host to one forwarded port, iperf3 both
+       ways, the CPU's receive-reason counters and the CPU interfaces' counters,
+       with the entry shared (a test patch) and with an entry each.
    * - ``RTL9602C_NAPT_IN_TCP`` (83) is 0 for UDP, as read in a live UDP entry.
      - M
      - A live UDP entry read while the flow ran.
@@ -1911,16 +1922,17 @@ bits, 0 to 1023::
      - A throughput test, NAT and NAT over PPPoE downstream: replies carried by
        the engine only with the entries placed by this function. The routing
        test asserts the reference flow's inbound bucket.
-   * - The remote digest is written into ``RTL9602C_NAPT_IN_REMOTE_HASH``. It
-       rests on one entry only: for 203.0.113.9 port 9999 it gives ``0xcb00`` ^
-       ``0x7109`` ^ ``0x270f`` = ``0x9d06``, the value read in a live entry. The
-       engine does not check the field on replies; whether the outbound lookup
-       compares it is not established.
-     - I
-     - A second live entry with a different remote end, read back, would settle
-       the function; the ``<flow>`` debug line prints the digest that the driver
-       computed, for that check. Two flows in one outbound bucket would show
-       whether the outbound lookup compares it.
+   * - The remote digest is written into ``RTL9602C_NAPT_IN_REMOTE_HASH``: for
+       203.0.113.9 port 9999 it gives ``0xcb00`` ^ ``0x7109`` ^ ``0x270f`` =
+       ``0x9d06``, the value read in a live entry. The engine does not check the
+       field on replies, but the outbound lookup compares it with the digest of
+       the frame's remote end (see "Inbound NAPT (selector 9)"), so every flow
+       carried outbound checks the function: 129 flows at once, each with its
+       own remote port, were.
+     - M
+     - The value read in a live entry; the outbound frames of the flows of "The
+       flowtable offload" carried by the engine, the CPU port moving by the
+       first frames of each connection only.
    * - Placement, measured: a live flow's outbound entry sat in way 0 of the
        bucket that the outbound hash gives, and changing only the source port by
        one moved it to the bucket that the hash gives for the new port; the
@@ -1934,15 +1946,41 @@ bits, 0 to 1023::
      - Entries read while the flows ran; a throughput test, NAT downstream, with
        the inbound entries at the driver's slots and at the hash's.
    * - Because the remote end is not an input of the inbound hash and the engine
-       ignores the digest, it cannot tell apart two inbound entries that share
-       external-address row, external port and protocol, and those always share
-       a bucket. So the driver declines a flow whose external port,
-       external-address row and protocol are already in its inbound bucket; that
-       flow stays in software.
+       ignores the digest on replies, it cannot tell apart two inbound entries
+       that share external-address row, external port and protocol, and those
+       always share a bucket. So the driver declines a flow whose external port,
+       external-address row and protocol are already in its inbound bucket for
+       another LAN address or port; that flow stays in software.
      - M
-     - A second flow from the same source to another remote port was declined
-       and ran as ``[OFFLOAD]`` in the connection tracking table while the first
-       stayed ``[HW_OFFLOAD]``.
+     - Before the driver made the exception of the next row, a second flow from
+       the same source to another remote port was declined and ran as
+       ``[OFFLOAD]`` in the connection tracking table while the first stayed
+       ``[HW_OFFLOAD]``.
+   * - Two flows whose replies go back to the same LAN address and port, as the
+       connections to a forwarded port do, need not be told apart: either entry
+       translates a reply right. The driver gives the second its own inbound
+       entry, with its own digest, in another way of the bucket, as long as the
+       entry already there names the same LAN address and port. The engine
+       carries them so: two connections at 937 Mbit/s one way and 934 the
+       other, and four, in all four ways of the bucket, at 939 Mbit/s, with the
+       CPU interfaces moving by some tens of frames. A fifth finds the bucket
+       full and stays in software, so one forwarded port has at most four
+       connections in hardware.
+     - M
+     - iperf3 from the WAN side to a forwarded port, one stream both ways and
+       three streams (four connections with the control one), all
+       ``[HW_OFFLOAD]``; the ``<flow>`` lines naming inbound entries 996 to 999
+       of bucket 249; the CPU interfaces' counters.
+   * - Two outbound entries pointing at one inbound entry do not carry the
+       second flow: with the inbound entry of a forwarded port's first
+       connection shared by the second (same LAN address and port, another
+       remote port), the second connection's frames went to the CPU both ways
+       with forwarding reason 34, 100,320 of them in a ten-second transfer,
+       while netfilter offered the flow again every second.
+     - M
+     - The CPU's receive-reason counters and the CPU interfaces' counters, a
+       TCP transfer to a forwarded port, with the sharing patched into the
+       driver for the test.
    * - That the engine tells apart two inbound entries of one bucket by their
        external port (with row and protocol) is inferred; only one flow per
        bucket has been measured.
@@ -2556,8 +2594,12 @@ What the driver takes from a rule:
    Purpose: entries survive a warm restart, so the driver's records do not say
    which ways are free. (T)
 5. Find a free inbound way, reading the hardware, and check that no entry of the
-   bucket shares the external port, the external-address row and the protocol.
-   Purpose: the engine could not tell the replies to two such flows apart. (T)
+   bucket shares the external port, the external-address row and the protocol
+   while naming another LAN address or port. Purpose: the engine could not tell
+   the replies to two such flows apart; replies to two flows that go back to one
+   LAN address and port need not be, and each such flow needs an entry of its
+   own, since the outbound lookup checks the digest. (T; M for the
+   connections to a forwarded port, see "The NAPT hashes")
 6. Write the inbound entry: the internal address and port, the remote digest,
    the external-address row and port, the protocol and
    ``RTL9602C_NAPT_IN_VALID_ACTIVE``. (T)
@@ -2598,11 +2640,15 @@ netfilter's connection limit comes first. Unless the hash size is given as a
 parameter, ``nf_conntrack_max`` is the size of the connection hash table, which
 on a board with this little memory is the minimum of 1024
 (``nf_conntrack_init_start()``), and only one direction of a connection is
-programmed, the one whose source is translated. So at most 1024 flows reach the engine unless
-``net.netfilter.nf_conntrack_max`` is raised, and their records take 24 KiB at
-most. The driver used to keep eight fixed slots, and a ninth flow
-stayed on the CPU (measured); that the engine carries a flow in any of its 4096
-entries is not verified (see "Open questions").
+programmed, the one whose source is translated. So at most 1024 flows reach the
+engine unless ``net.netfilter.nf_conntrack_max`` is raised, and their records
+take 24 KiB at most. The driver used to keep eight fixed slots, and a ninth flow
+stayed on the CPU (measured). With the records, 129 flows at once (iperf3 with
+128 streams and its control connection, both ways) were ``[HW_OFFLOAD]`` for
+the whole run at 927 to 936 Mbit/s, the CPU interfaces moving by some 1,250
+frames, the first ones of each connection, against some 800,000 that crossed
+the switch; that the engine carries a flow in any of its 4096 entries is not
+verified (see "Open questions").
 
 A PPPoE flow whose session runs in an 802.1Q VLAN takes the VLAN from its one
 VLAN push (see "The PPPoE encapsulation path"); one with two VLAN pushes, or
@@ -3374,6 +3420,9 @@ Known limitations
   route, is not carried: the IPv6 neighbour table is not filled.
 - The driver programs at most 4096 flows, and fewer when buckets fill.
   netfilter's default connection limit on this board, 1024, bounds them first.
+- A forwarded port has at most four connections in hardware at once: they share
+  one inbound bucket of four ways, with any other flow whose external port
+  falls in it. A further connection runs through the CPU.
 - The address-table entries on which the engine depends have limitations of
   their own, described on the *bridging* page.
 
@@ -3402,20 +3451,16 @@ Assumptions the driver depends on
        (control ..., reset ...)`` reading ``reset 00000000`` at every boot.
    * - The engine searches all four ways of an outbound bucket, so that a second
        flow in one bucket is carried from way 1 ("Outbound NAPT (selector 10)").
-     - Two flows forced into one outbound bucket by the choice of source ports,
-       both carried by the engine.
+       The 129 flows measured at once fell in 129 buckets: consecutive source
+       ports give consecutive buckets.
+     - Two flows forced into one outbound bucket by the choice of source ports
+       (iperf3 ``--cport``), both carried by the engine.
    * - The engine carries a flow from any of its 4096 outbound entries and the
        inbound entry it names, so that it carries as many flows at once as the
-       driver programs ("The flowtable offload"). Eight at once have been
+       driver programs ("The flowtable offload"). 129 at once have been
        measured.
-     - Hundreds of flows offered at once, up to netfilter's connection limit:
-       the ``<flow>`` debug lines count them, and the CPU port's counter stays
-       flat while all of them carry traffic.
-   * - The remote digest function is right, and the outbound lookup does not
-       compare the field in a way that the function gets wrong ("The NAPT
-       hashes").
-     - A second live entry with a different remote end, read back; two flows in
-       one outbound bucket.
+     - Flows offered at once up to netfilter's connection limit, the CPU port's
+       counter flat while all of them carry traffic.
    * - The engine tells apart two inbound entries of one bucket by their
        external port ("The NAPT hashes").
      - Two flows whose external ports fall in one inbound bucket, replies to
