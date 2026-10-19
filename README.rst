@@ -159,8 +159,11 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
        builds of the shipped firmware, started from the other bank, found
        their own files and left this system's alone (by hand)
    * - Install through the shipped firmware's web page
-     - ⚪ Build machine
-     - No install on a real stick recorded yet
+     - 🟢 Tested
+     - On 2026-10-19, from V1.2.2-221209 and from V1.0-220923 on a copy of a
+       stick as sold: the identity, the MAC address and the administrator's
+       password taken, and the way back to the shipped firmware with its
+       settings (by hand)
 
 ..
 
@@ -221,12 +224,15 @@ Before you install
 ==================
 
 * **Two ways in.** Through the shipped firmware's web page, with the package
-  ``web-install.tar`` that the build makes, which needs no console; this way
-  is tested on a build machine only, and no install on a real stick is
-  recorded yet (`updating.rst <docs/handbook/updating.rst>`__). Or from the
-  bench, which writes the flash from the boot loader's prompt over the
-  serial console (`flashing.rst <docs/handbook/flashing.rst>`__). Either way
-  the shipped firmware stays in the other bank, as the way back.
+  ``web-install.tar`` that the build makes, which needs no console
+  (`updating.rst <docs/handbook/updating.rst>`__). Or from the bench, which
+  writes the flash from the boot loader's prompt over the serial console
+  (`flashing.rst <docs/handbook/flashing.rst>`__). Either way the shipped
+  firmware stays in the other bank, as the way back, with its settings.
+* **The panel is on VLAN 4094**, at the address where the shipped firmware's
+  page was, ``192.168.1.1/24`` unless it was changed there (`Reaching the
+  panel`_). The host link itself has no address of the stick's: the OLT's
+  services may put it in a bridge.
 * **The first update overwrites the shipped firmware.** The panel names the
   bank that holds it and asks before it writes over it; ``onu-update write``
   on the command line does not ask. Copy the whole flash first
@@ -236,9 +242,11 @@ Before you install
 * **Builds from before 2026-10-11 erased the shipped firmware's files** in
   the partition ``config``. The system now keeps its settings in a file of
   its own beside them, and does not write theirs.
-* **The password is** ``admin`` **until you set one.** There is one account,
-  root, for the console, ssh and the panel. The panel allows nothing else
-  until a password is set; the console and ssh only warn
+* **The password is the shipped firmware's.** There is one account, root,
+  for the console, ssh and the panel. The first start takes the password of
+  the shipped firmware's administrator for it. Where that was still the
+  default, ``admin``, the password stays ``admin``: the panel then allows
+  nothing until a password of your own is set, and ssh takes keys only
   (`ADR 0012 <docs/adr/0012-one-account-root.rst>`__).
 * **The panel's certificate is signed by the stick itself**, so a browser
   warns at the first visit. The console and the panel show its fingerprint
@@ -262,6 +270,28 @@ Before you install
   registers do in another IC is not known, and neither is whether its optics
   would work or stay dark when they should (`optical-safety.rst
   <docs/handbook/optical-safety.rst>`__, "What the system does not write").
+
+Reaching the panel
+------------------
+
+The stick answers on VLAN 4094 of its host link, which its switch keeps away
+from the PON, at the address the shipped firmware's page had. Give the
+router's SFP port that VLAN and an address of the same network, then open
+``https://192.168.1.1/`` (or the address you had given the shipped
+firmware) and sign in as ``root``. On a Linux router whose SFP port is
+``eth1``::
+
+    ip link add link eth1 name eth1.4094 type vlan id 4094
+    ip address add 192.168.1.2/24 dev eth1.4094
+    ip link set eth1.4094 up
+
+On RouterOS::
+
+    /interface vlan add interface=sfp1 vlan-id=4094 name=onu-mgmt
+    /ip address add address=192.168.1.2/24 interface=onu-mgmt
+
+The panel can move the stick to another VLAN or address; it keeps the old
+pair until the new one is confirmed from a panel opened at it.
 
 Where to start
 ==============
