@@ -5,7 +5,7 @@
  * What the OLT set up, as omcid holds it: the instances of the managed
  * entity classes that describe the services and the unit, every attribute
  * of each in hexadecimal and the rows of their tables, and omcid's own
- * counts of the frames. omcid gives them on ubus (ADR 0014), as the answer
+ * counts of the frames. omcid gives them on ubus (ADR 0011), as the answer
  * of its method "mib" to the classes below, and never the logical password
  * of the ONU-G, only whether one is set. The panel knows what the
  * attributes mean.

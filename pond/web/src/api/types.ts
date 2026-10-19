@@ -348,7 +348,7 @@ export interface FixedInfo {
   name: string;
 }
 
-/** A change on trial (ADR 0014). */
+/** A change on trial (ADR 0011). */
 export interface Trial {
   name: "settings" | "lane" | "mgmt";
   until_s: number;

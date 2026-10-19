@@ -6,7 +6,7 @@
  * which onu-apply applies, and the account of each of the stick's PPPoE
  * sessions, 1 to 7, in /run/onu-pppoeN, as "user secret", readable by root
  * and by pppoed, which runs the session. What the settings mean, their defaults and the rules that bind them
- * together, is onu-config's (ADR 0014), and so are the files: pond reads
+ * together, is onu-config's (ADR 0011), and so are the files: pond reads
  * neither, and has onu-act run onu-config for it (bus.h). What came of them
  * is onu-apply's, and pond reads no file of it either: "onu-apply state"
  * gives it as lines "name=value" (settings_state).
@@ -21,7 +21,7 @@
  * each goes back. A write takes KEY=value lines, has
  * "onu-config change" judge them over the settings in force and write
  * them, and starts "onu-apply try" without waiting for it: the change is on
- * trial, and goes back unless it is confirmed (ADR 0014, changes.c). Until
+ * trial, and goes back unless it is confirmed (ADR 0011, changes.c). Until
  * onu-apply ends, a write is refused.
  *
  * The local networks the stick routes, LANn_*, and the fixed addresses of

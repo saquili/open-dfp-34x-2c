@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The changes on trial (ADR 0014), whichever program made them: the
+ * The changes on trial (ADR 0011), whichever program made them: the
  * settings, the setting of the SFP lane and the management pair. onu-change
  * keeps them all, the management pair only when the confirmation came to
  * its new address, which this daemon gives it as the address the request

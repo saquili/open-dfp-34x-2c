@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * The state of the stick's programs on ubus (ADR 0014): netifd's of each
+ * The state of the stick's programs on ubus (ADR 0011): netifd's of each
  * interface, a PPPoE session's among them, dhcp6d's and omcid's. bus-ubus.c
  * asks ubusd; bus-file.c, for the tests and a build without libubus, reads
  * run/ubus/OBJECT, a "PATH=VALUE" line for each value of "status", and

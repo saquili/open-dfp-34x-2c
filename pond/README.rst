@@ -32,7 +32,7 @@ that comes later. ``-t`` names the file of the token of scripts (see "The token
 of scripts"); without it no token is taken.
 
 What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
-0014) rather than run the program itself: the SFP lane, the management pair,
+0011) rather than run the program itself: the SFP lane, the management pair,
 the confirmation of the changes on trial, the name, the identity and a new
 registration, the updates' status and trial, the restart, and the settings
 of the data path, which pond reads without the accounts' secrets and changes
@@ -55,7 +55,7 @@ two: the stick restarts right after a trial is armed.
 
 On the stick pond runs as an account of its own, ``pond``, without a password
 or a shell, which no one logs in with, started as root with ``-u pond``; root stays the one account to log in
-with (ADR 0012, ADR 0014). ubusd's access list, ``acl.json``, which the image
+with (ADR 0009, ADR 0011). ubusd's access list, ``acl.json``, which the image
 installs as ``/usr/share/acl.d/pond.json``, lets it call the methods of
 onu-act it names and read the state of omcid, of netifd's interfaces and of
 dhcp6d, and nothing else; a new password, an update written and a start of
@@ -69,7 +69,7 @@ Signing in
 ==========
 
 One user, ``root``, the stick's one account: the console's login and the ssh
-server take the same password (``docs/adr/0012-one-account-root.rst``). Its
+server take the same password (``docs/adr/0009-one-account-root.rst``). Its
 hash, of the form of ``crypt()`` (SHA-256, ``$5$``, made by ``onu-config
 password``), is kept in the configuration store, which ``onu-config`` puts in
 ``/run/onu-auth`` at boot, for root alone; pond has onu-act run
@@ -213,14 +213,14 @@ one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
   ``/run/onu.conf`` (``SESSIONn_GEM``, ``_VLAN``, ``_MAC`` and ``_FAMILY``
   among them) and the accounts, ``PPPOEn_USER`` and ``PPPOEn_SECRET`` for the
   sessions 1 to 7. pond knows none of their rules, nor reads or writes their
-  files, which are onu-config's (ADR 0014): ``onu-config change``, which
+  files, which are onu-config's (ADR 0011): ``onu-config change``, which
   onu-act runs for pond, judges the change over the settings in force, says
   why not, which pond answers with, or writes the settings and the accounts
   that changed aside, in ``/run/onu-pending``, for root only; pond then has
   onu-act start ``onu-apply try``, which puts them in force, and does not
   wait for it: the change is on
   trial, and the stick goes back to the settings of before unless it is
-  confirmed (``changes``, ADR 0014), which saves them in the store; it
+  confirmed (``changes``, ADR 0011), which saves them in the store; it
   refuses another change, with 409, until onu-apply has ended. A read gives
   the settings as ``onu-config current`` reads them,
   each session with its user and whether a secret is set, never the secret,
@@ -316,7 +316,7 @@ one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
   no rule decides, ``OUT`` to the internet and ``BETWEEN`` the networks,
   ``allow`` or ``block``. A read gives them as ``rules``, in their order,
   and ``fw``. The rules are the switch's ACL's, the defaults netfilter's;
-  a rule that allows opens netfilter's default for IPv4 as well (ADR 0023).
+  a rule that allows opens netfilter's default for IPv4 as well (ADR 0019).
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
   ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION``,

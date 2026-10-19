@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The changes on trial (ADR 0014): the stick takes each back unless the
+ * The changes on trial (ADR 0011): the stick takes each back unless the
  * panel confirms it. The panel confirms them as soon as a fresh reading
  * shows them applied, which it could only get by reaching the stick again,
  * and once for each; a new management address only from a panel opened at

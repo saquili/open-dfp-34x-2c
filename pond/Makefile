@@ -84,8 +84,8 @@ $(BUILD)/tests/test_cert.o: tests/test_cert.c
 $(BUILD)/test_cert: $(BUILD)/tests/test_cert.o $(BUILD)/src/cert.o $(BUILD)/mongoose.o
 	$(CC) $(LDFLAGS) -o $@ $^
 
-# The settings' rules are onu-config's, of onu-utils (ADR 0014): the tests of the
-# settings run it, built here from its sources.
+# The settings' rules are onu-config's, of onu-utils (ADR 0011): the tests of
+# the settings run it, built here from its sources.
 ONU_CONFIG_SRC := $(addprefix $(ONU_UTILS)/src/,onu-config.c cfgstore.c settings.c password.c sha256.c)
 
 $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)

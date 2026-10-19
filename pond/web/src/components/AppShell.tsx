@@ -7,7 +7,7 @@
  * each, the internet's with how many things each holds; whether the stick
  * answers, the language and the user. When the stick stops answering,
  * the pages keep the last figures and a bar says since when. A change of the
- * settings on trial is confirmed here, whatever the page (ADR 0014).
+ * settings on trial is confirmed here, whatever the page (ADR 0011).
  */
 
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";

@@ -6,7 +6,7 @@
  * password the console's login and the ssh server take too. onu-config keeps
  * its hash, of crypt()'s form, in the configuration store and in
  * /run/onu-auth, which root alone reads: onu-config checks a password and
- * hashes a new one, which the panel has onu-act run (ADR 0014). A few
+ * hashes a new one, which the panel has onu-act run (ADR 0011). A few
  * sessions, each a random id the browser holds in an HttpOnly cookie.
  *
  * Until a password is set, the password is "admin" and every session must
