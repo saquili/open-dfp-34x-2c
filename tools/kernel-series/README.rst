@@ -7,7 +7,7 @@ tools/kernel-series
 
 What this repository's kernel series changes in code that the Linux kernel
 owns, and the patches of the networking core, ready to be offered to their
-maintainers (ADR 0018). ``docs/handbook/kernel-series.rst`` says why each file
+maintainers (ADR 0015). ``docs/handbook/kernel-series.rst`` says why each file
 was changed.
 
 Usage
