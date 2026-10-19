@@ -550,10 +550,14 @@ by its whole path where procd starts it.
 
 ``onu-fw``
    puts the stick's own table of nf_tables, ``inet onu``, in place for the
-   local networks, through netlink, since the image carries no ``nft``::
+   local networks, through netlink, since the image carries no ``nft``, and
+   the firewall's rules into the switch's ACL::
 
       onu-fw apply FILE
       onu-fw clear
+      onu-fw acl FILE STATUS
+      onu-fw acl-show FILE
+      onu-fw acl-clear
 
    The table is the NAT the networks go out through, behind the address of
    the connection each goes out by, a flowtable that hands their TCP and UDP
@@ -576,6 +580,71 @@ by its whole path where procd starts it.
    carry no flow in hardware does, the table goes in without it, and the CPU
    carries the flows. ``tests/test_onu_fw.sh`` reads the table back with nft
    on dummy interfaces, with root's CAP_NET_ADMIN.
+
+   The firewall's rules are the switch's ACL's (ADR 0023), which judges each
+   frame as it enters a port and keeps no state. ``onu-fw acl`` compiles
+   them (``src/fwacl.h``) to ``tc`` flower filters on the ingress of ``sfp``
+   and ``pon``, in the switch alone, a ``drop`` for a rule that blocks and a
+   ``pass`` for one that allows, one priority each from 400, the range of
+   the registry ``omcid/target/tcprio.h`` gives it, and adds them through
+   route netlink, as ``tc``, which the stick carries only on a RAM image,
+   would. ``onu-apply`` writes the file, ``/run/onu-fw-acl.conf``, wherever
+   it writes the table's: a line ``lan N ADDRESS/LEN CONN`` for each
+   network, ``wan CONN IFNAME ADDR`` for each connection that has an address
+   now, ``dev N MAC ADDR`` for the fixed address of each device a rule
+   names, the table's ``fwd`` and ``dmz`` lines, and ``rule SPEC`` for each
+   rule in its order, as ``RULEn`` has it. What became of each rule is in
+   ``STATUS``, ``/run/onu-fw.acl``, a line each: ``ID in ENTRIES``, ``ID
+   part ENTRIES WHY`` or ``ID out 0 WHY``, WHY being ``off``, ``ipv6``,
+   ``nothing`` (no forward and no DMZ reaches where it goes from the
+   internet), ``dmz`` (its part through a DMZ names every port, which the
+   ACL could not tell from the answers to the networks' own traffic),
+   ``room``, ``refused`` or ``after``.
+
+   * From a network, what enters ``sfp``: a network is its addresses
+     (``src_ip``), every network one entry each, a device it comes from its
+     MAC address, one it goes to its fixed address, a part of the internet
+     its address. The ACL sees no route, so the rules to a local address
+     come first, then a ``pass`` of each network's addresses, of
+     255.255.255.255 and of the groups' UDP (224.0.0.0/4), then the rules to
+     the internet, which name no destination: a frame to a local address
+     never meets them, and no rule of the one kind matches a frame of the
+     other. IGMP is not passed, as a pass of it would keep the driver's own
+     rule from copying it to the bridge's snooping.
+   * From the internet, what enters ``pon``, to a connection's own address:
+     a rule to a device or a network is the external ports of the forwards
+     that reach it, its own ports moved through each forward's mapping, and
+     of a DMZ that reaches it its ports that no forward of the connection
+     takes, and an echo request. The entries name the connection's address,
+     so that what the OLT bridges for other services meets none; a
+     session's match inside it (``protocol ppp_ses``, ``ppp_proto ip``), an
+     IPoE connection's on its GEM port.
+   * A rule that allows passes the answers too, placed with it, from the
+     rule's ports: a stateless rule that blocks after it would drop them.
+     The far end may then start from those ports as well. Between the
+     networks a rule without ports passes every answer of its protocol, so
+     a later rule that blocks the other way is undone in the ACL, which
+     ``FW_BETWEEN=block`` keeps, statefully, in netfilter. From the internet
+     the answers are those of the devices its forwards and DMZ reach, from
+     their ports. To the internet only a rule that names ports has its
+     answers passed, on ``pon``: a pass of every frame to the connection's
+     address would undo every later rule from the internet.
+   * A protocol of both is two entries; a range of ports its masked
+     prefixes (``dst_port 6000/0xfff8``); a rule of IPv6 alone none, one of
+     any family its IPv4.
+   * The rules go in, in their order, up to the last that fits whole of the
+     92 entries the driver's own four leave; the rest are ``room``. The old
+     ones go first, then the new come a rule at a time: for the milliseconds
+     between no rule holds. A rule an entry of which the kernel refuses is
+     taken out whole, and the rules after it are left out, as they may count
+     on it. Without a rule in force, or without networks, ``onu-apply`` has
+     ``onu-fw acl-clear`` take them out.
+
+   ``acl-show`` prints the ``tc`` commands without the kernel.
+   ``tests/test_fwacl.c`` compiles rule sets against the commands written
+   out, and ``tests/test_onu_fw_acl.sh`` puts them into the kernel on dummy
+   interfaces, in software (``ONU_FW_ACL_SW``), and finds the filters the
+   same as ``tc``'s for the same commands.
 
 ``onu-run``
    starts a service of the stick in the foreground, as procd wants it, from
