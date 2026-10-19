@@ -125,10 +125,10 @@ setup() {
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
 	# nft stays a stand-in, so that a call to it would show in the log: the
 	# stick has no nft, and onu-apply puts its table in place with onu-fw,
-	# whose stand-in keeps the file it is given.
+	# whose stand-in keeps the file it is given, of the table or of the ACL.
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
-	printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf"\nexit 0\n' \
-		"$T" >"$T/bin/onu-fw"
+	printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf"\n[ "$1" = acl ] && cp "$2" "%s/acl.conf"\nexit 0\n' \
+		"$T" "$T" >"$T/bin/onu-fw"
 	# pppoed opens IPv4, or IPv6 alone when told -6, and keeps it two seconds.
 	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\ncase " $* " in\n%s\n%s\nesac\n%s 2\n' \
 		'*" -6 "*) echo "up6 ppp1 local fe80::2 peer fe80::1 session 18" ;;' \
@@ -242,9 +242,10 @@ teardown
 echo "ports forwarded to a network's devices, and a DMZ, by a session while it is up"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
-# onu-fw's stand-in keeps each table it is given, one after another.
-printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf" && { cat "$2"; echo --; } >>"%s/fw.all"\nexit 0\n' \
-	"$T" "$T" >"$T/bin/onu-fw"
+# onu-fw's stand-in keeps each table it is given, one after another, and
+# each file of the ACL.
+printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf" && { cat "$2"; echo --; } >>"%s/fw.all"\n[ "$1" = acl ] && cp "$2" "%s/acl.conf" && { cat "$2"; echo --; } >>"%s/acl.all"\nexit 0\n' \
+	"$T" "$T" "$T" "$T" >"$T/bin/onu-fw"
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 \
 	LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on LAN1_LEASE=3600 \
 	FIXED1=1/00:00:5e:00:53:a1/192.168.1.10 FIXED2=1/00:00:5e:00:53:a2/192.168.1.20 \
@@ -252,7 +253,8 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 
 	FORWARD2=pppoe:1/both/6000-6010/1/00:00:5e:00:53:a1/6000/on \
 	FORWARD3=pppoe:1/udp/3074/1/00:00:5e:00:53:a1/3074/off \
 	FORWARD4=pppoe:1/tcp/7000-7010/1/00:00:5e:00:53:a1/9000/on \
-	DMZ1=pppoe:1/1/00:00:5E:00:53:A2
+	DMZ1=pppoe:1/1/00:00:5E:00:53:A2 \
+	RULE1=1_block_internet:198.51.100.0/24_dev:1:00:00:5e:00:53:a1_tcp_80_any_on
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
@@ -285,6 +287,17 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
 	"$REAL_SLEEP" 0.2
 done
 check 'cycled'
+# The firewall's rules in the ACL name the session's address, which the
+# rules came with once it was up, and went without while it was down.
+A=$T/acl.conf
+check 'grep -qx "lan 1 192.168.1.0/24 pppoe:1" "$A" && grep -qx "wan pppoe:1 ppp0 192.0.2.2" "$A"'
+check 'grep -qx "fwd ppp0 192.0.2.2 tcp 8080 192.168.1.10 80" "$A" &&
+	grep -qx "dmz ppp0 192.0.2.2 192.168.1.20" "$A"'
+check 'grep -qx "dev 1 00:00:5e:00:53:a1 192.168.1.10" "$A" && [ "$(grep -c "^dev" "$A")" -eq 1 ]'
+check 'grep -qx "rule 1_block_internet:198.51.100.0/24_dev:1:00:00:5e:00:53:a1_tcp_80_any_on" "$A"'
+check 'awk "/^--\$/ { s = s (f ? 1 : 0); f = 0; next } /^wan pppoe:1/ { f = 1 } END { print s }" \
+	"$T/acl.all" | grep -q 101'
+check 'logged "^onu-fw acl $ONU_ROOT/run/onu-fw-acl.conf $ONU_ROOT/run/onu-fw.acl$"'
 # Without the DMZ and with the forwards off, only the network's NAT is left.
 sed -i.bak -e "s|/on$|/off|" -e "/^DMZ1=/d" "$ONU_ROOT/run/onu.conf"
 : >"$LOG"
@@ -344,10 +357,40 @@ check '[ "$(grep "^allow" "$F")" = "$(printf "%s\n" \
 	"allow out iif net1 daddr 203.0.113.7 icmp")" ]'
 # Blocks, rules of IPv6 alone or of an IPv6 address, and one off are none.
 check '! grep -q "dport 25\|tcp 25\|443\|2001" "$F"'
+# Every rule goes to the ACL, in its order, a block, one off and one of IPv6
+# as well, with the networks, the connection's address, and the fixed
+# address of each device a rule names that has one.
+A=$T/acl.conf
+check 'logged "^onu-fw acl $ONU_ROOT/run/onu-fw-acl.conf $ONU_ROOT/run/onu-fw.acl$"'
+check 'grep -qx "lan 1 192.168.1.0/24 ipoe:1" "$A" && grep -qx "lan 2 10.0.0.0/24 ipoe:1" "$A"'
+check 'grep -qx "wan ipoe:1 wan420 192.0.2.10" "$A"'
+check '[ "$(grep "^dev" "$A")" = "dev 1 00:00:5e:00:53:a1 192.168.1.10" ]'
+check '[ "$(grep "^rule" "$A" | cut -d_ -f1)" = "$(printf "rule %s\n" 4 2 3 1 5 6 7 8 9)" ]'
+check 'grep -qx "rule 4_allow_lan:2_dev:1:00:00:5E:00:53:A1_tcp_9100_any_on" "$A"'
+# A sync with nothing changed puts the rules in no second time.
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check '! logged "^onu-fw acl"'
 # Without FW_OUT, its default: out is let through.
 sed -i.bak -e "/^FW_OUT=/d" "$ONU_ROOT/run/onu.conf"
 "$MODE_SCRIPT" reload 2>/dev/null
 check 'grep -qx "default out allow" "$F" && grep -qx "default between block" "$F"'
+# With no rule in force the ACL holds none, and nothing says what became of them.
+: >"$ONU_ROOT/run/onu-fw.acl"
+sed -i.bak -e "s/^\(RULE[0-9]*=.*\)_on$/\1_off/" "$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-fw acl-clear$" && ! logged "^onu-fw acl /"'
+check '[ ! -e "$ONU_ROOT/run/onu-fw-acl.conf" ] && [ ! -e "$ONU_ROOT/run/onu-fw.acl" ]'
+# Nor without the networks, which take the rules with them.
+sed -i.bak -e "s/^\(RULE[0-9]*=.*\)_off$/\1_on/" "$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ -e "$ONU_ROOT/run/onu-fw-acl.conf" ]'
+sed -i.bak -e "/^LAN/d" -e "/^RULE/d" -e "/^FIXED/d" "$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-fw acl-clear$" && logged "^onu-fw clear$"'
+check '[ ! -e "$ONU_ROOT/run/onu-fw-acl.conf" ]'
 teardown
 
 echo "a PPPoE session without name servers"

@@ -140,7 +140,12 @@
 # there as well, which lets a new connection of IPv4 through where its
 # way's default would drop it (rules_fw()). A rule that blocks is the ACL's
 # alone, and so, until the stick routes IPv6 to the networks' devices, is
-# one of IPv6 alone.
+# one of IPv6 alone. onu-fw puts the rules in force into the ACL from
+# $RUN/onu-fw-acl.conf, the networks, the connections' addresses, the
+# devices the rules name, the forwards, the DMZs and the rules (acl_fw()),
+# and writes what became of each rule to $RUN/onu-fw.acl, "ID in|part|out
+# ENTRIES [WHY]" a line; the rules leave the ACL with the last rule in
+# force, and with the networks.
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -1749,11 +1754,76 @@ lans_down() {
 	return 0
 }
 
-# onu-fw's table away, once one was put in place.
+# onu-fw's table away, once one was put in place, and the firewall's rules
+# out of the switch's ACL.
 fw_clear() {
+	acl_clear
 	[ -e "$RUN/onu-fw.conf" ] || return 0
 	onu-fw clear || log "onu-fw did not take its table away"
 	rm -f "$RUN/onu-fw.conf"
+}
+
+# The firewall's rules out of the switch's ACL, once they were put in.
+acl_clear() {
+	[ -e "$RUN/onu-fw-acl.conf" ] || return 0
+	onu-fw acl-clear || log "onu-fw did not take the firewall's rules out of the ACL"
+	rm -f "$RUN/onu-fw-acl.conf" "$RUN/onu-fw.acl"
+}
+
+# The firewall's rules in the switch's ACL (ADR 0023), as onu-fw's file of
+# them: each network with its addresses and the connection it goes out by,
+# each connection that has an address now with its interface, the fixed
+# address of each device a rule names, the forwards and the DMZs in force, $1
+# (forwards_fw()), and the rules in their order. onu-fw compiles them to the
+# ACL's entries, and writes what became of each rule to $RUN/onu-fw.acl.
+# The entries from the internet name the connection's address, a lease's or
+# a session's, so they run again with lans_fw() whenever one comes or goes.
+# Without a rule in force the ACL holds none of them.
+acl_fw() {
+	if ! grep -q "^RULE[0-9]*=.*_on$" "$CONF" 2>/dev/null; then
+		acl_clear
+		return 0
+	fi
+	{
+		for af in $(lans); do
+			echo "lan $af $(lan_net "$af") $(lan_conn "$af")"
+		done
+		conns_in | sed "s/^/wan /"
+		awk '
+			/^RULE[0-9]+=./ {
+				k = substr($0, 5, index($0, "=") - 5) + 0
+				rule[k] = substr($0, index($0, "=") + 1)
+				n = split(rule[k], f, "_")
+				for (i = 3; i <= 4 && n == 8; i++)
+					if (f[i] ~ /^dev:/)
+						named[substr(f[i], 5, 1) "/" tolower(substr(f[i], 7))] = 1
+			}
+			/^FIXED[0-9]+=./ {
+				split(substr($0, index($0, "=") + 1), f, "/")
+				fixed[++nf] = f[1] "/" tolower(f[2]) "/" f[3]
+			}
+			END {
+				for (i = 1; i <= nf; i++) {
+					split(fixed[i], f, "/")
+					if ((f[1] "/" f[2]) in named)
+						print "dev " f[1] " " f[2] " " f[3]
+				}
+				for (k = 1; k <= 96; k++)
+					if (k in rule)
+						print "rule " rule[k]
+			}' "$CONF" 2>/dev/null
+		[ -z "$1" ] || echo "$1"
+	} >"$RUN/onu-fw-acl.conf.new"
+	if [ -e "$RUN/onu-fw-acl.conf" ] &&
+		[ "$(cat "$RUN/onu-fw-acl.conf.new")" = "$(cat "$RUN/onu-fw-acl.conf")" ]; then
+		rm -f "$RUN/onu-fw-acl.conf.new"
+		return 0
+	fi
+	mv "$RUN/onu-fw-acl.conf.new" "$RUN/onu-fw-acl.conf"
+	onu-fw acl "$RUN/onu-fw-acl.conf" "$RUN/onu-fw.acl" || {
+		log "onu-fw did not put the firewall's rules into the switch's ACL"
+		rm -f "$RUN/onu-fw-acl.conf"
+	}
 }
 
 # The interface of each connection that has an IPv4 address, and the address,
@@ -1890,15 +1960,17 @@ rules_fw() {
 # the operator's side, the sessions' interfaces and each IPoE connection's,
 # by which no new connection comes in to a network but what a forward or a
 # DMZ takes (forwards_fw()) or a rule lets in, and the firewall's defaults
-# and rules (rules_fw()). Without networks the table goes. It runs again
-# when a session's address comes or goes, and at each sync, which follows
-# an IPoE connection's lease.
+# and rules (rules_fw()); and the firewall's rules in the switch's ACL
+# (acl_fw()). Without networks the table goes, and the rules with it. It
+# runs again when a session's address comes or goes, and at each sync,
+# which follows an IPoE connection's lease.
 lans_fw() {
 	lf_all=$(lans)
 	if [ -z "$lf_all" ]; then
 		fw_clear
 		return 0
 	fi
+	lf_fwd=$(forwards_fw)
 	{
 		for lf in $lf_all; do
 			echo "lan $(lan_if "$lf") $(lan_net "$lf")"
@@ -1915,20 +1987,21 @@ lans_fw() {
 		for lf in $(ipoes); do
 			[ -r "$IPOE_DIR/$lf/dev" ] && echo "out $(cat "$IPOE_DIR/$lf/dev")"
 		done
-		forwards_fw
+		[ -z "$lf_fwd" ] || echo "$lf_fwd"
 		rules_fw
 	} >"$RUN/onu-fw.conf.new"
 	# What onu-fw holds already is not put in place again.
 	if [ -e "$RUN/onu-fw.conf" ] &&
 		[ "$(cat "$RUN/onu-fw.conf.new")" = "$(cat "$RUN/onu-fw.conf")" ]; then
 		rm -f "$RUN/onu-fw.conf.new"
-		return 0
+	else
+		mv "$RUN/onu-fw.conf.new" "$RUN/onu-fw.conf"
+		onu-fw apply "$RUN/onu-fw.conf" || {
+			log "onu-fw did not take the NAT of the local networks"
+			rm -f "$RUN/onu-fw.conf"
+		}
 	fi
-	mv "$RUN/onu-fw.conf.new" "$RUN/onu-fw.conf"
-	onu-fw apply "$RUN/onu-fw.conf" || {
-		log "onu-fw did not take the NAT of the local networks"
-		rm -f "$RUN/onu-fw.conf"
-	}
+	acl_fw "$lf_fwd"
 }
 
 ttl_decrement() {

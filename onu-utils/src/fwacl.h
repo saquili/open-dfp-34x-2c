@@ -78,6 +78,9 @@
  *                            table has them (fwmsg.h)
  *   rule ID_ACTION_FROM_TO_PROTO_PORTS_FAMILY_ON
  *                            a rule, as RULEn has it, in their order
+ *
+ * A forward and a DMZ come after the line of their connection; one of a
+ * connection without a line is no one's.
  */
 
 #ifndef ONU_UTILS_FWACL_H
