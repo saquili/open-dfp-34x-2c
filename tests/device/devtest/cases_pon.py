@@ -158,7 +158,7 @@ def dbm(microwatts: int) -> str:
 @case("optics.diagnostics", "Optics",
       "Temperature, supply, bias and both optical powers read within the module's warning thresholds")
 def diagnostics(ctx: Context):
-    base = hwmon(ctx, "rtl9602c_optics")
+    base = hwmon(ctx, "gn25l95")
     raw = ctx.stick.text(f"cd {base} && for f in *_input; do c=${{f%_input}}; "
                          f"echo $c $(cat $f) $(cat ${{c}}_min) $(cat ${{c}}_max) "
                          f"$(cat ${{c}}_label 2>/dev/null); done")
