@@ -6,7 +6,7 @@ ADR 0012: One account, root, for the console, ssh and the panel
 ==================================================================
 
 :Status: Accepted, amended by 0013 (a bench's console) and 0014 (the panel's
-         own account)
+         own account), and below (see "Amendments")
 :Date: 2026-10-08
 :Decided-by: the owner, 2026-10-08
 
@@ -72,3 +72,20 @@ Consequences
   replace the system.
 * There is no second account to give away, nor any account with fewer rights.
   A need for one would be a new decision.
+
+Amendments
+==========
+
+**2026-10-19: the first password, and ssh while the default is in force.**
+Decided by the owner, 2026-10-19.
+
+* At the first start, while the store holds nothing yet, root's password is
+  the one of the shipped firmware's administrator, which ``ponid`` reads from
+  the shipped firmware's files: the owner signs in with the password they
+  knew. The shipped firmware's own default, ``admin``, is this system's
+  default as well and is not taken; the panel then forces a change, as
+  before. A password cleared later, to have the default back, stays cleared.
+* While the default is in force the ssh server takes keys only, as it does
+  while the password is not known: ``admin`` is printed in this repository.
+  A password set over it ends the server, which procd starts again with
+  passwords. The console still takes ``admin``, which needs the case opened.
