@@ -287,7 +287,8 @@ static int rtl9602c_optics_field(struct rtl9602c_priv *p, u16 reg, char *out,
  * rtl9602c_optics_modules.  For any other module, or when the header
  * cannot be read, the driver only reads the laser driver: the modulation
  * hold writes nothing and the adapter refuses writes, as with
- * CONFIG_RTL9602C_OPTICS_RO.  Called once, after the master is enabled.
+ * CONFIG_RTL9602C_OPTICS_RO.  Called when the adapter comes, and again at
+ * each modulation hold for as long as the header has not been read.
  */
 static void rtl9602c_optics_identify(struct rtl9602c_priv *p)
 {
@@ -299,6 +300,7 @@ static void rtl9602c_optics_identify(struct rtl9602c_priv *p)
 	err = rtl9602c_optics_field(p, 20, name, 16) ?:
 	      rtl9602c_optics_field(p, 40, part, 16);
 	rtl9602c_i2c_unlock(p);
+	WRITE_ONCE(p->optics_unread, !!err);
 	if (err) {
 		pr_warn("optics: the module's header could not be read (%pe); the laser driver is only read\n",
 			ERR_PTR(err));
@@ -1113,7 +1115,12 @@ out:
 
 int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 {
-	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) || !p->optics_known)
+	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
+		return 0;
+	/* A header that could not be read when the adapter came is read again. */
+	if (READ_ONCE(p->optics_unread))
+		rtl9602c_optics_identify(p);
+	if (!READ_ONCE(p->optics_known))
 		return 0;
 
 	guard(rtl9602c_i2c)(p);

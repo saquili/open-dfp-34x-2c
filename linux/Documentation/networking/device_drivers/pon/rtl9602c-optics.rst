@@ -1272,7 +1272,9 @@ was measured on. For any other module, and when the header cannot be read, the
 driver behaves as the read-only build below, without the build option: the
 modulation hold returns at once, ``rtl9602c_l_write()`` and the I2C adapter
 refuse writes with ``-EPERM``, no transmit power level is set, and the log has
-one line at probe (see "Logging").
+one line at probe (see "Logging"). A header that cannot be read is read again at
+each modulation hold until it reads, so that a transfer that failed once, when
+the adapter came, does not leave the module unwritten until the next boot.
 
 .. list-table::
    :header-rows: 1
@@ -1352,7 +1354,7 @@ device.
    * - Setup, the module is not one the driver writes
      - ``optics: module "<vendor name>" "<part number>" is not one the driver
        was measured on; the laser driver is only read``
-   * - Setup, the module's header cannot be read
+   * - Setup, or a bring-up after it, the module's header cannot be read
      - ``optics: the module's header could not be read (<error>); the laser
        driver is only read``
    * - Bring-up, the hold succeeded
@@ -1409,7 +1411,8 @@ end of a step is the tag of the fact the step rests on (see the tables above).
 5. At the first ONU state change after ``ip link set pon up``, which is O1, and
    at every later one, drive TX_DISABLE (see "TX_DISABLE"). Purpose: follow the
    activation state. (T)
-6. In the GPON bring-up, after the MAC reset and before the first O3, run the
+6. In the GPON bring-up, after the MAC reset and before the first O3, read the
+   module's header again if it could not be read in step 3, then run the
    modulation hold (see "The modulation hold"). Purpose: the modulation runs
    from the value the module loads at power-up. (M)
 

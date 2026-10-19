@@ -2191,6 +2191,11 @@ struct rtl9602c_priv {
 	 */
 	bool			optics_known;
 	/**
+	 * @optics_unread: the module's header could not be read at the last
+	 * try, which the next modulation hold repeats
+	 */
+	bool			optics_unread;
+	/**
 	 * @optics_t2_open: table 2 is open for storing through the debugfs
 	 * entry t2write, which keeps @optics_t2_eectl and @optics_t2_tabsel,
 	 * EEPROM_CTRL and the page select as found; under optics_lock
