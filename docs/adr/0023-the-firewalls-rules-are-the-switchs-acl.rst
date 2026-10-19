@@ -145,7 +145,19 @@ Consequences
     driver's own four and of the other writers' hold them whole; the rules
     after the first that does not fit stay out too, as they may count on
     it. The old set goes before the new one comes, a gap of milliseconds.
+  - Measured on the stick on 2026-10-19 (RAM image of 7d047a237, IPoE WAN,
+    a LAN with a forward of 8000-8003 to 9000-9003 and a DMZ, three rules:
+    allow the LAN to 203.0.113.10 TCP 5201, off at first; block the networks
+    to the internet TCP 5201; block 203.0.113.10 to the device's ports
+    9000-9003): a transfer to port 5201 did not connect, its three SYNs
+    dropped, while ping went through; a connection to forwarded port 8000
+    timed out while one to 8004 reached the device through the DMZ; with
+    the first rule on, transfers ran at 938 Mbit/s one way and 940 the
+    other, and one through the forward of port 5201 at 937, the CPU's
+    interfaces moving by some fifteen frames while the allow rule's two
+    entries matched about 463,000 and 467,000. A rule on the IPv4 inside
+    the PPPoE session counted 20 of 20 echo replies.
   - Not measured on the stick yet: that every entry's set of fields finds a
     template among the seven the ACL shares with the other writers' rules
-    (a refused one is reported, with the rules after it); and the
-    filters' order and effect on sfp and pon with real traffic.
+    when many rules of different fields are on (a refused one is reported,
+    with the rules after it).
