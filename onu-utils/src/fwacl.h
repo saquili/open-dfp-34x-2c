@@ -98,8 +98,15 @@
  */
 #define ACL_PREF 400
 #define ACL_PREFS 100
-/* The ACL's 96 entries, less the driver's own four (IGMP and MLD). */
-#define ACL_ROOM 92
+/*
+ * The most entries the rules take: the ACL's 96, less the driver's own four
+ * (IGMP and MLD) and the four of the management VLAN's two pairs, which
+ * onu-mgmt holds at once while it changes the pair (a trap on sfp and a drop
+ * on pon each): the firewall never keeps the management VLAN from a change.
+ * omcid's rules of the bridge share what is left, and the kernel says when
+ * no entry is: the rules from there on are left out.
+ */
+#define ACL_ROOM 88
 
 #define ACL_LANS 8
 #define ACL_WANS 14

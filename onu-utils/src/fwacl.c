@@ -791,7 +791,7 @@ void acl_compile(const struct acl_spec *s, int room, struct acl_set *out)
 	/*
 	 * In the order the switch judges them: by port, then by place among
 	 * the port's, then as they came, the rules' in their order. A stable
-	 * insertion sort, of 92 entries at most.
+	 * insertion sort, of ACL_ROOM entries at most.
 	 */
 	for (int i = 1; i < out->n; i++) {
 		struct acl_entry x = out->e[i];

@@ -632,8 +632,11 @@ by its whole path where procd starts it.
    * A protocol of both is two entries; a range of ports its masked
      prefixes (``dst_port 6000/0xfff8``); a rule of IPv6 alone none, one of
      any family its IPv4.
-   * The rules go in, in their order, up to the last that fits whole of the
-     92 entries the driver's own four leave; the rest are ``room``. The old
+   * The rules go in, in their order, up to the last that fits whole of 88
+     entries, the ACL's 96 less the driver's own four and the four the
+     management VLAN's two pairs take while ``onu-mgmt`` changes the pair,
+     and of what omcid's rules of the bridge leave, which the kernel tells;
+     the rest are ``room``. The old
      ones go first, then the new come a rule at a time: for the milliseconds
      between no rule holds. A rule an entry of which the kernel refuses is
      taken out whole, and the rules after it are left out, as they may count
