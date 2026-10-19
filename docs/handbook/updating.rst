@@ -262,14 +262,17 @@ bytes):
   seconds after the kernel started and committed its bank.
 * The shipped firmware stayed in bank 1, in its own split. With ``sw_commit``
   set to 1 from this system (``onu-update env sw_commit=1``) and a restart, it
-  started again and loaded its configuration from ``config``, where this
-  system had kept its own file beside the shipped firmware's; the same login
-  as before opened its page. A second upload through that page brought this
-  system back, committed, with the shipped firmware still in bank 1.
+  started again, and the same login as before opened its page. A second
+  upload through that page brought this system back, committed, with the
+  shipped firmware still in bank 1.
 * The stick had run this system before, so its file in ``config`` was there
-  already: the first start of this system on a stick that never ran it, which
-  takes the identity from the shipped firmware's files, was not part of this
-  measurement.
+  already, and it was the only file there: an earlier version of this system
+  had kept its settings in place of the shipped firmware's files. The shipped
+  firmware therefore started from its factory settings, both times. Two
+  things were not part of this measurement: the first start of this system on
+  a stick that never ran it, which takes the identity from the shipped
+  firmware's files, and the shipped firmware's own settings kept across the
+  round trip.
 
 The new system finds the shipped firmware's files in the partition
 ``config``, mounts them, takes the identity from them and starts with its
