@@ -1,0 +1,40 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# keep-uclibc: the pieces of the C library's link, into the toolchain.
+#
+# Usage: keep-uclibc OUT
+#
+# OUT is the output directory of configs/toolchain_defconfig, after its build
+# and before "make sdk" packs it. tools/lib-trim links the C library of an
+# image again from uClibc-ng's build directory: its configuration, the archive
+# of position-independent objects libc/libc_so.a, and lib/, with the loader,
+# interp.os and the libraries of the link. An image built with a toolchain of a
+# release has no such directory, so the toolchain carries them in
+# share/open-dfp-34x-2c/uclibc, beside its sysroot and outside it: Buildroot
+# copies parts of a sysroot into the image's target tree.
+#
+# Exit status: 0 on success, 1 when OUT holds no single uClibc-ng build or
+# host directory.
+set -eu
+prog=keep-uclibc
+die() {
+	echo "$prog: $*" >&2
+	exit 1
+}
+[ $# -eq 1 ] || die "usage: $prog OUT"
+out=$1
+set -- "$out"/build/uclibc-*/
+[ $# -eq 1 ] && [ -d "$1" ] || die "$out/build holds no single uClibc-ng build"
+build=${1%/}
+[ -f "$build/.config" ] && [ -f "$build/libc/libc_so.a" ] && [ -d "$build/lib" ] ||
+	die "$build has no .config, libc/libc_so.a or lib/"
+[ -d "$out/host/bin" ] || die "$out/host is no toolchain"
+dest=$out/host/share/open-dfp-34x-2c/uclibc
+rm -rf "$dest"
+mkdir -p "$dest/libc"
+cp -p "$build/.config" "$dest/.config"
+cp -p "$build/libc/libc_so.a" "$dest/libc/"
+cp -pR "$build/lib" "$dest/lib"
+echo "$prog: $build into $dest"

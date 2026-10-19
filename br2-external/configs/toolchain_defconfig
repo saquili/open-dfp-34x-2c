@@ -3,7 +3,8 @@
 #
 # The cross toolchain and nothing else: no kernel, no root filesystem. Running
 # make sdk in the Buildroot tree builds it and packs it as a relocatable
-# tarball. See br2-external/README.rst.
+# tarball, which a release of the toolchain workflow carries. See
+# br2-external/README.rst.
 
 # MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
 # variant comes from the patch in buildroot/patches.
@@ -20,6 +21,15 @@ BR2_TOOLCHAIN_BUILDROOT_WCHAR=y
 BR2_PTHREADS_NONE=y
 BR2_TOOLCHAIN_BUILDROOT_USE_SSP=y
 BR2_UCLIBC_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/uclibc.fragment"
+
+# The C library and libgcc are built with the flags of the board's programs
+# (odi_dfp_34x_2c3_defconfig): for size, not position-independent, with partial
+# RELRO. The board's image takes them from this toolchain when it is built with
+# the toolchain of a release (br2-external/toolchain/PIN), so they are the ones
+# the board's own build of the toolchain makes.
+BR2_OPTIMIZE_S=y
+# BR2_PIC_PIE is not set
+BR2_RELRO_PARTIAL=y
 
 # The kernel headers are those of this repository's kernel (linux/), from the
 # archive that tools/kernel-archive makes.

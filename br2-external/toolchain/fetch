@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""fetch: the pinned cross toolchain, a release of this repository, checked and unpacked.
+
+Usage: br2-external/toolchain/fetch [--pin FILE] [--dl DIR] [--out DIR] [-q] [--sources]
+
+Reads the pin (br2-external/toolchain/PIN). A pin without a TAG names no
+release: the script prints nothing and exits 0, and the image's build makes its
+own toolchain from source.
+
+Otherwise it finds the pinned files in the download directory (--dl, else
+$BR2_DL_DIR, else build/dl) or fetches them from the release into it, and
+refuses a file unless its size and SHA-256 are the pinned ones. With
+GH_TOKEN or GITHUB_TOKEN set, a file is fetched through GitHub's API with that
+token, which also reaches a private repository; without one, from the
+release's public download address.
+
+Without --sources, the toolchain's tarball (TARBALL) is unpacked into the
+output directory (--out, else build/toolchain-release) as TAG/<the tarball's
+directory>/ and relocated there with the build system's relocation script
+that it holds; the path of that directory is the only thing printed on
+standard output. The release is fetched from the GitHub repository that
+TOOLCHAIN_REPOSITORY (owner/name) names, else GITHUB_REPOSITORY, else the
+remote "origin" of the checkout. The work is staged
+next to it and swapped in at the end, and a stamp records the tarball's
+SHA-256: a later run that finds the same stamp does nothing, and needs neither
+the tarball nor the network. With --sources, the toolchain's sources and
+licences (SOURCES) are checked into the download directory, and their path is
+printed.
+
+Exit status: 0 on success, including "no release pinned" and "nothing to do";
+1 when a file was refused or could not be fetched; 2 when the pin cannot be
+used.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PROG = "br2-external/toolchain/fetch"
+HERE = os.path.dirname(os.path.realpath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
+KEYS = ("TAG", "TARBALL", "TARBALL_SIZE", "TARBALL_SHA256", "SOURCES", "SOURCES_SIZE",
+        "SOURCES_SHA256")
+CHUNK = 1 << 20
+
+
+class Refused(Exception):
+    """A file or a pin that this script will not use."""
+
+
+def read_pin(path: str) -> dict[str, str]:
+    """The KEY=VALUE lines of the pin; every key of KEYS must be there, empty or not."""
+    pin: dict[str, str] = {}
+    with open(path, encoding="utf-8") as handle:
+        for number, line in enumerate(handle, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = re.fullmatch(r"([A-Z0-9_]+)=(.*)", line)
+            if not match or match.group(1) not in KEYS:
+                raise Refused("%s:%d: not a line of the pin: %s" % (path, number, line))
+            pin[match.group(1)] = match.group(2)
+    missing = [key for key in KEYS if key not in pin]
+    if missing:
+        raise Refused("%s: no %s" % (path, ", ".join(missing)))
+    if pin["TAG"]:
+        for key in ("TARBALL", "SOURCES"):
+            if not re.fullmatch(r"[A-Za-z0-9._/-]+", pin[key]) or ".." in pin[key]:
+                raise Refused("%s: %s is not a name: %r" % (path, key, pin[key]))
+        for key in ("TARBALL_SIZE", "SOURCES_SIZE"):
+            if not pin[key].isdigit():
+                raise Refused("%s: %s is not a size: %r" % (path, key, pin[key]))
+        for key in ("TARBALL_SHA256", "SOURCES_SHA256"):
+            if not re.fullmatch(r"[0-9a-f]{64}", pin[key]):
+                raise Refused("%s: %s is not a SHA-256: %r" % (path, key, pin[key]))
+    return pin
+
+
+def digest(path: str) -> tuple[int, str]:
+    """The size and the SHA-256 of a file."""
+    sha = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as handle:
+        while True:
+            block = handle.read(CHUNK)
+            if not block:
+                return size, sha.hexdigest()
+            size += len(block)
+            sha.update(block)
+
+
+def check(path: str, size: str, sha256: str) -> None:
+    got_size, got_sha = digest(path)
+    if got_size != int(size) or got_sha != sha256:
+        raise Refused("%s: %d bytes, SHA-256 %s; the pin says %s bytes, %s"
+                      % (path, got_size, got_sha, size, sha256))
+
+
+class _DropAuthorization(urllib.request.HTTPRedirectHandler):
+    """Follow GitHub's redirect of an asset without handing the token to the storage host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).hostname != \
+                urllib.parse.urlsplit(req.full_url).hostname:
+            new.remove_header("Authorization")
+        return new
+
+
+def repository() -> str:
+    """The GitHub repository whose releases hold the toolchain, as owner/name.
+
+    TOOLCHAIN_REPOSITORY names it, else GITHUB_REPOSITORY, which a workflow
+    sets, else the GitHub address of the checkout's remote "origin".
+    """
+    for name in ("TOOLCHAIN_REPOSITORY", "GITHUB_REPOSITORY"):
+        if os.environ.get(name):
+            return os.environ[name]
+    done = subprocess.run(["git", "-C", REPO, "config", "--get", "remote.origin.url"],
+                          capture_output=True, text=True)
+    match = re.search(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$",
+                      done.stdout.strip())
+    if not match:
+        raise Refused("no GitHub repository to fetch from: set TOOLCHAIN_REPOSITORY=owner/name")
+    return match.group(1)
+
+
+def _request(pin: dict[str, str], name: str, token: str) -> urllib.request.Request:
+    repo, tag = repository(), pin["TAG"]
+    if not token:
+        return urllib.request.Request("https://github.com/%s/releases/download/%s/%s"
+                                      % (repo, urllib.parse.quote(tag), urllib.parse.quote(name)))
+    auth = {"Authorization": "Bearer " + token, "X-GitHub-Api-Version": "2022-11-28"}
+    api = "https://api.github.com/repos/%s/releases/tags/%s" % (repo, urllib.parse.quote(tag))
+    with urllib.request.urlopen(urllib.request.Request(
+            api, headers=dict(auth, Accept="application/vnd.github+json")), timeout=60) as answer:
+        release = json.load(answer)
+    for asset in release.get("assets", []):
+        if asset.get("name") == name:
+            return urllib.request.Request(asset["url"],
+                                          headers=dict(auth, Accept="application/octet-stream"))
+    raise Refused("release %s of %s has no file %s" % (tag, repo, name))
+
+
+def fetch(pin: dict[str, str], key: str, dl: str, quiet: bool) -> str:
+    """The pinned file of KEY in the download directory, fetched if it is not there, checked."""
+    name = pin[key]
+    path = os.path.join(dl, name)
+    if not os.path.exists(path):
+        os.makedirs(dl, exist_ok=True)
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+        part = path + ".part"
+        try:
+            request = _request(pin, name, token)
+            if not quiet:
+                print("%s: fetching %s of %s" % (PROG, name, pin["TAG"]), file=sys.stderr)
+            opener = urllib.request.build_opener(_DropAuthorization())
+            with opener.open(request, timeout=300) as answer, open(part, "wb") as out:
+                shutil.copyfileobj(answer, out, CHUNK)
+        except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+            if os.path.exists(part):
+                os.remove(part)
+            raise Refused("cannot fetch %s of release %s: %s" % (name, pin["TAG"], error))
+        try:
+            check(part, pin[key + "_SIZE"], pin[key + "_SHA256"])
+        except Refused:
+            os.remove(part)
+            raise
+        os.replace(part, path)
+        return path
+    check(path, pin[key + "_SIZE"], pin[key + "_SHA256"])
+    return path
+
+
+def unpacked(pin: dict[str, str], out: str) -> str | None:
+    """The toolchain of TAG in OUT when its stamp says it is the pinned tarball's."""
+    home = os.path.join(out, pin["TAG"])
+    stamp = os.path.join(out, pin["TAG"] + ".stamp")
+    if os.path.isdir(home) and os.path.exists(stamp):
+        with open(stamp, encoding="utf-8") as handle:
+            if handle.read().strip() == pin["TARBALL_SHA256"]:
+                return _toolchain_dir(home)
+    return None
+
+
+def unpack(pin: dict[str, str], tarball: str, out: str) -> str:
+    """The relocated toolchain of TAG in OUT, unpacked from the tarball."""
+    home = os.path.join(out, pin["TAG"])
+    stamp = os.path.join(out, pin["TAG"] + ".stamp")
+    os.makedirs(out, exist_ok=True)
+    scratch = os.path.join(out, "." + pin["TAG"] + ".new")
+    shutil.rmtree(scratch, ignore_errors=True)
+    if os.path.exists(stamp):
+        os.remove(stamp)
+    os.makedirs(scratch)
+    with tarfile.open(tarball) as archive:
+        archive.extractall(scratch, filter="tar")
+    shutil.rmtree(home, ignore_errors=True)
+    os.replace(scratch, home)
+    top = _toolchain_dir(home)
+    script = _relocation(top)
+    done = subprocess.run(["./" + script], cwd=top, capture_output=True, text=True)
+    if done.returncode != 0:
+        raise Refused("%s: %s failed: %s" % (top, script, done.stderr.strip()))
+    with open(stamp, "w", encoding="utf-8") as handle:
+        handle.write(pin["TARBALL_SHA256"] + "\n")
+    return top
+
+
+def _relocation(top: str) -> str:
+    """The build system's relocation script at the top of a toolchain, relocate-*.sh."""
+    scripts = [e for e in os.listdir(top) if re.fullmatch(r"relocate-[a-z]+\.sh", e)]
+    if len(scripts) != 1:
+        raise Refused("%s: not one relocation script" % top)
+    return scripts[0]
+
+
+def _toolchain_dir(home: str) -> str:
+    """The one directory the tarball holds, with its relocation script."""
+    entries = [e for e in os.listdir(home) if not e.startswith(".")]
+    if len(entries) != 1 or not os.path.isdir(os.path.join(home, entries[0])):
+        raise Refused("%s: not one toolchain directory" % home)
+    top = os.path.join(home, entries[0])
+    _relocation(top)
+    return top
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog=PROG, add_help=True)
+    parser.add_argument("--pin", default=os.path.join(HERE, "PIN"))
+    parser.add_argument("--dl", default=os.environ.get("BR2_DL_DIR") or os.path.join(REPO, "build", "dl"))
+    parser.add_argument("--out", default=os.path.join(REPO, "build", "toolchain-release"))
+    parser.add_argument("--sources", action="store_true")
+    parser.add_argument("-q", "--quiet", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        pin = read_pin(args.pin)
+    except (OSError, Refused) as error:
+        print("%s: %s" % (PROG, error), file=sys.stderr)
+        return 2
+    if not pin["TAG"]:
+        return 0
+    try:
+        if args.sources:
+            print(fetch(pin, "SOURCES", os.path.abspath(args.dl), args.quiet))
+        else:
+            out = os.path.abspath(args.out)
+            top = unpacked(pin, out)
+            if top is None:
+                top = unpack(pin, fetch(pin, "TARBALL", os.path.abspath(args.dl), args.quiet), out)
+            print(top)
+    except (OSError, tarfile.TarError, Refused) as error:
+        print("%s: %s" % (PROG, error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

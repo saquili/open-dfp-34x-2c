@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The cross toolchain the images are built with: a release of this
+# repository's toolchain workflow (.github/workflows/toolchain.yml), which
+# prints these lines in the notes of the release it makes. TAG empty: no
+# release is pinned, and the image's build makes its own toolchain from source.
+# br2-external/toolchain/fetch reads this file (br2-external/README.rst,
+# "The toolchain of a release").
+TAG=
+TARBALL=open-dfp-34x-2c-toolchain.tar.gz
+TARBALL_SIZE=
+TARBALL_SHA256=
+SOURCES=
+SOURCES_SIZE=
+SOURCES_SHA256=

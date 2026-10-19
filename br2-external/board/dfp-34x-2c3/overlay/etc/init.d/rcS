@@ -233,11 +233,12 @@ if [ -n "$SYS_LOG_SERVER" ]; then
 		warn "the system log stays on the stick"
 fi
 
-# The servers listen on the addresses of the host side and nowhere else: the
-# stick has no packet filter, and nothing on the PON side is to reach them. They start now that the addresses are there
-# (onu-run): the ssh server, which takes root's password and the keys of
-# /root/.ssh/authorized_keys, which an image built with a bench's keys carries
-# and this one does not, and the status daemon with its panel, where people
+# The servers listen on the addresses of the host side and nowhere else: no
+# packet filter guards them, and nothing on the PON side is to reach them.
+# They start now that the addresses are there (onu-run): the ssh server, which
+# takes the keys of /root/.ssh/authorized_keys, which an image built with a
+# bench's keys carries and this one does not, and root's password once it is
+# not the default, and the status daemon with its panel, where people
 # sign in as root, with root's password, and scripts may present the token
 # that a person made with onu-config token new, which the store keeps. One that
 # procd starts again listens on the pair in use then (onu-mgmt).

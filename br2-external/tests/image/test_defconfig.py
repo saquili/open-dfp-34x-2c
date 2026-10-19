@@ -38,7 +38,8 @@ class Toolchain(unittest.TestCase):
                "BR2_TOOLCHAIN_BUILDROOT_USE_SSP", "BR2_UCLIBC_CONFIG_FRAGMENT_FILES",
                "BR2_KERNEL_HEADERS_CUSTOM_TARBALL", "BR2_KERNEL_HEADERS_CUSTOM_TARBALL_LOCATION",
                "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12", "BR2_REPRODUCIBLE",
-               "BR2_BINUTILS_EXTRA_CONFIG_OPTIONS")
+               "BR2_BINUTILS_EXTRA_CONFIG_OPTIONS", "BR2_OPTIMIZE_S", "BR2_PIC_PIE",
+               "BR2_RELRO_PARTIAL")
 
     def test_the_toolchain_section_is_the_same(self):
         board, toolchain = settings(BOARD_DEFCONFIG), settings(TOOLCHAIN_DEFCONFIG)
@@ -66,6 +67,37 @@ class Toolchain(unittest.TestCase):
         self.assertIn("share one C library", head)
         self.assertIn("tools/lib-trim", head)
         self.assertIn("docs/adr/0008", head)
+
+
+class ExternalToolchain(unittest.TestCase):
+    """The fragment that builds the image with the toolchain of a release."""
+
+    FRAGMENT = os.path.join(EXTERNAL, "configs", "external-toolchain.config")
+
+    def test_it_names_the_toolchain_that_the_toolchain_defconfig_builds(self):
+        fragment, toolchain = settings(self.FRAGMENT), settings(TOOLCHAIN_DEFCONFIG)
+        self.assertIsNone(fragment["BR2_TOOLCHAIN_BUILDROOT"])
+        for key in ("BR2_TOOLCHAIN_EXTERNAL", "BR2_TOOLCHAIN_EXTERNAL_CUSTOM",
+                    "BR2_TOOLCHAIN_EXTERNAL_PREINSTALLED", "BR2_TOOLCHAIN_EXTERNAL_CUSTOM_UCLIBC"):
+            self.assertEqual(fragment[key], "y", key)
+        self.assertEqual(fragment["BR2_TOOLCHAIN_EXTERNAL_PATH"], '"$(OPEN_DFP_34X_2C_TOOLCHAIN)"')
+        self.assertEqual(fragment["BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX"],
+                         '"$(ARCH)-buildroot-linux-uclibc"')
+        # The versions and the features of the toolchain defconfig, as the
+        # external toolchain's options name them.
+        self.assertEqual(toolchain["BR2_GCC_VERSION_14_X"], "y")
+        self.assertEqual(fragment["BR2_TOOLCHAIN_EXTERNAL_GCC_14"], "y")
+        self.assertEqual(toolchain["BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12"], "y")
+        self.assertEqual(fragment["BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_12"], "y")
+        self.assertEqual(toolchain["BR2_TOOLCHAIN_BUILDROOT_WCHAR"], "y")
+        self.assertEqual(fragment["BR2_TOOLCHAIN_EXTERNAL_WCHAR"], "y")
+        self.assertNotIn("BR2_TOOLCHAIN_BUILDROOT_LOCALE", toolchain)
+        self.assertIsNone(fragment["BR2_TOOLCHAIN_EXTERNAL_LOCALE"])
+        self.assertEqual(toolchain["BR2_PTHREADS_NONE"], "y")
+        self.assertIsNone(fragment["BR2_TOOLCHAIN_EXTERNAL_HAS_THREADS"])
+        self.assertEqual(toolchain["BR2_TOOLCHAIN_BUILDROOT_USE_SSP"], "y")
+        self.assertEqual(fragment["BR2_TOOLCHAIN_EXTERNAL_HAS_SSP"], "y")
+        self.assertIsNone(fragment["BR2_TOOLCHAIN_EXTERNAL_CXX"])
 
 
 class Kernel(unittest.TestCase):

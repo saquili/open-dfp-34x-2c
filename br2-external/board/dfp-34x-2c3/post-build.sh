@@ -124,8 +124,13 @@ for libc in "$1"/lib/libuClibc-*.so; do
 		"$HOST_DIR/bin/$tuple-strip" --remove-section=.comment --remove-section=.note \
 			-o "$diag/lib/${libc##*/}" "$STAGING_DIR/lib/${libc##*/}"
 	fi
-	"$top/tools/lib-trim/lib-trim" --cross "$HOST_DIR/bin/$tuple-" \
-		--uclibc "$BUILD_DIR/$(basename "$libc" .so | sed 's/^libuClibc-/uclibc-/')" "$1"
+	# uClibc-ng's build directory holds the pieces of the C library's link. A
+	# toolchain of a release carries them instead (br2-external/README.rst,
+	# "The toolchain of a release").
+	uclibc="$BUILD_DIR/$(basename "$libc" .so | sed 's/^libuClibc-/uclibc-/')"
+	[ -d "$uclibc" ] ||
+		uclibc="${OPEN_DFP_34X_2C_TOOLCHAIN:?post-build.sh: no uClibc-ng build and no toolchain of a release}/share/open-dfp-34x-2c/uclibc"
+	"$top/tools/lib-trim/lib-trim" --cross "$HOST_DIR/bin/$tuple-" --uclibc "$uclibc" "$1"
 done
 
 # The programs that face a network run as accounts of their own, without a

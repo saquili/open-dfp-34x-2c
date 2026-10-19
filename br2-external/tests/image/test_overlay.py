@@ -279,7 +279,7 @@ class Watchdog(unittest.TestCase):
 
 
 class ServersOnTheHostSide(unittest.TestCase):
-    """The stick has no packet filter: its servers listen on the host side alone."""
+    """No packet filter guards the servers: they listen on the host side alone."""
 
     def test_there_is_no_packet_filter(self):
         self.assertNotIn("nft", called(RCS))
