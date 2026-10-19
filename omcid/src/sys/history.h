@@ -4,7 +4,7 @@
 /*
  * The conversation with the OLT: the last frames received and sent, each
  * with the time it passed and what became of it, numbered from the daemon's
- * start, for a reader that follows them (ADR 0014, the method "frames" on
+ * start, for a reader that follows them (ADR 0011, the method "frames" on
  * ubus). The ONU-G's logical password is zeroed in a frame before the frame
  * is kept, so no reader ever gets it.
  */

@@ -263,7 +263,7 @@ the argument ``omcid`` after it replaces either file and after it makes or
 takes away a GEM interface, and does not wait for it. On the stick the
 program is ``onu-apply``, which follows the change at once.
 
-With ``make board UBUS=1`` the daemon is on ubus (ADR 0014), as the object
+With ``make board UBUS=1`` the daemon is on ubus (ADR 0011), as the object
 ``omcid``. Its method ``status`` gives the number of instances and the counts
 of the frames; ``mib`` gives the MIB: every instance of the classes of its
 argument ``classes``, an array of class numbers, in that order, or of every

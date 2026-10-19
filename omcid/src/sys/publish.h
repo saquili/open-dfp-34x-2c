@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * What the daemon publishes of what it holds (ADR 0014): the instances of
+ * What the daemon publishes of what it holds (ADR 0011): the instances of
  * the MIB, every attribute in hexadecimal and a table's rows end to end,
  * and the counts of the frames. The ONU-G's logical password is never
  * written, only whether one is set. It is written through a writer: on the

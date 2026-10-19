@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * omcid on ubus (ADR 0014): the object "omcid", whose method "status" gives
+ * omcid on ubus (ADR 0011): the object "omcid", whose method "status" gives
  * the number of instances and the counts of the frames, "mib" the MIB
  * (src/sys/publish.h), of the classes of its argument "classes", an array of
  * numbers, or of every class, in at most "max" bytes of JSON text, when
