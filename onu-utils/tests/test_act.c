@@ -88,6 +88,10 @@ static void test_values_in_their_places(void)
 	CHECK(!strcmp(run("changes_confirm", none, &bad), "/usr/lib/onu/onu-change confirm"));
 	CHECK(!strcmp(run("update_try", bank, &bad), "/usr/sbin/onu-update try 1"));
 	CHECK(!strcmp(run("update_try", NULL, &bad), "/usr/sbin/onu-update try"));
+	CHECK(!strcmp(run("update_return", bank, &bad), "/usr/sbin/onu-update return 1"));
+	CHECK(!strcmp(run("update_return", NULL, &bad), "/usr/sbin/onu-update return"));
+	CHECK(!strcmp(run("update_backup", NULL, &bad), "/usr/sbin/onu-update backup"));
+	CHECK(act_find("update_backup")->fd_out && !act_find("update_backup")->fd_in);
 	CHECK(!strcmp(run("restart", NULL, &bad), "/sbin/reboot"));
 	CHECK(act_find("system_store")->input && act_find("identity_store")->input);
 	CHECK(act_find("reidentify")->background && act_find("restart")->background);
@@ -116,7 +120,9 @@ static void test_values_in_their_places(void)
 
 		CHECK(act_methods[i].needs_password == (!strcmp(n, "password_set") ||
 						  !strcmp(n, "update_write") ||
-						  !strcmp(n, "update_try")));
+						  !strcmp(n, "update_try") ||
+						  !strcmp(n, "update_return") ||
+						  !strcmp(n, "update_backup")));
 	}
 }
 

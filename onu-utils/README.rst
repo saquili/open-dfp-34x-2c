@@ -246,11 +246,18 @@ by its whole path where procd starts it.
       onu-update read [BANK]     # a bank as an update file, on the output
       onu-update try [BANK]      # start a bank once, the other by default
       onu-update commit          # keep the running bank
+      onu-update return [BANK]   # keep the shipped firmware, the other bank by default
+      onu-update backup          # the whole flash, on the output
       onu-update env [KEY | KEY=VALUE]...   # the boot loader's environment
 
    FILE ``-`` is the standard input, so an update streams in without being held
    whole. The running bank, told by ``root=``, is never written; after a start
-   from RAM, ``write`` needs the bank named. The update file's layout is in
+   from RAM, ``write`` needs the bank named. ``return`` makes the bank of the
+   shipped firmware the one the boot loader starts from now on, once its
+   kernel image checks out, data and all: the shipped firmware takes no trial,
+   as it does not tell the loader that it came up. ``backup`` writes every
+   partition in its order on the chip, which together are the whole flash:
+   the copy holds the unit's credentials. The update file's layout is in
    ``src/update.h``, the environment's in ``src/bootenv.h``.
 
 ``onu-trial``
@@ -504,7 +511,7 @@ by its whole path where procd starts it.
    password-check``, ``password-state`` and ``password``), and an update file,
    which streams through the descriptor the caller passes with the call, the
    reading end of a pipe into ``onu-update write -`` or the writing end out
-   of ``onu-update read``. It is the object ``onu-act`` on ubus, with a method for each
+   of ``onu-update read`` or ``backup``. It is the object ``onu-act`` on ubus, with a method for each
    entry of its table (``src/act.c``): the method runs its program, with no
    shell, the caller's values in their places once each is short enough, of
    the characters its place allows and no option, and the caller's text,
@@ -512,8 +519,9 @@ by its whole path where procd starts it.
    its exit status and what it wrote, ``{"code", "output"}``, or as soon as it
    starts for one run in the background (the restart, a new registration);
    a program that runs past its time is killed. A new password, an update
-   written and a start of the other bank, what would give a caller root,
-   run only when the call carries root's password in force, ``password``,
+   written, a start of the other bank and the way back to the shipped
+   firmware, what would give a caller root, and the copy of the whole flash,
+   which holds the unit's credentials, run only when the call carries root's password in force, ``password``,
    which ``onu-config password-check`` judges; otherwise the call is refused
    with ``UBUS_STATUS_PERMISSION_DENIED``. The status daemon, taken over,
    cannot do them alone. ubusd's access lists say who may call which method. procd keeps it (``rcS``); it ends without

@@ -28,9 +28,11 @@
  * does), root's password, which it
  * checks and replaces without holding its hash, and an update file, which
  * streams from it into the bank that does not run (onu-update write -) or
- * from the running bank to it (onu-update read) through a pipe it passes.
- * A new password, an update written and a start of the other bank need
- * root's password in force with the call.
+ * from the running bank to it (onu-update read) through a pipe it passes,
+ * as a copy of the whole flash does (onu-update backup). A new password, an
+ * update written, a start of the other bank, the way back to the shipped
+ * firmware and the copy of the flash, which holds the unit's credentials,
+ * need root's password in force with the call.
  */
 const struct act_method act_methods[] = {
 	{ .name = "lane_status", .program = LIB "onu-lane", .fixed = { "status" } },
@@ -82,6 +84,10 @@ const struct act_method act_methods[] = {
 	  .fd_in = true, .needs_password = true, .timeout_s = 600 },
 	{ .name = "update_read", .program = "/usr/sbin/onu-update", .fixed = { "read" },
 	  .fd_out = true, .timeout_s = 600 },
+	{ .name = "update_return", .program = "/usr/sbin/onu-update", .fixed = { "return" },
+	  .params = { { "bank", "01", 1, true } }, .needs_password = true },
+	{ .name = "update_backup", .program = "/usr/sbin/onu-update", .fixed = { "backup" },
+	  .fd_out = true, .needs_password = true, .timeout_s = 600 },
 };
 
 const size_t act_method_count = ARRAY_SIZE(act_methods);

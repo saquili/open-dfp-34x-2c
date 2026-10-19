@@ -19,6 +19,11 @@
  *                              by default, once, at the next start
  *   onu-update commit          have the boot loader start the running bank
  *                              from now on
+ *   onu-update return [BANK]   have the boot loader start the shipped
+ *                              firmware of BANK, the other one by default,
+ *                              from now on
+ *   onu-update backup          the whole flash, every partition in its turn,
+ *                              on the standard output
  *   onu-update env [KEY | KEY=VALUE]...
  *                              print the boot loader's environment, some of
  *                              its variables, or change them in one save
@@ -71,6 +76,7 @@
 #include "update.h"
 
 #define CHUNK 0x10000u
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 static const char *root = "";
 
@@ -961,6 +967,99 @@ static int cmd_commit(void)
 	return 0;
 }
 
+/* Whether the data of the kernel image of @bank, as @b found it, has its CRC. */
+static bool kernel_whole(int bank, const struct bank *b)
+{
+	static uint8_t buf[CHUNK];
+	uLong crc = crc32(0L, Z_NULL, 0);
+	uint32_t off;
+	struct part k;
+	bool ok = false;
+
+	if (!part_open(&k, bank ? "k1" : "k0", false)) {
+		for (off = UIMAGE_HEADER; off < b->kernel_len; off += CHUNK) {
+			size_t n = b->kernel_len - off < CHUNK ? b->kernel_len - off : CHUNK;
+
+			if (part_read(&k, off, buf, n))
+				break;
+			crc = crc32(crc, buf, (uInt)n);
+		}
+		ok = off >= b->kernel_len && (uint32_t)crc == b->data_crc;
+	}
+	part_close(&k);
+	return ok;
+}
+
+/*
+ * Have the boot loader start the shipped firmware of @bank from now on: a
+ * bank that holds it whole, as far as can be told, a kernel image whose data
+ * checks out and a root filesystem where the shipped firmware's split puts
+ * it. There is no trial: the shipped firmware does not tell the loader that
+ * it came up, so a bank that did not start would be left only to the boot
+ * loader's prompt (recovery.rst).
+ */
+static int cmd_return(int bank)
+{
+	int running = running_bank();
+	char set[24];
+	struct bank b;
+	struct env e;
+
+	if (bank < 0) {
+		if (running < 0) {
+			say("the bank the stick started from is not known; name one");
+			return 1;
+		}
+		bank = 1 - running;
+	}
+	if (env_load(&e))
+		return 1;
+	bank_probe(bank, &b, shipped_split(&e, true, bank));
+	if (!b.shipped) {
+		say("bank %d holds no shipped firmware", bank);
+		return 1;
+	}
+	if (!kernel_whole(bank, &b)) {
+		say("the kernel image of bank %d does not check out", bank);
+		return 1;
+	}
+	snprintf(set, sizeof(set), "sw_commit=%d", bank);
+	{
+		const char *sets[3] = { set, "sw_tryactive=2", "onu_trial=" };
+
+		if (env_change(&e, sets, 3))
+			return 1;
+	}
+	printf("COMMITTED=%d\n", bank);
+	return 0;
+}
+
+/*
+ * The partitions in their order on the flash, which they cover whole (the
+ * device tree): a copy of all of them is a copy of the chip.
+ */
+static const char *const FLASH_ORDER[] = { "boot", "env", "env2", "config",
+					     "k0",   "r0",  "k1",   "r1" };
+
+static int cmd_backup(void)
+{
+	struct sha256 s;
+	size_t i;
+
+	sha256_init(&s);
+	for (i = 0; i < ARRAY_SIZE(FLASH_ORDER); i++) {
+		struct part p;
+		int err = part_open(&p, FLASH_ORDER[i], false);
+
+		if (!err)
+			err = stream(&p, p.size, 1, &s);
+		part_close(&p);
+		if (err)
+			return 1;
+	}
+	return 0;
+}
+
 static int cmd_env(char *const *args, int n)
 {
 	struct env e;
@@ -999,7 +1098,8 @@ static int cmd_env(char *const *args, int n)
 static int help(void)
 {
 	fputs("usage: onu-update status | check FILE | write FILE [BANK] | read [BANK] |\n"
-	      "                  try [BANK] | commit | env [KEY | KEY=VALUE]...\n",
+	      "                  try [BANK] | commit | return [BANK] | backup |\n"
+	      "                  env [KEY | KEY=VALUE]...\n",
 	      stderr);
 	return 2;
 }
@@ -1039,6 +1139,10 @@ int main(int argc, char **argv)
 		return cmd_try(bank);
 	if (!strcmp(cmd, "commit") && argc == 2)
 		return cmd_commit();
+	if (!strcmp(cmd, "return") && argc <= 3 && !bank_arg(argv[2], &bank))
+		return cmd_return(bank);
+	if (!strcmp(cmd, "backup") && argc == 2)
+		return cmd_backup();
 	if (!strcmp(cmd, "env"))
 		return cmd_env(argv + 2, argc - 2);
 	return help();

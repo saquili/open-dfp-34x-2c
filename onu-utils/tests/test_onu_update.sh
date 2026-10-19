@@ -337,5 +337,48 @@ run env bootdelay=4
 check '[ $rc -eq 1 ] && echo "$err" | grep -q "neither copy"'
 teardown
 
+echo "the way back to the shipped firmware: its bank from now on, once it checks out"
+setup
+fixture env "$ONU_ROOT/dev/mtd2" 2 bootdelay=5 sw_active=0 sw_commit=0 \
+	sw_tryactive=1 onu_trial=1 sw_valid0=1 sw_valid1=1 sw_version1=V1.0-210702 \
+	fl_kernel1_sz=8000 fl_kernel2_sz=8000
+fixture uimage "$T/k-shipped" 4 20000 1663932999
+fixture squashfs "$T/r-shipped" 4 10000
+dd if="$T/k-shipped" of="$ONU_ROOT/dev/mtd6" conv=notrunc 2>/dev/null
+dd if="$T/r-shipped" of="$ONU_ROOT/dev/mtd6" bs=4096 seek=8 conv=notrunc 2>/dev/null
+# This system's own bank is no shipped firmware.
+run return 0
+check '[ $rc -ne 0 ] && echo "$err" | grep -q "bank 0 holds no shipped firmware"'
+check '[ "$(envget sw_commit)" = 0 ]'
+# A kernel image whose data changed is refused, whatever its header says.
+cp "$ONU_ROOT/dev/mtd6" "$T/k1-whole"
+printf '\000' | dd of="$ONU_ROOT/dev/mtd6" bs=1 seek=1000 conv=notrunc 2>/dev/null
+run return
+check '[ $rc -ne 0 ] && echo "$err" | grep -q "does not check out"'
+check '[ "$(envget sw_commit)" = 0 ]'
+cp "$T/k1-whole" "$ONU_ROOT/dev/mtd6"
+# The other bank by default: the shipped firmware's, from now on, no trial.
+run return
+check '[ $rc -eq 0 ] && echo "$out" | grep -qx COMMITTED=1'
+check '[ "$(envget sw_commit)" = 1 ] && [ "$(envget sw_tryactive)" = 2 ]'
+check '! "$BUILD/onu-update" env onu_trial >/dev/null 2>&1'
+teardown
+
+echo "a copy of the whole flash: every partition in its order on it"
+setup
+"$BUILD/onu-update" backup >"$T/copy" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ]'
+for n in 0 1 2 3 4 5 6 7; do
+	cat "$ONU_ROOT/dev/mtd$n"
+done >"$T/whole"
+check 'cmp -s "$T/copy" "$T/whole"'
+# A partition that /proc/mtd does not name: no copy, and a failure.
+sed -i.bak '/"config"/d' "$ONU_ROOT/proc/mtd"
+"$BUILD/onu-update" backup >"$T/copy" 2>"$T/err"
+rc=$?
+check '[ $rc -ne 0 ] && grep -q "no partition config" "$T/err"'
+teardown
+
 echo "test_onu_update: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]
