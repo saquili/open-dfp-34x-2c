@@ -106,7 +106,7 @@ rm -rf "$1/usr/share/libubox"
 # nothing writes.
 rm -f "$1/etc/resolv.conf"
 
-# The programs share one C library (docs/adr/0011). The build system installs
+# The programs share one C library (docs/adr/0008). The build system installs
 # it whole, with every function it offers, and libgcc_s, which no program
 # needs; lib-trim removes what nothing loads, links the C library again with
 # what the programs import, and fails the build when a program would miss a

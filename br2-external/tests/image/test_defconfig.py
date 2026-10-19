@@ -65,7 +65,7 @@ class Toolchain(unittest.TestCase):
             head = handle.read().split("\nBR2_", 1)[0]
         self.assertIn("share one C library", head)
         self.assertIn("tools/lib-trim", head)
-        self.assertIn("docs/adr/0011", head)
+        self.assertIn("docs/adr/0008", head)
 
 
 class Kernel(unittest.TestCase):

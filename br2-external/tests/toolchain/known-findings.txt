@@ -14,7 +14,7 @@
 # program that links the C library statically takes only the objects it refers
 # to, so neither is in a static program; the image's programs share a C library
 # cut to what they import, which leaves out _test_and_set, and the image does
-# not ship libgcc_s (docs/adr/0011).
+# not ship libgcc_s (docs/adr/0008).
 #
 # One line for each file, archive member and function: the number of findings,
 # the file (below the toolchain directory), the archive member (- for a file that

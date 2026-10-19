@@ -11,8 +11,8 @@
 # only the functions the programs import and removes the libraries nothing
 # loads (libgcc_s). The carried patch of uClibc-ng's exit handlers keeps the
 # library's one atomic operation that every program can reach out of it, and
-# the instruction-set gate passes the whole target tree. docs/adr/0011 records
-# the decision, which replaces the static programs of docs/adr/0010.
+# the instruction-set gate passes the whole target tree. docs/adr/0008 records
+# the decision.
 
 # MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
 # variant comes from the patch in buildroot/patches.
