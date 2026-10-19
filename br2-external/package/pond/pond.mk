@@ -13,7 +13,7 @@
 # files (pond/web/licences.ts).
 #
 # pond runs as an account of its own, without a password or a shell, which
-# no one logs in with (ADR 0014; post-build.sh writes it): ubusd's access
+# no one logs in with (ADR 0011; post-build.sh writes it): ubusd's access
 # list, pond/acl.json, lets it call onu-act and read the state of omcid,
 # netifd and dhcp6d, and nothing else.
 

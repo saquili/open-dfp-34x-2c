@@ -33,7 +33,7 @@ What is here
     ``onu-utils``, ``pppoed``, ``dhcp6d``, ``pond`` and ``netifd``, each built
     from its directory of this repository (``SITE_METHOD = local``); and
     ``procd`` and ``libnl-tiny`` of OpenWrt, fetched by hash, with ``procd``'s
-    patches (ADR 0013). libubox, ubus, json-c and libuci are Buildroot's own
+    patches (ADR 0010). libubox, ubus, json-c and libuci are Buildroot's own
     packages, which ``buildroot/patches`` builds for this core.
 ``configs/toolchain_defconfig``
     The configuration of the toolchain, and of nothing but the toolchain.
@@ -223,7 +223,7 @@ has the commands, the sizes and how to put the images on the board. In short:
   post-build script cuts the shared libraries to what the programs use with
   ``tools/lib-trim``, which removes ``libgcc_s`` (nothing loads it), links the C
   library again with only the functions the programs import, and fails the
-  build when a program would miss a library or a symbol (ADR 0011).
+  build when a program would miss a library or a symbol (ADR 0008).
 * The kernel is the tree of ``linux/``, taken from the archive that serves the
   headers, configured by ``rtl9602c_defconfig`` and built with this toolchain.
   The image is the LZMA-compressed legacy U-Boot image the boot loader takes.
@@ -231,7 +231,7 @@ has the commands, the sizes and how to put the images on the board. In short:
   dropbear 2026.93, and the files of ``board/dfp-34x-2c3/overlay``. The build
   system installs no init scripts (``BR2_INIT_NONE``): the overlay's
   ``sbin/init`` starts procd, which reads the overlay's ``etc/inittab`` and
-  runs its boot script, ``etc/init.d/rcS`` (ADR 0013).
+  runs its boot script, ``etc/init.d/rcS`` (ADR 0010).
   The files that belong to one bench and not to the repository, an ssh key or
   other management addresses, are in a directory named by
   ``OPEN_DFP_34X_2C_LOCAL_OVERLAY``; the post-image script lays it over a copy of
@@ -300,7 +300,7 @@ the gate, and none of them executes a load-linked, store-conditional or sync
 instruction. The image's programs share the C library, which the build cuts to
 the functions they import: no program imports ``_test_and_set``, so the image's
 library does not hold it, and the image does not ship ``libgcc_s``, which nothing
-loads (ADR 0011). The gate over the target tree holds the image to that.
+loads (ADR 0008). The gate over the target tree holds the image to that.
 
 ``tests/toolchain/known-findings.txt`` lists the findings, for each file, archive
 member and function, with the instructions in the order the gate reports them.

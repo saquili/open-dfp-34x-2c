@@ -15,7 +15,7 @@
 # gone at the next restart, but for this system's file in the partition
 # "config", which onu-config keeps (onu-config load, below).
 
-# /usr/lib/onu holds the helpers of this tree that only programs run (ADR 0015).
+# /usr/lib/onu holds the helpers of this tree that only programs run (ADR 0012).
 PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/lib/onu
 export PATH
 
@@ -205,7 +205,7 @@ onu-nl link set sfp up || warn "no interface sfp"
 # which onu-mgmt writes (onu-net) now and again when the pair changes. A
 # stored pair that is not a VLAN and an address gives way to the image's.
 # The ssh server can listen only once the addresses are there, and waits ten
-# seconds for each. netifd alone sets them (ADR 0014), and procd starts it
+# seconds for each. netifd alone sets them (ADR 0011), and procd starts it
 # again if it ends; an address it does not bring up is in the log. Each
 # interface that comes up or goes down, netifd tells onu-apply (its -h),
 # which hands a PPPoE session's address on or takes it back.
@@ -247,12 +247,12 @@ onu-svc start ssh -- /usr/lib/onu/onu-run ssh || {
 	warn "the ssh server is no service of procd: started once"
 	onu-run ssh &
 }
-# A change on trial that no one kept goes back (ADR 0014): one keeper of the
+# A change on trial that no one kept goes back (ADR 0011): one keeper of the
 # deadlines for the settings, the SFP lane and the management pair.
 onu-svc start trials -- /usr/lib/onu/onu-change watch ||
 	warn "a change on trial that no one keeps does not go back by itself"
 # What the status daemon may ask of the stick, onu-act does as root on its
-# behalf, and nothing else (ADR 0014): the status daemon does not run a
+# behalf, and nothing else (ADR 0011): the status daemon does not run a
 # program of the stick itself. It runs as the account pond, which no one
 # logs in with, and ubusd's access list (/usr/share/acl.d/pond.json) lets it
 # call onu-act and read the state of omcid, netifd and dhcp6d. Its directory

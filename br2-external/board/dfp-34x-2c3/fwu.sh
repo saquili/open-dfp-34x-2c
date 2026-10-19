@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # fwu.sh of web-install.tar, the package of open-dfp-34x-2c that the shipped
-# firmware's web page installs (ADR 0014, step 9). The shipped firmware's
+# firmware's web page installs (ADR 0016). The shipped firmware's
 # configd runs it as root, through /etc/scripts/fwu_starter.sh, as
 #
 #   sh fwu.sh BANK FILE

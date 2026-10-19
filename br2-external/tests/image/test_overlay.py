@@ -254,7 +254,7 @@ class FirstProgram(unittest.TestCase):
 
 class Names(unittest.TestCase):
     def test_a_person_sees_only_the_programs_for_a_person(self):
-        # ADR 0015: the helpers only programs run are in /usr/lib/onu.
+        # ADR 0012: the helpers only programs run are in /usr/lib/onu.
         recipe = read(os.path.join(os.path.dirname(BOARD), "..", "package", "onu-utils",
                                    "onu-utils.mk"))
         installed = dict(re.findall(r"\$\(@D\)/(?:build|scripts)/(\S+) \$\(TARGET_DIR\)(\S+)",
@@ -331,7 +331,7 @@ class ServersOnTheHostSide(unittest.TestCase):
 
     def test_netifd_alone_gives_the_addresses(self):
         # netifd takes away from a device it holds what it did not put
-        # there (ADR 0014): onu-mgmt gives it both addresses, and the script
+        # there (ADR 0011): onu-mgmt gives it both addresses, and the script
         # has no address of its own to set, nor a fallback of its own.
         text = read(RCS)
         self.assertNotIn("ip address add", text)

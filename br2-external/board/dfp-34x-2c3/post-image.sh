@@ -23,7 +23,7 @@
 #   web-install.tar
 #                the two in the package that the web page of the stick's
 #                shipped firmware installs into the bank it did not start
-#                from: made by mkweb.py, with fwu.sh (ADR 0014, step 9)
+#                from: made by mkweb.py, with fwu.sh (ADR 0016)
 #   SHA256SUMS   the SHA-256 digests of those four files, in the form that
 #                "sha256sum -c" reads
 #

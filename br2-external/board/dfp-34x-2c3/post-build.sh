@@ -54,7 +54,7 @@ fi
 
 # The package installs every program of iproute2, and the stick runs none of
 # them: onu-nl does what the boot script and the scripts of onu-utils ask of
-# ip, tc and devlink (ADR 0014, step 9g); BusyBox's ip stays built in for a
+# ip, tc and devlink (ADR 0017); BusyBox's ip stays built in for a
 # person at the console, and no script runs it. The RAM image carries ip, tc,
 # devlink, bridge and dcb for diagnosis, below; the others would add some 3 MB,
 # unpacked, to it.
@@ -129,7 +129,7 @@ for libc in "$1"/lib/libuClibc-*.so; do
 done
 
 # The programs that face a network run as accounts of their own, without a
-# password or a shell, which no one logs in with (ADR 0014): pond, the status
+# password or a shell, which no one logs in with (ADR 0011): pond, the status
 # daemon, ntp, the time daemon timed's, the DHCPv6 daemon dhcp6d, the PPPoE
 # client pppoed, the OMCI daemon omcid and dhcpc, the DHCP client of the IPoE
 # connections, started by onu-drop with the powers each needs. The image is

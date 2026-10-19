@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 """mkweb.py: pack a kernel image and a root filesystem image into the package
-that the web page of the stick's shipped firmware installs (ADR 0014, step 9).
+that the web page of the stick's shipped firmware installs (ADR 0016).
 
 Usage: mkweb.py --version VERSION --time SECONDS KERNEL ROOTFS OUTPUT
 
