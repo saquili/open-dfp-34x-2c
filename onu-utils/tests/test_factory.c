@@ -188,6 +188,76 @@ static void test_values_without_an_end_are_refused(void)
 	      -ENOENT);
 }
 
+static void test_escapes_of_xml_are_undone_whole_or_not_at_all(void)
+{
+	char v[32];
+
+	snprintf(v, sizeof(v), "%s", "a&amp;b&lt;&gt;&quot;&apos;c");
+	CHECK(factory_text(v) == 0);
+	CHECK(strcmp(v, "a&b<>\"'c") == 0);
+	snprintf(v, sizeof(v), "%s", "plain");
+	CHECK(factory_text(v) == 0);
+	CHECK(strcmp(v, "plain") == 0);
+	snprintf(v, sizeof(v), "%s", "&amp;&x;");
+	CHECK(factory_text(v) == -EILSEQ);
+	CHECK(strcmp(v, "&amp;&x;") == 0);
+	snprintf(v, sizeof(v), "%s", "a&");
+	CHECK(factory_text(v) == -EILSEQ);
+}
+
+static void test_a_mac_address_is_read_in_either_form(void)
+{
+	char m[18];
+
+	CHECK(factory_mac("00005E005301", m, sizeof(m)) == 0);
+	CHECK(strcmp(m, "00:00:5e:00:53:01") == 0);
+	CHECK(factory_mac("00:00:5e:00:53:02", m, sizeof(m)) == 0);
+	CHECK(strcmp(m, "00:00:5e:00:53:02") == 0);
+	/* Not of the form, a group address, all zeros, and no room. */
+	CHECK(factory_mac("00005E00530", m, sizeof(m)) == -EINVAL);
+	CHECK(factory_mac("00005E00530G", m, sizeof(m)) == -EINVAL);
+	CHECK(factory_mac("00-00-5e-00-53-01", m, sizeof(m)) == -EINVAL);
+	CHECK(factory_mac("01005E005301", m, sizeof(m)) == -EINVAL);
+	CHECK(factory_mac("000000000000", m, sizeof(m)) == -EINVAL);
+	CHECK(factory_mac("00005E005301", m, 17) == -EFBIG);
+}
+
+static void test_an_address_and_its_netmask_make_a_prefix(void)
+{
+	char a[19];
+
+	CHECK(factory_prefix("192.0.2.1", "255.255.255.0", a, sizeof(a)) == 0);
+	CHECK(strcmp(a, "192.0.2.1/24") == 0);
+	CHECK(factory_prefix("198.51.100.2", "255.255.255.252", a,
+			     sizeof(a)) == 0);
+	CHECK(strcmp(a, "198.51.100.2/30") == 0);
+	/* Netmasks: not leading ones, too long, too short. */
+	CHECK(factory_prefix("192.0.2.1", "255.0.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2.1", "255.255.255.254", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2.1", "254.0.0.0", a, sizeof(a)) ==
+	      -EINVAL);
+	/* Addresses a host cannot take, and ones not of the form. */
+	CHECK(factory_prefix("192.0.2.0", "255.255.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2.255", "255.255.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("127.0.0.1", "255.0.0.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("224.0.0.1", "255.255.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2.01", "255.255.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2", "255.255.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2.1.5", "255.255.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2.256", "255.255.255.0", a, sizeof(a)) ==
+	      -EINVAL);
+	CHECK(factory_prefix("192.0.2.1", "255.255.255.0", a, 18) == -EFBIG);
+}
+
 int main(void)
 {
 	test_a_compressed_file_is_read_back();
@@ -195,6 +265,9 @@ int main(void)
 	test_the_newest_name_points_at_the_file();
 	test_what_cannot_be_read_says_why();
 	test_values_without_an_end_are_refused();
+	test_escapes_of_xml_are_undone_whole_or_not_at_all();
+	test_a_mac_address_is_read_in_either_form();
+	test_an_address_and_its_netmask_make_a_prefix();
 	printf("test_factory: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }

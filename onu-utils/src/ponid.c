@@ -7,6 +7,12 @@
  * lines to /run/onu-identity, which omcid reads, and hands the serial
  * number to the PON driver. The output holds the PLOAM password, so it
  * must be kept private.
+ *
+ * Three more keys are printed only when they are named, so that they stay
+ * out of the lines omcid reads: the password of the shipped firmware's
+ * administrator, which the first start takes for root's (onu-config load),
+ * and the address and the MAC address the shipped firmware gave the host
+ * link, which the boot script gives it too.
  */
 
 #include <errno.h>
@@ -26,23 +32,45 @@
 #define FILE_UNIT "lastgood_hs.xml"
 #define FILE_PON "lastgood.xml"
 
-/* Each key ponid prints, and where the factory configuration holds it. */
-static const struct {
+/* How a value is printed: as the file has it, or checked, in a usual form. */
+enum shape {
+	AS_IS,
+	TEXT,	/* the escapes of XML undone */
+	MAC,	/* six pairs of lowercase digits apart by colons */
+	PREFIX, /* address/length, with the netmask of the name @mask */
+};
+
+/*
+ * Each key ponid prints, and where the factory configuration holds it; one
+ * that is @asked is printed only when it is named.
+ */
+struct field {
 	const char *key;
 	const char *file;
 	const char *name;
-} FIELDS[] = {
-	{ "serial", FILE_UNIT, "GPON_SN" },
-	{ "vendor_id", FILE_UNIT, "PON_VENDOR_ID" },
-	{ "equipment_serial", FILE_UNIT, "HW_SERIAL_NO" },
-	{ "version", FILE_UNIT, "HW_HWVER" },
-	{ "equipment_id", FILE_UNIT, "HW_CWMP_PRODUCTCLASS" },
-	{ "model", FILE_UNIT, "GPON_ONU_MODEL" },
-	{ "ploam_format", FILE_PON, "GPON_PLOAM_FORMAT" },
-	{ "ploam_password", FILE_PON, "GPON_PLOAM_PASSWD" },
-	{ "tm_option", FILE_PON, "OMCI_TM_OPT" },
-	{ "omcc_version", FILE_PON, "OMCC_VER" },
-	{ "vendor_product_code", FILE_PON, "OMCI_VENDOR_PRODUCT_CODE" },
+	const char *mask;
+	enum shape shape;
+	bool asked;
+};
+
+static const struct field FIELDS[] = {
+	{ .key = "serial", .file = FILE_UNIT, .name = "GPON_SN" },
+	{ .key = "vendor_id", .file = FILE_UNIT, .name = "PON_VENDOR_ID" },
+	{ .key = "equipment_serial", .file = FILE_UNIT, .name = "HW_SERIAL_NO" },
+	{ .key = "version", .file = FILE_UNIT, .name = "HW_HWVER" },
+	{ .key = "equipment_id", .file = FILE_UNIT, .name = "HW_CWMP_PRODUCTCLASS" },
+	{ .key = "model", .file = FILE_UNIT, .name = "GPON_ONU_MODEL" },
+	{ .key = "ploam_format", .file = FILE_PON, .name = "GPON_PLOAM_FORMAT" },
+	{ .key = "ploam_password", .file = FILE_PON, .name = "GPON_PLOAM_PASSWD" },
+	{ .key = "tm_option", .file = FILE_PON, .name = "OMCI_TM_OPT" },
+	{ .key = "omcc_version", .file = FILE_PON, .name = "OMCC_VER" },
+	{ .key = "vendor_product_code", .file = FILE_PON, .name = "OMCI_VENDOR_PRODUCT_CODE" },
+	{ .key = "admin_password", .file = FILE_PON, .name = "SUSER_PASSWORD",
+	  .shape = TEXT, .asked = true },
+	{ .key = "lan_address", .file = FILE_PON, .name = "LAN_IP_ADDR",
+	  .mask = "LAN_SUBNET", .shape = PREFIX, .asked = true },
+	{ .key = "mac", .file = FILE_UNIT, .name = "ELAN_MAC_ADDR",
+	  .shape = MAC, .asked = true },
 };
 
 #define IMAGE_MAX (1024u * 1024u)
@@ -98,6 +126,30 @@ static long read_image(const char *path, uint8_t *out, size_t cap)
 	return (long)len;
 }
 
+/* @value of @f in its form, with a second name of @doc for a prefix. */
+static int shape(const struct field *f, const char *doc, char *value,
+		 size_t cap)
+{
+	char mask[32];
+	char raw[128];
+
+	switch (f->shape) {
+	case AS_IS:
+		return 0;
+	case TEXT:
+		return factory_text(value);
+	case MAC:
+		snprintf(raw, sizeof(raw), "%s", value);
+		return factory_mac(raw, value, cap);
+	case PREFIX:
+		if (factory_value(doc, f->mask, mask, sizeof(mask)) != 0)
+			return -ENOENT;
+		snprintf(raw, sizeof(raw), "%s", value);
+		return factory_prefix(raw, mask, value, cap);
+	}
+	return -EINVAL;
+}
+
 int main(int argc, char **argv)
 {
 	static uint8_t img[IMAGE_MAX];
@@ -142,7 +194,8 @@ int main(int argc, char **argv)
 		size_t filelen = 0;
 		int err;
 
-		if (want != NULL && strcmp(want, FIELDS[i].key) != 0)
+		if (want != NULL ? strcmp(want, FIELDS[i].key) != 0 :
+				   FIELDS[i].asked)
 			continue;
 
 		err = factory_file(img, (size_t)imglen, FIELDS[i].file, file,
@@ -156,6 +209,15 @@ int main(int argc, char **argv)
 		if (factory_value((const char *)file, FIELDS[i].name, value,
 				  sizeof(value)) != 0)
 			continue;
+		if (FIELDS[i].asked && value[0] == '\0')
+			continue;
+		if (shape(&FIELDS[i], (const char *)file, value,
+			  sizeof(value)) != 0) {
+			/* Never the value: it may be a password. */
+			fprintf(stderr, "ponid: %s: not of its form\n",
+				FIELDS[i].key);
+			continue;
+		}
 
 		if (want != NULL)
 			printf("%s\n", value);

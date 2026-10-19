@@ -22,7 +22,13 @@ by its whole path where procd starts it.
    ``/run/onu-identity`` at boot, with the store's ``ID_*`` keys over it,
    which omcid reads and which gives the serial number to the PON driver. Its
    output holds the PLOAM password, a credential of the line: keep it
-   private.
+   private. Three keys more it prints only when they are named, so that they
+   stay out of ``/run/onu-identity``: ``admin_password``, the password of
+   the shipped firmware's administrator, which the first start takes for
+   root's (``onu-config load``); ``lan_address``, the address and the length
+   of the netmask the shipped firmware gave the host link; and ``mac``, the
+   MAC address it gave it, the one on the stick's label. The boot script
+   gives the host link the last two.
 
 ``onu-config``
    the stick's settings, their store in the flash and their rules, in one

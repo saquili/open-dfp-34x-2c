@@ -46,4 +46,40 @@ int factory_file(const uint8_t *img, size_t len, const char *name, uint8_t *out,
  */
 int factory_value(const char *doc, const char *name, char *out, size_t cap);
 
+/**
+ * factory_text() - Undo the escapes of XML in a value, in place.
+ * @value: the value, a C string
+ *
+ * &amp;, &lt;, &gt;, &quot; and &apos; become the character they stand for.
+ *
+ * Return: 0, or -EILSEQ for another '&' and its value left as it was.
+ */
+int factory_text(char *value);
+
+/**
+ * factory_mac() - Read a MAC address of the configuration.
+ * @value: twelve hexadecimal digits, the pairs apart by colons or not
+ * @out: the address, six pairs of lowercase digits apart by colons
+ * @cap: room in @out, 18 bytes at least
+ *
+ * Return: 0, or -EINVAL for another form, a group address or zeros, and
+ * -EFBIG when @out is too small.
+ */
+int factory_mac(const char *value, char *out, size_t cap);
+
+/**
+ * factory_prefix() - Join an IPv4 address and its netmask.
+ * @addr: the address, a dotted quad
+ * @mask: the netmask, a dotted quad of leading ones, 8 to 30 of them
+ * @out: "address/length"
+ * @cap: room in @out, 19 bytes at least
+ *
+ * The address has to be one a host can take: unicast, not of 0.0.0.0/8 or
+ * 127.0.0.0/8, nor the network's or the broadcast address of its prefix.
+ *
+ * Return: 0, or -EINVAL for an address or a netmask that is not such, and
+ * -EFBIG when @out is too small.
+ */
+int factory_prefix(const char *addr, const char *mask, char *out, size_t cap);
+
 #endif
