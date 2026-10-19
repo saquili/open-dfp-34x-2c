@@ -1350,7 +1350,7 @@ watchdog driver (``drivers/watchdog/realtek_otto_wdt.c``,
 A watchdog the boot loader armed for a trial boot is kept running at probe and
 fed by the watchdog core until user space opens ``/dev/watchdog``, for 60 s at
 most (``WATCHDOG_OPEN_TIMEOUT``). Otherwise the driver leaves it off until
-procd, the first process, opens the device and feeds it (ADR 0013). The driver
+procd, the first process, opens the device and feeds it (ADR 0010). The driver
 restarts the board through its restart handler, with the shortest deadline and
 a chip reset, and offers no pretimeout, since the block raises no interrupt.
 The platform code does not touch the watchdog.

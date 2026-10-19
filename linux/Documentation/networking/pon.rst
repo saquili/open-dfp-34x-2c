@@ -833,7 +833,7 @@ the tree that takes it on an interface that is not a port of a switch, and
 nothing here yet chooses the class of a frame as the bridge chooses the GEM
 port. When the PON class is offered, the four go to ``tc`` and the attributes
 are removed, ``IFLA_GEM_PBITS`` apart, which is the mapper of ITU-T G.988
-clause 9.3.10 and not a queue discipline (ADR 0018 of the project's
+clause 9.3.10 and not a queue discipline (ADR 0015 of the project's
 repository records the decision). Until then the OMCI daemon is their only
 user.
 
