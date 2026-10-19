@@ -719,13 +719,13 @@ export const BANKS: Banks = {
       bank: 0,
       kernel_part: "k0",
       rootfs_part: "r0",
-      version_recorded: "V1.2.2-221209",
+      version_recorded: "1.2.0",
     },
     {
       bank: 1,
       kernel_part: "k1",
       rootfs_part: "r1",
-      version_recorded: "V1.0-210702",
+      version_recorded: "1.0.0",
     },
   ],
   rootfs: {

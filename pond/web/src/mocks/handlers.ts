@@ -66,7 +66,7 @@ if (SCENARIO === "stick") {
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
   Object.assign(firmware.banks[1] ?? {}, {
     state: "shipped",
-    version: "V1.2.2-221209",
+    version: "1.2.0",
     rootfs_used_b: null,
   });
 }
@@ -81,7 +81,7 @@ const HOUSE = [
   "telefon",
   null,
   "tv-salon",
-  "iphone-ania",
+  "iphone-1",
   "galaxy-s24",
   "drukarka",
   "ps5",
@@ -98,10 +98,10 @@ const HOUSE = [
   "sonos-kuchnia",
   "sonos-salon",
   "echo-sypialnia",
-  "tablet-kuba",
-  "macbook-pawel",
+  "tablet-2",
+  "macbook-3",
   "rpi-homeassistant",
-  "switch-kuba",
+  "switch-console",
   null,
   "tv-sypialnia",
   "dekoder",
@@ -117,7 +117,7 @@ const HOUSE = [
   "zarowka-hol",
   "zarowka-salon",
   "gniazdko-biuro",
-  "watch-ania",
+  "watch-1",
   "kindle",
   "nvr",
   "kamera-ptz",

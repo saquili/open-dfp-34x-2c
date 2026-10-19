@@ -93,11 +93,11 @@ describe("the banks", () => {
   it("names the shipped firmware, with its version, as no system to start", () => {
     const f = firmware();
     bank(f, 1).state = "shipped";
-    bank(f, 1).version = "V1.0-220923";
+    bank(f, 1).version = "1.0.1";
     const b = views(f)[1];
     expect(b.tags).toEqual(["shipped"]);
     expect(b.usable).toBe(false);
-    expect(b.version).toBe("V1.0-220923");
+    expect(b.version).toBe("1.0.1");
   });
 });
 
