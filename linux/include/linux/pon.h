@@ -13,6 +13,10 @@
  *
  * Both belong to one PON device, ponN, which the "pon" generic netlink
  * family reports on.
+ *
+ * The driver of the ONU's optics, the laser driver that runs its
+ * transmitter, registers them with the class too (struct pon_optics), and
+ * the MAC takes them by the firmware node its own firmware names.
  */
 
 #ifndef _LINUX_PON_H
@@ -438,6 +442,135 @@ struct pon_omci_port_ops {
 	void (*stop)(struct pon_omci_port *port);
 	int (*tx)(struct pon_omci_port *port, struct sk_buff *skb);
 };
+
+struct fwnode_handle;
+struct pon_optics;
+
+/**
+ * struct pon_optics_ops - what the driver of an ONU's optics does for its MAC
+ * @tx_disable: assert or release the transmitter's disable input: while it is
+ *	asserted the transmitter emits no light
+ * @start: the MAC is about to bring the PON up: put the transmitter in the
+ *	configuration an activation starts from, transmit power level mode 0
+ *	among it; optional
+ * @set_power_level: set transmit power level mode @mode (ITU-T G.984.2
+ *	clause 8.3.2: 0 the normal one, 1 and 2 3 dB and 6 dB below it) and set
+ *	@now to the mode the optics are at afterwards, on a failure too;
+ *	optional
+ *
+ * All are called in process context and may sleep, @set_power_level for
+ * seconds; the class does not serialise them.
+ */
+struct pon_optics_ops {
+	int (*tx_disable)(struct pon_optics *optics, bool disable);
+	int (*start)(struct pon_optics *optics);
+	int (*set_power_level)(struct pon_optics *optics, unsigned int mode,
+			       unsigned int *now);
+};
+
+/**
+ * struct pon_optics - the optics of an ONU, as their driver registers them
+ * @dev: the optics' device, whose firmware node a MAC names; set by
+ *	devm_pon_optics_register()
+ * @ops: the operations, set by the driver
+ * @list: private to the class
+ */
+struct pon_optics {
+	struct device *dev;
+	const struct pon_optics_ops *ops;
+	struct list_head list;
+};
+
+/**
+ * pon_optics_tx_disable() - assert or release the optics' transmit disable
+ * @optics: the optics, or NULL for a MAC without them
+ * @disable: true to stop the light
+ *
+ * Return: 0 without @optics, else the result of the operation.
+ */
+static inline int pon_optics_tx_disable(struct pon_optics *optics, bool disable)
+{
+	return optics ? optics->ops->tx_disable(optics, disable) : 0;
+}
+
+/**
+ * pon_optics_start() - prepare the optics for an activation
+ * @optics: the optics, or NULL for a MAC without them
+ *
+ * Return: 0 without @optics or the operation, else its result.
+ */
+static inline int pon_optics_start(struct pon_optics *optics)
+{
+	return optics && optics->ops->start ? optics->ops->start(optics) : 0;
+}
+
+/**
+ * pon_optics_set_power_level() - set a transmit power level mode
+ * @optics: the optics, or NULL for a MAC without them
+ * @mode: the mode to set
+ * @now: set to the mode the optics are at afterwards
+ *
+ * Without @optics or the operation the optics are at mode 0, the normal one,
+ * and stay there.
+ *
+ * Return: without @optics or the operation, 0 for mode 0 and -EOPNOTSUPP for
+ * another, with @now 0; else the result of the operation.
+ */
+static inline int pon_optics_set_power_level(struct pon_optics *optics,
+					     unsigned int mode, unsigned int *now)
+{
+	if (!optics || !optics->ops->set_power_level) {
+		*now = 0;
+		return mode ? -EOPNOTSUPP : 0;
+	}
+	return optics->ops->set_power_level(optics, mode, now);
+}
+
+#if IS_ENABLED(CONFIG_PON)
+/**
+ * devm_pon_optics_register() - offer an ONU's optics to its MAC
+ * @dev: the optics' device
+ * @optics: the optics, with @optics->ops set
+ *
+ * A MAC finds the optics by the firmware node of @dev
+ * (devm_pon_optics_get()). The optics are withdrawn when @dev's driver
+ * unbinds, after the driver core has unbound every MAC that holds them.
+ * Register last in the probe, when the operations work.
+ *
+ * Context: process context; may sleep.
+ * Return: 0, -EINVAL without @optics->ops->tx_disable, -EBUSY when another
+ * device has the same firmware node registered, or an error of devres.
+ */
+int devm_pon_optics_register(struct device *dev, struct pon_optics *optics);
+/**
+ * devm_pon_optics_get() - take the optics a MAC's firmware names
+ * @consumer: the MAC's device, which must be probing
+ * @fwnode: the optics' firmware node, or NULL when the MAC has none
+ *
+ * Links @consumer to the optics' device, so that the driver core unbinds the
+ * MAC before the optics go, and holds the optics' device until @consumer's
+ * driver unbinds.
+ *
+ * Context: process context; may sleep.
+ * Return: the optics; NULL without @fwnode; ERR_PTR(-EPROBE_DEFER) while no
+ * bound driver has registered optics for @fwnode; ERR_PTR(-EINVAL) when the
+ * link cannot be made.
+ */
+struct pon_optics *devm_pon_optics_get(struct device *consumer,
+				       struct fwnode_handle *fwnode);
+#else
+static inline int devm_pon_optics_register(struct device *dev,
+					   struct pon_optics *optics)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline struct pon_optics *devm_pon_optics_get(struct device *consumer,
+						     struct fwnode_handle *fwnode)
+{
+	return fwnode ? ERR_PTR(-EOPNOTSUPP) : NULL;
+}
+#endif
 
 #if IS_ENABLED(CONFIG_PON)
 /**

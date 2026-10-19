@@ -39,6 +39,17 @@ class calls: create and delete a GEM port, transmit a frame, report status.
 The class provides the rest: the devices, the queue in front of the daemon,
 the network interfaces with their bridge offload, and the netlink family.
 
+The ONU's optics have a driver of their own: the laser driver that runs the
+transmitter and the receiver sits on a bus of its own, typically I2C. That
+driver registers the optics with the class (``devm_pon_optics_register()``),
+and the MAC driver takes them by the firmware node its own firmware names
+(``devm_pon_optics_get()``), as a MAC takes an SFP cage. Through them the MAC
+asserts and releases the transmitter's disable input as the activation state
+requires, prepares the transmitter before an activation, and sets the transmit
+power level the OLT asks for (ITU-T G.984.2 clause 8.3.2). A device link makes
+the driver core unbind the MAC before the optics go. A MAC whose firmware names
+no optics runs without them.
+
 The class has no device tree node and no compatible string. It is created by
 the MAC driver's own registrations, and the device tree describes only the
 hardware. On the RTL9602C the device the class objects are registered against
@@ -121,13 +132,17 @@ Where the code is
        offload.
    * - ``drivers/net/pon/pon_netlink.c``
      - The handlers of the ``pon`` family and ``pon_device_notify()``.
+   * - ``drivers/net/pon/pon_optics.c``
+     - The optics: their registration by their driver and their lookup by a
+       MAC.
    * - ``drivers/net/pon/pon_nl.c``, ``pon_nl.h``
      - The policies, the operation table and the family, generated from the
        specification.
    * - ``drivers/net/pon/Kconfig``, ``Makefile``
      - The build entries.
    * - ``include/linux/pon.h``
-     - The interface between the class and a MAC driver.
+     - The interface between the class and a MAC driver, and between the class
+       and the driver of an ONU's optics.
    * - ``include/uapi/linux/pon.h``
      - The uAPI of the family, generated from the specification.
    * - ``Documentation/netlink/specs/pon.yaml``
