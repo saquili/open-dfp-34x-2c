@@ -224,11 +224,14 @@ struct settings {
 	bool had_legacy_lan;
 	/*
 	 * The management VLANs in use, the pair's and a pair's on trial, 0 for
-	 * none: no setting of the data path, but what its VLANs must keep off,
-	 * since the switch keeps their frames between the host side and the
-	 * stick. The caller that knows them, onu-config change, sets them.
+	 * none, and their addresses with their prefix length, "" for none: no
+	 * setting of the data path, but what its VLANs and networks must keep
+	 * off, since the switch keeps the VLANs' frames between the host side
+	 * and the stick, and the stick routes to one network by one interface.
+	 * The caller that knows them, onu-config change, sets them.
 	 */
 	unsigned int mgmt_vlan[2];
+	char mgmt_address[2][SETTINGS_VALUE_MAX];
 };
 
 /**

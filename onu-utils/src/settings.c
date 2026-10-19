@@ -1095,6 +1095,20 @@ static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
 				 a + 1, a + 1);
 			return false;
 		}
+		for (int k = 0; k < 2; k++) {
+			unsigned long mlen;
+			uint32_t mip, mm;
+
+			if (!cidr(s->mgmt_address[k], &mip, &mlen))
+				continue;
+			mm = mask_of(len < mlen ? len : mlen);
+			if ((ip & mm) == (mip & mm)) {
+				snprintf(err, errcap,
+					 "network %d shares addresses with the management address %s",
+					 a + 1, s->mgmt_address[k]);
+				return false;
+			}
+		}
 		(void)conn(la[SET_L_CONN], &by_ipoe, &sn);
 		if (by_ipoe && !ipoe_on(s, sn)) {
 			snprintf(err, errcap,

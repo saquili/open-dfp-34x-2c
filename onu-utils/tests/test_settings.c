@@ -32,6 +32,7 @@ static char g_out[65536];
  * sense; the settings are in @s and their lines in g_out.
  */
 static unsigned int g_mgmt[2];
+static const char *g_mgmt_address[2] = { "", "" };
 
 static int judge(struct settings *s, const char *text)
 {
@@ -48,6 +49,9 @@ static int judge(struct settings *s, const char *text)
 	settings_settle(s);
 	s->mgmt_vlan[0] = g_mgmt[0];
 	s->mgmt_vlan[1] = g_mgmt[1];
+	for (int k = 0; k < 2; k++)
+		snprintf(s->mgmt_address[k], sizeof(s->mgmt_address[k]), "%s",
+			 g_mgmt_address[k]);
 	if (!settings_coherent(s, g_err, sizeof(g_err)))
 		return -2;
 	g_out[0] = '\0';
@@ -365,6 +369,18 @@ static void test_lans(void)
 	g_mgmt[0] = 100;
 	CHECK(judge(&s, KEEPS NET1) == -2 && strstr(g_err, "management VLAN"));
 	g_mgmt[0] = 0;
+	/* Nor may a network share addresses with a management pair's, the one in
+	 * use or the one on trial, whose VLAN is another.
+	 */
+	g_mgmt_address[0] = "192.168.1.1/24";
+	CHECK(judge(&s, KEEPS NET1) == -2 &&
+	      strstr(g_err, "network 1 shares addresses with the management address 192.168.1.1/24"));
+	g_mgmt_address[0] = "198.51.100.2/30";
+	g_mgmt_address[1] = "192.168.0.1/16";
+	CHECK(judge(&s, KEEPS NET1) == -2 && strstr(g_err, "192.168.0.1/16"));
+	g_mgmt_address[1] = "";
+	CHECK(judge(&s, KEEPS NET1) == 0);
+	g_mgmt_address[0] = "";
 
 	/* The pool: a range of the network's addresses without the stick's. */
 	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.100\n"

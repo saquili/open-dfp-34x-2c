@@ -550,24 +550,30 @@ static void root_path(const char *path, int n, char *out, size_t cap)
 #define MGMT_PATH "/run/onu-mgmt"
 #define MGMT_PENDING_PATH "/run/onu-trial.d/mgmt"
 
-/* The VLAN of the management pair of @path, its line VLAN=, or 0. */
-static unsigned int mgmt_vlan_of(const char *path)
+/*
+ * The management pair of @path: its VLAN, the line VLAN=, or 0, into @vid,
+ * and its address with the prefix length, the line ADDRESS=, or "", into
+ * @addr.
+ */
+static void mgmt_pair_of(const char *path, unsigned int *vid, char *addr,
+			 size_t cap)
 {
-	char p[PATH_MAX], line[64];
-	unsigned int vid = 0;
+	char p[PATH_MAX], line[96];
 	FILE *f;
 
+	*vid = 0;
+	*addr = '\0';
 	root_path(path, 0, p, sizeof(p));
 	f = fopen(p, "r");
 	while (f && fgets(line, sizeof(line), f)) {
-		if (!strncmp(line, "VLAN=", 5)) {
-			vid = (unsigned int)strtoul(line + 5, NULL, 10);
-			break;
-		}
+		line[strcspn(line, "\n")] = '\0';
+		if (!strncmp(line, "VLAN=", 5))
+			*vid = (unsigned int)strtoul(line + 5, NULL, 10);
+		else if (!strncmp(line, "ADDRESS=", 8))
+			snprintf(addr, cap, "%s", line + 8);
 	}
 	if (f)
 		fclose(f);
-	return vid;
 }
 
 /*
@@ -724,8 +730,10 @@ static int change_cmd(void)
 		}
 	}
 	settings_settle(&s);
-	s.mgmt_vlan[0] = mgmt_vlan_of(MGMT_PATH);
-	s.mgmt_vlan[1] = mgmt_vlan_of(MGMT_PENDING_PATH);
+	mgmt_pair_of(MGMT_PATH, &s.mgmt_vlan[0], s.mgmt_address[0],
+		     sizeof(s.mgmt_address[0]));
+	mgmt_pair_of(MGMT_PENDING_PATH, &s.mgmt_vlan[1], s.mgmt_address[1],
+		     sizeof(s.mgmt_address[1]));
 	if (!settings_coherent(&s, err, sizeof(err))) {
 		fprintf(stderr, "onu-config: %s\n", err);
 		goto out;
