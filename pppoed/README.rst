@@ -64,7 +64,7 @@ Under netifd
 ============
 
 On the stick a session is an interface of netifd, of the protocol
-``pppoed`` (ADR 0014), whose handler is pppoed itself, as
+``pppoed`` (ADR 0011), whose handler is pppoed itself, as
 ``/lib/netifd/proto/pppoed.sh``: netifd runs it as ``pppoed.sh '' dump`` for
 what the protocol takes (the session, its family, whether its address is
 handed on, whether the default route goes through it), and as ``pppoed.sh

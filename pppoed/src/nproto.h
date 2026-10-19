@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * pppoed as a protocol of netifd, "pppoed" (ADR 0014): the JSON text of what
+ * pppoed as a protocol of netifd, "pppoed" (ADR 0011): the JSON text of what
  * it tells netifd, which the libraries that send it over ubus take, so that
  * it is checked on any host.
  *
