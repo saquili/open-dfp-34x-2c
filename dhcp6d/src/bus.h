@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * dhcp6d on ubus (ADR 0014): the object dhcp6d.NAME, whose method "status"
+ * dhcp6d on ubus (ADR 0011): the object dhcp6d.NAME, whose method "status"
  * gives the state last published (state.h). bus-ubus.c serves it, as blobmsg
  * made straight from the state; bus-none.c, for a build without libubus,
  * which the tests make, serves nothing. A change is told to the program of -x

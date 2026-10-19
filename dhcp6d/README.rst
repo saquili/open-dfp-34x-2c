@@ -67,7 +67,7 @@ of its Router Advertisements, and the route of the prefix. It cannot run
 ``onu-apply`` itself, and ubusd's list (``acl.json``) lets it call that one
 method, and publish its objects.
 
-``-n NAME`` publishes the state on ubus (ADR 0014): the object
+``-n NAME`` publishes the state on ubus (ADR 0011): the object
 ``dhcp6d.NAME``, whose method ``status`` gives the prefix delegated, the host
 it went on to, and whether that host is bound and the prefix routed to it. It
 sends no event: a change is told to the program of ``-x``. ``onu-apply``

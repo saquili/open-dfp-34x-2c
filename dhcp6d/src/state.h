@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * What dhcp6d has, as it publishes it on ubus (ADR 0014): the prefix
+ * What dhcp6d has, as it publishes it on ubus (ADR 0011): the prefix
  * delegated to it, the host it delegated the prefix on to, and whether that
  * host is bound and the prefix routed to it. bus.h sends it as blobmsg.
  */
