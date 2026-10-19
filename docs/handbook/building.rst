@@ -345,17 +345,18 @@ The boot script
        the MAC address the shipped firmware gave the host link, the one on the
        stick's label (``ponid mac``), where its files have one;
     #. brings the switch's conduit ``cpu`` and the interface ``sfp`` up, and
-       starts ``netifd``, which gives ``sfp`` the address the shipped firmware
-       gave the host link (``ponid lan_address``), or else that firmware's
-       default, ``192.168.1.1/24``, and a VLAN interface ``mgmt`` of it (VLAN
-       4094) the address ``198.51.100.2/30``, from the configuration
-       ``onu-mgmt`` writes; it waits up to ten seconds for each. netifd alone
-       sets them, and procd starts it again if it ends. A bench names the
-       first in ``/etc/board.conf`` (``DATA_ADDRESS``, "Files of one bench"
-       below): the bench tries ``198.51.100.2`` and its own address of the
-       host link (``flashing.rst``, "What you need"); it tries the first
-       first, because that one answers whether or not a bridge has been built
-       on the link (``tools/bench/README.rst``). The host has to have the VLAN on its
+       starts ``netifd``, which gives a VLAN interface ``mgmt`` of ``sfp`` (VLAN
+       4094) the address the shipped firmware gave the host link (``ponid
+       lan_address``), or else that firmware's default, ``192.168.1.1/24``,
+       from the configuration ``onu-mgmt`` writes; ``sfp`` itself has no
+       address, as the OLT's services may put it in a bridge. It waits up to
+       ten seconds for the address. netifd alone sets it, and procd starts it
+       again if it ends. A bench names its own addresses in
+       ``/etc/board.conf`` (``MGMT_ADDRESS``, and ``DATA_ADDRESS`` for one on
+       ``sfp`` itself; "Files of one bench" below), the ones the bench tries
+       (``flashing.rst``, "What you need"): it tries the VLAN's first, because
+       that one answers whether or not a bridge has been built on the link
+       (``tools/bench/README.rst``). The host has to have the VLAN on its
        interface too;
     #. keeps that VLAN off the PON both ways: the switch sends the frames of
        it that come in on ``sfp`` to the CPU alone, and drops those that come
@@ -460,15 +461,16 @@ filesystem tree before it packs ``r0.squashfs``::
     mkdir -p local/root/.ssh local/etc
     cp ~/.ssh/id_ed25519.pub local/root/.ssh/authorized_keys
     chmod 700 local/root/.ssh; chmod 600 local/root/.ssh/authorized_keys
-    printf 'DATA_ADDRESS=203.0.113.2/30\n' > local/etc/board.conf
+    printf 'MGMT_ADDRESS=198.51.100.2/30\nDATA_ADDRESS=192.0.2.2/30\n' > local/etc/board.conf
     make OPEN_DFP_34X_2C_LOCAL_OVERLAY=$PWD/local
 
 ``/etc/board.conf`` is read by the boot script and may set ``DATA_ADDRESS``,
-``MGMT_VLAN`` and ``MGMT_ADDRESS`` (the value above is an example; the defaults
-are in the script). An empty ``DATA_ADDRESS`` leaves the host link itself
-without an address: the stick is then managed on its VLAN alone, which the
-switch keeps from the PON both ways, and has no address on the subscriber's
-data path, as an operator's ONT has none. On a finished build this runs the last step only, a few
+``MGMT_VLAN`` and ``MGMT_ADDRESS`` (the values above are the bench's, the ones
+``tools/bench`` tries; the defaults are in the script). Without
+``DATA_ADDRESS``, as by default, the host link itself has no address: the
+stick is managed on its VLAN alone, which the switch keeps from the PON both
+ways, and has no address on the subscriber's data path, as an operator's ONT
+has none. On a finished build this runs the last step only, a few
 seconds, and it does not change the target directory: the next ``make`` without
 the variable gives the plain image again. The image with a key in it is not the
 image of this page, its digest differs, and it is not to be published.
@@ -768,7 +770,7 @@ root::
     cat /proc/cmdline        # panic=10, console=ttyS0,115200, ..., root=31:5
     grep ' / ' /proc/mounts  # /dev/root / squashfs ro,...
     busybox --list           # the applets above
-    ip addr                  # the host link's address on sfp, 198.51.100.2/30 on mgmt
+    ip addr                  # the bench's addresses, on mgmt and on sfp
     pidof procd netifd dropbear omcid pond syslogd
     onu-svc list             # procd's services, and how often each restarted
     netstat -ltn             # ssh and the status daemon, on the two addresses only
