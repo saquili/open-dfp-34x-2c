@@ -107,9 +107,15 @@ With local networks
     out unless ``FW_OUT`` blocks them, and they do not reach each other
     unless ``FW_BETWEEN`` allows it. A rule that allows opens netfilter's
     default too, for IPv4; a rule of IPv6 has no effect until the stick
-    routes IPv6 to the networks' devices (ADR 0023). The compiler of the
-    rules into the ACL is still to come, and until it is in, a rule that
-    blocks blocks nothing.
+    routes IPv6 to the networks' devices (ADR 0023). The switch sees a
+    frame, not a connection, and no route: a rule to the internet is one to
+    no local address, and a rule from the internet reaches a device only by
+    the ports of its forwards and its DMZ, at the connection's own address.
+    A rule that allows lets the answers back as well, from the rule's ports,
+    so the far end may start from those ports too. The rules go into the
+    switch in their order as far as its free entries hold them whole;
+    ``/run/onu-fw.acl`` says of each rule whether it is in the switch and,
+    where not, why.
 
 What the data path carries
 ==========================
