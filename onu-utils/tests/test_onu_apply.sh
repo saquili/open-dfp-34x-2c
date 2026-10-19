@@ -313,6 +313,43 @@ check '[ "$(grep -c "^fwd" "$F")" -eq 1 ]'
 check '! logged "^onu-fw"'
 teardown
 
+echo "the firewall's defaults and its rules that allow, in their order"
+setup
+conf IPOE1_KIND=static IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_FAMILY=ipv4 \
+	IPOE1_ADDRESS=192.0.2.10/24 IPOE1_GATEWAY=192.0.2.1 \
+	LAN1_CONN=ipoe:1 LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on LAN1_LEASE=3600 \
+	LAN2_CONN=ipoe:1 LAN2_ADDRESS=10.0.0.1/24 LAN2_DHCP=on LAN2_LEASE=3600 \
+	FIXED1=1/00:00:5e:00:53:a1/192.168.1.10 \
+	RULE1=4_allow_lan:2_dev:1:00:00:5E:00:53:A1_tcp_9100_any_on RULE1_NAME=Drukarka \
+	RULE2=2_block_lans_internet_tcp_25_any_on \
+	RULE3=3_allow_internet:198.51.100.0/24_dev:1:00:00:5e:00:53:a1_both_8000-8100_ipv4_on \
+	RULE4=1_allow_dev:2:00:00:5e:00:53:a2_internet_any__any_on \
+	RULE5=5_allow_lans_internet:2001:db8::/32_any__any_on \
+	RULE6=6_allow_lans_internet_tcp_443_ipv6_on \
+	RULE7=7_allow_lan:1_internet:203.0.113.7_icmp__any_off \
+	RULE8=8_allow_lan:1_lans_udp__any_on \
+	RULE10=9_allow_lan:1_internet:203.0.113.7_icmp__any_on \
+	FW_OUT=block
+"$MODE_SCRIPT" start 2>/dev/null
+F=$T/fw.conf
+check 'grep -qx "default out block" "$F" && grep -qx "default between block" "$F"'
+# From a network's interface, and a device's MAC address there, to a
+# device's interface and its fixed address; from a part of the internet.
+check '[ "$(grep "^allow" "$F")" = "$(printf "%s\n" \
+	"allow between iif sfp oif net1 daddr 192.168.1.10 tcp 9100" \
+	"allow in saddr 198.51.100.0/24 oif net1 daddr 192.168.1.10 tcp 8000-8100" \
+	"allow in saddr 198.51.100.0/24 oif net1 daddr 192.168.1.10 udp 8000-8100" \
+	"allow out iif sfp ether 00:00:5e:00:53:a2" \
+	"allow between iif net1 udp" \
+	"allow out iif net1 daddr 203.0.113.7 icmp")" ]'
+# Blocks, rules of IPv6 alone or of an IPv6 address, and one off are none.
+check '! grep -q "dport 25\|tcp 25\|443\|2001" "$F"'
+# Without FW_OUT, its default: out is let through.
+sed -i.bak -e "/^FW_OUT=/d" "$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'grep -qx "default out allow" "$F" && grep -qx "default between block" "$F"'
+teardown
+
 echo "a PPPoE session without name servers"
 setup
 printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \

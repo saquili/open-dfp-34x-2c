@@ -131,6 +131,17 @@
 # session's once its IPv4 is up, an IPoE connection's while it has an
 # address.
 #
+# The firewall's rules, RULEk ("ID_ACTION_FROM_TO_PROTO_PORTS_FAMILY_ON"),
+# are the switch's ACL's (ADR 0023). Where no rule decides, the table drops
+# a new connection from the internet into a network, one from a network to
+# the internet when FW_OUT is block, and one between two networks when
+# FW_BETWEEN is block, as lines "default out|between block|allow" of
+# onu-fw's file; a rule that allows, in force, is a line "allow WAY ..."
+# there as well, which lets a new connection of IPv4 through where its
+# way's default would drop it (rules_fw()). A rule that blocks is the ACL's
+# alone, and so, until the stick routes IPv6 to the networks' devices, is
+# one of IPv6 alone.
+#
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
 
@@ -225,6 +236,7 @@ load() {
 		eval "LAN${n}_IPV6= LAN${n}_IPV6_SUBNET="
 		n=$((n + 1))
 	done
+	FW_OUT= FW_BETWEEN=
 	defaults=$(onu-config defaults) || {
 		log "the defaults of the settings are not known: onu-config does not say them"
 		defaults=
@@ -271,6 +283,9 @@ load_file() {
 		IPOE[1-7]_KIND | IPOE[1-7]_GEM | IPOE[1-7]_VLAN | IPOE[1-7]_MAC | \
 			IPOE[1-7]_FAMILY | IPOE[1-7]_ADDRESS | IPOE[1-7]_GATEWAY | \
 			IPOE[1-7]_ADDRESS6 | IPOE[1-7]_GATEWAY6 | IPOE[1-7]_PREFIX6) ;;
+		# The firewall's defaults; its rules are read where they are
+		# needed (rules_fw()).
+		FW_OUT | FW_BETWEEN) ;;
 		# Name servers, one blank apart.
 		IPOE[1-7]_DNS)
 			case $value in
@@ -1796,13 +1811,86 @@ forwards_fw() {
 		}' "$CONF" 2>/dev/null
 }
 
+# The firewall's defaults and its rules that allow, in force, as lines of
+# onu-fw's table. A rule's way is in from the internet, out to it, or
+# between the networks; what it comes from is an interface and a MAC address
+# there, or a part of the internet, and what it goes to an interface and the
+# fixed address of a device there, FIXEDk ("L/MAC/IP"), or a part of the
+# internet; "lans" and "internet" name no more than the way does. A rule of
+# both TCP and UDP is one of each. A rule of IPv6 alone, or of an address
+# of IPv6, is the ACL's alone: the stick routes no IPv6 to the networks'
+# devices yet. One awk reads them all, in their order.
+rules_fw() {
+	echo "default out ${FW_OUT:-allow}"
+	echo "default between ${FW_BETWEEN:-block}"
+	awk -v lanif="$(for rf in $(lans); do echo "$rf $(lan_if "$rf")"; done)" '
+		BEGIN {
+			n = split(lanif, l, "\n")
+			for (i = 1; i <= n; i++)
+				if (split(l[i], w, " ") == 2)
+					ifn[w[1]] = w[2]
+		}
+		/^FIXED[0-9]+=./ {
+			split(substr($0, index($0, "=") + 1), f, "/")
+			ip[f[1] "/" tolower(f[2])] = f[3]
+		}
+		/^RULE[0-9]+=./ {
+			k = substr($0, 5, index($0, "=") - 5) + 0
+			rule[k] = substr($0, index($0, "=") + 1)
+		}
+		# The words of an end, "" for one that cannot be of IPv4 here,
+		# from (s) or to (d).
+		function end_of(e, sd,    a, m) {
+			if (e == "internet" || e == "lans")
+				return " "
+			if (e ~ /^internet:/) {
+				a = substr(e, 10)
+				return a ~ /:/ ? "" : " " sd "addr " a
+			}
+			if (!((substr(e, 5, 1)) in ifn))
+				return ""
+			if (e ~ /^lan:/)
+				return " " (sd == "s" ? "iif " : "oif ") ifn[substr(e, 5, 1)]
+			m = tolower(substr(e, 7))
+			if (sd == "s")
+				return " iif " ifn[substr(e, 5, 1)] " ether " m
+			a = ip[substr(e, 5, 1) "/" m]
+			return a == "" ? "" : " oif " ifn[substr(e, 5, 1)] " daddr " a
+		}
+		END {
+			for (k = 1; k <= 96; k++) {
+				if (!(k in rule) || split(rule[k], f, "_") != 8)
+					continue
+				if (f[2] != "allow" || f[7] == "ipv6" || f[8] != "on")
+					continue
+				way = f[3] ~ /^internet/ ? "in" : f[4] ~ /^internet/ ? "out" : "between"
+				from = end_of(f[3], "s")
+				to = end_of(f[4], "d")
+				if (from == "" || to == "")
+					continue
+				sub(/^ $/, "", from)
+				sub(/^ $/, "", to)
+				line = "allow " way from to
+				if (f[5] == "icmp")
+					print line " icmp"
+				if (f[5] == "tcp" || f[5] == "both")
+					print line " tcp" (f[6] == "" ? "" : " " f[6])
+				if (f[5] == "udp" || f[5] == "both")
+					print line " udp" (f[6] == "" ? "" : " " f[6])
+				if (f[5] == "any")
+					print line
+			}
+		}' "$CONF" 2>/dev/null
+}
+
 # The NAT the local networks go out through, and the protection that keeps
 # the internet's new connections from them, as onu-fw's table: each
 # network's interface and addresses, the GEM interface of each connection
 # they go out by, whose flows the switch carries, and every way out from
 # the operator's side, the sessions' interfaces and each IPoE connection's,
 # by which no new connection comes in to a network but what a forward or a
-# DMZ takes (forwards_fw()). Without networks the table goes. It runs again
+# DMZ takes (forwards_fw()) or a rule lets in, and the firewall's defaults
+# and rules (rules_fw()). Without networks the table goes. It runs again
 # when a session's address comes or goes, and at each sync, which follows
 # an IPoE connection's lease.
 lans_fw() {
@@ -1828,6 +1916,7 @@ lans_fw() {
 			[ -r "$IPOE_DIR/$lf/dev" ] && echo "out $(cat "$IPOE_DIR/$lf/dev")"
 		done
 		forwards_fw
+		rules_fw
 	} >"$RUN/onu-fw.conf.new"
 	# What onu-fw holds already is not put in place again.
 	if [ -e "$RUN/onu-fw.conf" ] &&
