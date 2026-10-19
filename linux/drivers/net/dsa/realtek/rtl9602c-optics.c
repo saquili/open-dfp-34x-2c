@@ -42,33 +42,24 @@
 
 #include <linux/auxiliary_bus.h>
 #include <linux/bitfield.h>
-#include <linux/debugfs.h>
-#include <linux/ptp_clock_kernel.h>
-#include <linux/uaccess.h>
-#include <linux/unaligned.h>
-#include <net/ipv6.h>
-#include <linux/dcbnl.h>
 #include <linux/bitops.h>
+#include <linux/cleanup.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
+#include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/gpio/consumer.h>
 #include <linux/hwmon.h>
-#include <linux/io.h>
-#include <linux/kernel.h>
-#include <linux/math64.h>
-#include <linux/if_bridge.h>
-#include <linux/etherdevice.h>
-#include <linux/if_vlan.h>
-#include <linux/iopoll.h>
-#include <linux/module.h>
-#include <linux/interrupt.h>
-#include <linux/mutex.h>
-#include <linux/of.h>
 #include <linux/i2c.h>
-#include <linux/platform_device.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/reboot.h>
+#include <linux/seq_file.h>
+#include <linux/string.h>
 #include <linux/swab.h>
-#include <net/dsa.h>
-#include <net/flow_offload.h>
-#include <net/pkt_cls.h>
+#include <linux/uaccess.h>
+#include <linux/workqueue.h>
 
 #include "rtl9602c.h"
 
