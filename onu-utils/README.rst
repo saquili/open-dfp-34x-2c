@@ -384,9 +384,11 @@ by its whole path where procd starts it.
    once. netifd tells onu-apply when an interface comes up or goes down
    (``onu-apply iface``, netifd's ``-h``), and onu-apply hands the session's
    address and prefix on or takes them back; what a session has is in
-   ``/run/session/N``. The stick translates no address and has no packet
-   filter. The bench's router of before, ``MODE=router`` with its WAN and
-   LAN settings, is gone: its keys in a store of before are left out::
+   ``/run/session/N``. A session's address is handed on, not translated;
+   NAT and the firewall are those of the local networks (``onu-fw``, below).
+   Keys of older builds that mean nothing now (``MODE``, ``WAN_PROTO``,
+   ``LAN_ADDRESS`` and the others ``src/settings.c`` lists) are left out of an
+   older store::
 
       onu-apply start      # at boot
       onu-apply reload     # after /run/onu.conf changed; saves it too
