@@ -138,8 +138,8 @@ def listeners(text: str) -> set[tuple[str, int]]:
       "The servers listen on the two host-side addresses and on no other, and the bench "
       "reaches ssh and the panel and is refused elsewhere")
 def listening(ctx: Context):
-    # The stick has no packet filter (docs/handbook/system.rst): what keeps its servers
-    # off the PON side is the addresses they listen on.
+    # No packet filter guards the stick's own servers (docs/handbook/system.rst):
+    # what keeps them off the PON side is the addresses they listen on.
     mgmt = ctx.stick.text("cat /run/onu-mgmt")
     mine = {re.sub(r"/\d+$", "", v) for k, v in
             (l.split("=", 1) for l in mgmt.splitlines() if "=" in l)

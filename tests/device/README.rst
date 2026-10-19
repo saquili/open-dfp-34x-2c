@@ -90,8 +90,8 @@ today's image, but none has run on it. What a case expects of the image:
   ``--tools`` gives it what the cases need. The data-path cases read the
   switch's own frame counts with ``ethtool`` when the stick has it, and do
   without otherwise.
-* The stick has no packet filter (``docs/handbook/system.rst``): what keeps its
-  servers off the PON side is the addresses they listen on, which
+* No packet filter guards the stick's own servers (``docs/handbook/system.rst``):
+  what keeps them off the PON side is the addresses they listen on, which
   ``net.listeners`` checks.
 * procd feeds the watchdog (ADR 0010): ``system.watchdog`` looks for procd
   holding the device, and ``system.watchdog-reset`` has procd let go of it
