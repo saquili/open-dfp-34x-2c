@@ -187,7 +187,7 @@ table inet filter {
 
 ===== net.ssh-keys-only: fail in 0.04 s
 evidence: exit 0: 
-local$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -J p.phan@<address> root@<stick> true
+local$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -J <bench> root@<stick> true
 [exit 0]
 
 ===== mgmt.pond-health: pass in 0.26 s

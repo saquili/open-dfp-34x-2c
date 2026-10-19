@@ -101,7 +101,7 @@ sh: nft: not found
 
 ===== net.ssh-keys-only: pass in 0.78 s
 evidence: root@<stick>: Permission denied (publickey).
-local$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -J p.phan@<address> root@<stick> true
+local$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -J <bench> root@<stick> true
 root@<stick>: Permission denied (publickey).
 [exit 255]
 
