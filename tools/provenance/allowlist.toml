@@ -307,3 +307,35 @@ none, and the README gives the router the next address of that network to
 reach it. A fact of the product, the same on every unit: it identifies
 none. This entry names them too.
 """
+
+[[allow]]
+gate = "unit-ids"
+rules = ["ipv4-address"]
+paths = [
+  "onu-utils/tests/test_fwacl.c",
+  "onu-utils/tests/test_fwmsg.c",
+  "onu-utils/tests/test_onu_apply.sh",
+  "onu-utils/tests/test_onu_fw.sh",
+  "onu-utils/tests/test_onu_fw_acl.sh",
+  "pond/tests/test_prov.c",
+]
+match = '(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?'
+reason = """
+The tests of the router's local networks, its NAT and its firewall, on the
+host. A router's local networks are private ones, and these tests need several
+of them at once and blocks wider than the three documentation /24s of RFC
+5737: 10.0.0.0/8, 172.16.0.0/12 and prefixes of 7 to 33 bits for the parsers.
+Only the private ranges are let through; they identify no unit.
+"""
+
+[[allow]]
+gate = "unit-ids"
+rules = ["mac-address"]
+paths = ["onu-utils/tests/test_onu_apply.sh", "tools/provenance/allowlist.toml"]
+values = ["02:00:5e:00:53:01"]
+reason = """
+The address the PON side of a connection takes when it names none: the host
+link's, 00:00:5e:00:53:01 of the documentation range of RFC 7042 in the test,
+with the locally administered bit set, as onu-apply makes it. It names no unit.
+This entry names it too.
+"""
