@@ -161,25 +161,29 @@ class BootScript(unittest.TestCase):
         self.assertEqual(lines[-1], "} >/dev/console")
         self.assertEqual(lines[-2], '\techo "open-dfp-34x-2c: ready"')
 
-    def test_the_host_link_takes_the_shipped_firmwares_address(self):
-        # Where the shipped firmware's page was, or its own default; a bench's
+    def test_the_management_vlan_takes_the_shipped_firmwares_address(self):
+        # Where the shipped firmware's page was, or its own default, on VLAN
+        # 4094, which works whether the host link is bridged or not; a bench's
         # /etc/board.conf, read after it, names another.
         text = read(RCS)
-        line = "DATA_ADDRESS=$(ponid lan_address 2>/dev/null) || DATA_ADDRESS=192.168.1.1/24\n"
+        line = "MGMT_ADDRESS=$(ponid lan_address 2>/dev/null) || MGMT_ADDRESS=192.168.1.1/24\n"
         self.assertIn(line, text)
+        self.assertIn("\nMGMT_VLAN=4094\n", text)
         self.assertLess(text.index(line), text.index(". /etc/board.conf"))
 
-    def test_the_management_vlans_address_is_in_a_documentation_range(self):
-        text = read(RCS)
-        self.assertEqual(re.findall(r"^MGMT_ADDRESS=(\S+)$", text, re.M), ["198.51.100.2/30"])
+    def test_the_host_link_itself_has_no_address(self):
+        # As an operator's ONT has none on the subscriber's data path; a bench
+        # may give it one.
+        self.assertEqual(re.findall(r"^DATA_ADDRESS=(.*)$", read(RCS), re.M), [""])
 
-    def test_the_bench_default_is_the_management_address_it_tries_to_reach(self):
-        # tools/bench/settings.py: board.control_address. The host link's
-        # address is the shipped firmware's: a bench names its own in
-        # /etc/board.conf, as board.data_address.
+    def test_the_bench_names_its_own_addresses(self):
+        # tools/bench/settings.py: board.control_address and
+        # board.data_address are a bench's, which its /etc/board.conf gives
+        # the image; they stay in the documentation ranges.
         settings = read(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(BOARD))),
                                      "tools", "bench", "settings.py"))
         self.assertIn('"board.control_address": (str, "198.51.100.2")', settings)
+        self.assertIn('"board.data_address": (str, "192.0.2.2")', settings)
 
     def test_the_ports_take_the_shipped_firmwares_mac_address_before_they_come_up(self):
         text = read(RCS)
