@@ -27,15 +27,17 @@ export PATH
 # onu-mgmt has written it, below.
 onu-trial >/run/onu-trial.log 2>&1 &
 
-# The management addresses are in the ranges that RFC 5737 reserves for
-# documentation. The first is on the host link itself; the second is on a VLAN
-# of that link of its own, which the switch keeps from the PON both ways and
-# which works whether the link is bridged or not, as the first does not. A
-# bench with other addresses puts them in /etc/board.conf
-# (docs/handbook/building.rst); an empty DATA_ADDRESS leaves the stick without
-# an address on the subscriber's data path, managed by its VLAN alone, as an
-# operator's ONT has none there.
-DATA_ADDRESS=192.0.2.2/30
+# The management addresses. The first is on the host link itself: the one
+# the shipped firmware gave it (ponid lan_address), so that its owner finds
+# the panel where they found the shipped firmware's page, or else that
+# firmware's own default. The second is on a VLAN of that link of its own,
+# which the switch keeps from the PON both ways and which works whether the
+# link is bridged or not, as the first does not; it is in a range that RFC
+# 5737 reserves for documentation. A bench with other addresses puts them in
+# /etc/board.conf (docs/handbook/building.rst); an empty DATA_ADDRESS leaves
+# the stick without an address on the subscriber's data path, managed by its
+# VLAN alone, as an operator's ONT has none there.
+DATA_ADDRESS=$(ponid lan_address 2>/dev/null) || DATA_ADDRESS=192.168.1.1/24
 MGMT_VLAN=4094
 MGMT_ADDRESS=198.51.100.2/30
 [ -r /etc/board.conf ] && . /etc/board.conf
@@ -174,6 +176,17 @@ for f in ipv4/ipfrag ipv6/ip6frag netfilter/nf_conntrack_frag6; do
 done
 echo 300 >/proc/sys/net/core/netdev_max_backlog ||
 	warn "a PPP session's frames may queue up to the kernel's limit"
+
+# The MAC address the shipped firmware gave the host link, the one on the
+# stick's label (ponid mac), on the switch's conduit and its two ports while
+# they are down; the interfaces made on them later take it too. The boot
+# loader leaves an address of its own, the same on every unit, which stays
+# where the shipped firmware's files have none.
+mac=$(ponid mac 2>/dev/null) &&
+	for dev in cpu sfp pon; do
+		onu-nl link set "$dev" address "$mac" ||
+			warn "$dev keeps the boot loader's MAC address"
+	done
 
 # The setting of the SFP lane its owner kept (onu-lane), if any; the driver
 # looks for the host's otherwise.

@@ -161,17 +161,33 @@ class BootScript(unittest.TestCase):
         self.assertEqual(lines[-1], "} >/dev/console")
         self.assertEqual(lines[-2], '\techo "open-dfp-34x-2c: ready"')
 
-    def test_the_default_addresses_are_in_the_documentation_ranges(self):
+    def test_the_host_link_takes_the_shipped_firmwares_address(self):
+        # Where the shipped firmware's page was, or its own default; a bench's
+        # /etc/board.conf, read after it, names another.
         text = read(RCS)
-        addresses = re.findall(r"^(?:DATA|MGMT)_ADDRESS=(\S+)$", text, re.M)
-        self.assertEqual(addresses, ["192.0.2.2/30", "198.51.100.2/30"])
+        line = "DATA_ADDRESS=$(ponid lan_address 2>/dev/null) || DATA_ADDRESS=192.168.1.1/24\n"
+        self.assertIn(line, text)
+        self.assertLess(text.index(line), text.index(". /etc/board.conf"))
 
-    def test_the_bench_defaults_are_the_addresses_it_tries_to_reach(self):
-        # tools/bench/settings.py: board.control_address and board.data_address.
+    def test_the_management_vlans_address_is_in_a_documentation_range(self):
+        text = read(RCS)
+        self.assertEqual(re.findall(r"^MGMT_ADDRESS=(\S+)$", text, re.M), ["198.51.100.2/30"])
+
+    def test_the_bench_default_is_the_management_address_it_tries_to_reach(self):
+        # tools/bench/settings.py: board.control_address. The host link's
+        # address is the shipped firmware's: a bench names its own in
+        # /etc/board.conf, as board.data_address.
         settings = read(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(BOARD))),
                                      "tools", "bench", "settings.py"))
         self.assertIn('"board.control_address": (str, "198.51.100.2")', settings)
-        self.assertIn('"board.data_address": (str, "192.0.2.2")', settings)
+
+    def test_the_ports_take_the_shipped_firmwares_mac_address_before_they_come_up(self):
+        text = read(RCS)
+        self.assertIn("mac=$(ponid mac 2>/dev/null) &&\n\tfor dev in cpu sfp pon; do\n"
+                      '\t\tonu-nl link set "$dev" address "$mac" ||\n', text)
+        for later in ("onu-nl link set cpu up", "onu-nl link set sfp up", "onu-apply identity"):
+            with self.subTest(later=later):
+                self.assertLess(text.index("ponid mac"), text.index(later))
 
     def test_a_bench_can_override_the_addresses(self):
         self.assertIn("[ -r /etc/board.conf ] && . /etc/board.conf", read(RCS))
