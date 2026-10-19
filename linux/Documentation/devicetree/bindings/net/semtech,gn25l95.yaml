@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/semtech,gn25l95.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Semtech GN25L95 PON laser driver and limiting amplifier
+
+maintainers:
+  - Paweł Phan <szop.hektar_1w@icloud.com>
+
+description: |
+  A laser driver and limiting amplifier for the optics of passive optical
+  network units (ONUs). It runs the ONU's burst-mode transmitter and its
+  receiver from the configuration and calibration in an EEPROM of its own,
+  and serves the SFF-8472 management interface on I2C: the identification at
+  address 0x50 (A0h) and the diagnostics and the part's own tables at 0x51
+  (A2h).
+
+  The ONU's MAC names the part as its optics by phandle, and asserts and
+  releases its transmit disable as the activation state requires.
+
+properties:
+  compatible:
+    const: semtech,gn25l95
+
+  reg:
+    description:
+      The address of the A0h page, normally 0x50. The A2h page is at the next
+      address.
+    maxItems: 1
+
+  tx-disable-gpios:
+    description:
+      The hard transmit-disable input. While it is asserted the transmitter
+      emits no light.
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        laser-driver@50 {
+            compatible = "semtech,gn25l95";
+            reg = <0x50>;
+            tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+        };
+    };
