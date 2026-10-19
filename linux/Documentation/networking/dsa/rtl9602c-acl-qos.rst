@@ -1045,7 +1045,9 @@ of a UDP or TCP header, at the start of the IP payload, and never changes them.
        203.0.113.2`` none; ``pppoe_sid 4800 ppp_proto ip ip_proto icmp``
        counted 10 of 10 and the stick's other session, 4864, none. The
        destination port's window, at 30, is inferred from the source port's
-       at 28 and the UDP and TCP layouts below.
+       at 28 and the UDP and TCP layouts below. With the selectors moved off
+       selector 3 (next rows), ``ppp_proto ip src_ip 203.0.113.1 ip_proto
+       icmp`` counted 20 of 20 again.
    * - The PPPoE windows assume an IPv4 header of five words: behind a longer
        one, with options, the L4 windows hold option octets and a port or ICMP
        match misses.
