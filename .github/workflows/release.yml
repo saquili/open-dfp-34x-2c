@@ -1,0 +1,172 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# A release, started by hand on the page of this workflow, from the commit it
+# is started on. The flash images of the board are built from source by the
+# pinned Buildroot, as image.yml builds them, with no bench's files; checked;
+# built a second time in another directory and compared byte for byte; and the
+# sources of everything in them are gathered (make legal-info). The release is
+# named by the image's own version, the time of the commit in UTC
+# (post-build.sh): its tag is v2026.10.19-2130 for 2026.10.19-2130. A second
+# job, the only one that may write to the repository, makes a draft release of
+# that tag on that commit, with the files and their SHA-256 digests, for a
+# person to test on a stick and publish; the tag comes into being when it is
+# published. Nothing built elsewhere goes into a release.
+
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    # The pinned host build environment: Debian 13, by digest.
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 300
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Install the tools
+        # As image.yml: what Buildroot needs of its host, the cross binutils
+        # and compiler for the gate's negative control, and the user-mode
+        # emulator for the static programs.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git python3 \
+            patch xz-utils make gcc g++ libc6-dev binutils perl bzip2 gzip cpio \
+            unzip rsync file bc findutils gawk wget sed diffutils tar debianutils \
+            bison flex binutils-mips-linux-gnu gcc-mips-linux-gnu qemu-user
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build the images
+        # make judges what it built: the images fit their partitions, the
+        # instruction-set gate passes over the root filesystem tree, and the
+        # digests check.
+        run: |
+          start=$(date +%s)
+          make IMAGE_OUT="$PWD/build/image-a"
+          echo "the build took $(( $(date +%s) - start )) seconds"
+          cat build/image-a/images/SHA256SUMS
+      - name: The version
+        # The image's own: a release carries no build of uncommitted sources
+        # and none whose commit is not known.
+        id: version
+        run: |
+          release=build/image-a/target/etc/os-release
+          version=$(sed -n 's/^VERSION_ID=//p' "$release")
+          echo "version $version, commit $(sed -n 's/^BUILD_ID=//p' "$release")"
+          if ! [[ $version =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{4}$ ]]; then
+            echo "not a version a release can carry: '$version'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: No bench's files in the image
+        # A bench's addresses, ssh keys, token of scripts and console without
+        # a password come from OPEN_DFP_34X_2C_LOCAL_OVERLAY, which this build
+        # does not name; this says that none came in another way.
+        run: |
+          for f in etc/board.conf etc/pond.token root/.ssh/authorized_keys; do
+            if [ -e "build/image-a/target/$f" ]; then
+              echo "/$f is in the image"
+              exit 1
+            fi
+          done
+      - name: The negative control of the gate
+        run: br2-external/tests/toolchain/negative-control
+      - name: The programs run under qemu-mips
+        run: br2-external/tests/image/check-applets build/image-a/target
+      - name: The sources
+        # Every package's licence and source, the sources the GPL asks a
+        # release to offer among them, as one archive beside the images; the
+        # sources are compressed archives already, so the archive is not.
+        run: make legal-info IMAGE_OUT="$PWD/build/image-a"
+      - name: The files of the release
+        run: |
+          version=${{ steps.version.outputs.version }}
+          mkdir dist
+          cp build/image-a/images/{k0.uImage,r0.squashfs,update.bin,web-install.tar} dist/
+          tar -C build/image-a --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$(git log -1 --format=%ct)" \
+            -cf "dist/open-dfp-34x-2c-$version-sources.tar" legal-info
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+          ls -l dist
+      - name: Keep the files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+      - name: Make room for the second build
+        run: |
+          br2-external/tests/image/tree-digest build/image-a/target > /tmp/tree-a.txt
+          rm -rf build/image-a/build build/image-a/host build/image-a/staging \
+            build/image-a/legal-info
+      - name: Build again, in another directory
+        run: |
+          start=$(date +%s)
+          make IMAGE_OUT="$PWD/build/image-b"
+          echo "the second build took $(( $(date +%s) - start )) seconds"
+      - name: The two builds are the same
+        # A release is only made of a build that another build repeats.
+        run: |
+          cmp build/image-a/images/k0.uImage build/image-b/images/k0.uImage
+          cmp build/image-a/images/r0.squashfs build/image-b/images/r0.squashfs
+          diff build/image-a/images/SHA256SUMS build/image-b/images/SHA256SUMS
+          br2-external/tests/image/tree-digest build/image-b/target > /tmp/tree-b.txt
+          diff /tmp/tree-a.txt /tmp/tree-b.txt
+          echo "the two builds are identical"
+
+  draft:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: The files, as the build kept them
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name release --dir dist
+          cd dist && sha256sum -c SHA256SUMS
+      - name: The draft release
+        # Refused when the tag or a release of it exists already: a version
+        # is released once.
+        run: |
+          cat > notes.md <<EOF
+          The images of commit ${GITHUB_SHA}, built and compared twice by
+          this repository's release workflow (run ${GITHUB_RUN_ID}).
+
+          - \`web-install.tar\`: installs this system through the shipped
+            firmware's web page (docs/handbook/updating.rst).
+          - \`update.bin\`: updates a stick that runs this system, from its
+            panel or with \`onu-update write\`.
+          - \`k0.uImage\`, \`r0.squashfs\`: the two images, for the bench
+            (docs/handbook/flashing.rst).
+          - \`open-dfp-34x-2c-${VERSION}-sources.tar\`: the licences and
+            the sources of everything in the images.
+          - \`SHA256SUMS\`: their digests; check them before an install.
+
+          Read "Before you install" in README.rst first.
+          EOF
+          cd dist
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --title "open-dfp-34x-2c $VERSION" --notes-file ../notes.md -- *

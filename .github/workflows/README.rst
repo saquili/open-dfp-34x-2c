@@ -25,6 +25,9 @@ REUSE tool, pinned to a version, and the device-tree schema checker, which is
 the latest release of dtschema (pin it if a release disagrees with the
 kernel's bindings).
 
+A release is made by ``release.yml`` alone, from the commit it is started on:
+nothing built elsewhere goes into one.
+
 The jobs run on GitHub's hosted runners (``ubuntu-24.04``), which start each
 job's container on a machine of their own and discard it afterwards. No job
 asks for a self-hosted runner: the workflows run on pull requests, and on a
@@ -110,12 +113,33 @@ what was built (the compiler, the image header, the shared objects, and no
 ``libgcc_s`` among them); the negative control of the gate; the programs run under
 ``qemu-mips`` (``br2-external/tests/image/check-applets``); the bench's dry run
 of the root filesystem image (``make flash ... ARGS=--dry-run``, which names no
-board); the images kept as the workflow artifact ``images``; and a second build
+board); the images, the update file and the package of the shipped
+firmware's page kept as the workflow artifact ``images``; and a second build
 in another directory, with the comparison of the two: the images byte for byte
 and the root filesystem trees by mode, size and digest of every file
 (``br2-external/tests/image/tree-digest``). The steps after the first build run
 whatever its result. Two builds take the better part of an hour, so the workflow
 does not run on a push.
+
+``release.yml`` -- when started by hand
+=======================================
+
+A release of the commit it is started on, in two jobs. ``build`` runs in the
+same pinned container as ``image.yml``: it builds the images, takes the
+version the image names itself by (``VERSION_ID`` of its ``/etc/os-release``,
+the time of the commit in UTC, as ``2026.10.19-2130``) and refuses one of
+uncommitted sources, checks that no bench's files (``/etc/board.conf``, the
+token of scripts, ssh keys) are in the image, runs the gate's negative control
+and the programs under ``qemu-mips``, gathers the licences and sources of
+everything in the images (``make legal-info``), keeps the images, the update
+file, the package of the shipped firmware's page, the sources and their
+SHA-256 digests as the artifact ``release``, then builds again in another
+directory and compares the two, which have to be identical. ``draft``, the only
+job that may write to the repository, runs once ``build`` passed: it takes the
+artifact, checks the digests, and makes a draft release of the tag
+``v<version>`` on that commit with the files, refused when the tag or its
+release exists already. A person tests the draft's files on a stick and
+publishes it, which makes the tag.
 
 ``kernel.yml`` -- on changes to ``linux/``
 ==========================================

@@ -52,10 +52,9 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build the images
         # make fetches and patches the build system, configures the board's
-        # defconfig, builds, and then judges the result: r0 has to fit its
-        # partition, the gate has to pass over the target tree, and the digests
-        # of the images have to check. The kernel image does not fit k0 yet;
-        # its size is reported.
+        # defconfig, builds, and then judges the result: k0 and r0 have to fit
+        # their partitions, the gate has to pass over the target tree, and the
+        # digests of the images have to check.
         run: |
           start=$(date +%s)
           make IMAGE_OUT="$PWD/build/image-a"
@@ -90,6 +89,8 @@ jobs:
           path: |
             build/image-a/images/k0.uImage
             build/image-a/images/r0.squashfs
+            build/image-a/images/update.bin
+            build/image-a/images/web-install.tar
             build/image-a/images/SHA256SUMS
           if-no-files-found: error
       - name: Make room for the second build
