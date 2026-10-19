@@ -341,15 +341,21 @@ The boot script
        for an address of the interface it is asked on: the stick has no address
        on the PON side, sends nothing of its own to the OLT and answers nothing
        from it;
+    #. gives the switch's conduit ``cpu`` and its ports ``sfp`` and ``pon``
+       the MAC address the shipped firmware gave the host link, the one on the
+       stick's label (``ponid mac``), where its files have one;
     #. brings the switch's conduit ``cpu`` and the interface ``sfp`` up, and
-       starts ``netifd``, which gives ``sfp`` the address ``192.0.2.2/30`` and a
-       VLAN interface ``mgmt`` of it (VLAN 4094) the address
-       ``198.51.100.2/30``, from the configuration ``onu-mgmt`` writes; it waits
-       up to ten seconds for each. netifd alone sets them, and procd starts it
-       again if it ends. These are the addresses the bench tries
-       (``flashing.rst``, "What you need"); it tries the second first, because
-       that one answers whether or not a bridge has been built on the link
-       (``tools/bench/README.rst``). The host has to have the VLAN on its
+       starts ``netifd``, which gives ``sfp`` the address the shipped firmware
+       gave the host link (``ponid lan_address``), or else that firmware's
+       default, ``192.168.1.1/24``, and a VLAN interface ``mgmt`` of it (VLAN
+       4094) the address ``198.51.100.2/30``, from the configuration
+       ``onu-mgmt`` writes; it waits up to ten seconds for each. netifd alone
+       sets them, and procd starts it again if it ends. A bench names the
+       first in ``/etc/board.conf`` (``DATA_ADDRESS``, "Files of one bench"
+       below): the bench tries ``198.51.100.2`` and its own address of the
+       host link (``flashing.rst``, "What you need"); it tries the first
+       first, because that one answers whether or not a bridge has been built
+       on the link (``tools/bench/README.rst``). The host has to have the VLAN on its
        interface too;
     #. keeps that VLAN off the PON both ways: the switch sends the frames of
        it that come in on ``sfp`` to the CPU alone, and drops those that come
@@ -762,7 +768,7 @@ root::
     cat /proc/cmdline        # panic=10, console=ttyS0,115200, ..., root=31:5
     grep ' / ' /proc/mounts  # /dev/root / squashfs ro,...
     busybox --list           # the applets above
-    ip addr                  # 192.0.2.2/30 on sfp, 198.51.100.2/30 on mgmt
+    ip addr                  # the host link's address on sfp, 198.51.100.2/30 on mgmt
     pidof procd netifd dropbear omcid pond syslogd
     onu-svc list             # procd's services, and how often each restarted
     netstat -ltn             # ssh and the status daemon, on the two addresses only

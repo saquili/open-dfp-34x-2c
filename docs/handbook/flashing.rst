@@ -84,7 +84,11 @@ documentation. They are also the tool's defaults.
 The last two rows matter only when the tool has to reach a running kernel with
 ssh, to restart it or to read ``/proc/cmdline``. The control address answers
 whether or not the image has put the port in a bridge; the data address may stop
-answering once it has. Both depend on the image.
+answering once it has. Both depend on the image: the one of this repository
+gives the host link the address the shipped firmware gave it, or that
+firmware's default, ``192.168.1.1/24``, unless the bench's
+``/etc/board.conf`` names ``DATA_ADDRESS=192.0.2.2/30`` (``building.rst``,
+"Files of one bench").
 
 Set up the bench
 ================
