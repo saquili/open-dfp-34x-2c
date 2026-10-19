@@ -298,11 +298,12 @@ paths = [
   "README.rst",
   "tools/provenance/allowlist.toml",
 ]
-values = ["192.168.1.1"]
+values = ["192.168.1.1", "192.168.1.2"]
 reason = """
 The address the shipped firmware gives the host link when a stick is sold,
 where a person finds its page and installs this system; the boot script
-gives the host link the same when the shipped firmware's files name none. A
-fact of the product, the same on every unit: it identifies none. This entry
-names it too.
+gives the management VLAN the same when the shipped firmware's files name
+none, and the README gives the router the next address of that network to
+reach it. A fact of the product, the same on every unit: it identifies
+none. This entry names them too.
 """
