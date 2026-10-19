@@ -2644,7 +2644,7 @@ static enum omci_status kernel_gem_counts(uint16_t port_id,
 
 /* The hwmon device of the optics. */
 #define HWMON_DIR "/sys/class/hwmon"
-#define HWMON_NAME "rtl9602c_optics"
+#define HWMON_NAME "gn25l95"
 
 /* Find the optics among the hwmon devices, once. */
 static bool hwmon_path(char *out, size_t cap)
