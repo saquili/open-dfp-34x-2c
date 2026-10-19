@@ -59,6 +59,11 @@ What it does
   to seven sessions and hands each session's IPv4 address and IPv6 prefix
   down to the router behind it. The rest of what the OLT sets up, such as
   television and telephone, stays bridged.
+* **Can route local networks itself.** Up to eight networks on the host
+  link, each with a DHCP server, NAT behind a connection's address, port
+  forwards and a DMZ, and a firewall whose rules the switch judges in
+  hardware (`ADR 0019
+  <docs/adr/0019-the-firewalls-rules-are-the-switchs-acl.rst>`__).
 * **2.5 or 1 Gb/s to the router**, found by itself: 2500BASE-X, or 1000BASE-X
   with or without auto-negotiation.
 * **Is managed from the router's side**: ssh, and a web panel with an API
@@ -149,6 +154,18 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
    * - A change of the settings tried, and undone without a confirmation
      - 🟡 Bench
      - By hand; no device test yet
+   * - Local networks: DHCP, NAT, port forwards, DMZ
+     - 🟡 Bench
+     - On the developer's stick, with flows carried by the switch; no
+       recorded test run yet
+   * - The firewall's rules in the switch
+     - 🟡 Bench
+     - Blocks, allows and their answers measured by hand on 2026-10-19
+       (``docs/handbook/system.rst``, "The firewall, as measured")
+   * - IPv6 routed to the local networks
+     - ⚪ Not on a stick yet
+     - The sessions' IPv6 is handed to the router behind the stick; routing
+       it to the local networks is still to come
    * - The web panel and its API over HTTPS
      - 🟢 Tested
      - The API and the delivery of the page. What the panel shows in a
@@ -164,6 +181,10 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
        stick as sold: the identity, the MAC address and the administrator's
        password taken, and the way back to the shipped firmware with its
        settings (by hand)
+   * - The panel's copy of the whole flash, and its way back to the shipped
+       firmware
+     - ⚪ Not on a stick yet
+     - Tested on the build machine; the release test runs them on a stick
 
 ..
 
@@ -179,7 +200,9 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
 Not done yet
 ------------
 
-* **No release.** You build the images yourself (`Building`_).
+* **Releases are test builds.** Each is made by this repository's release
+  workflow and tested on a stick before it is published (`Releases`_), but
+  it has run on one line only.
 * **Only one laser-driver IC is known.** A DFP-34X-2C may have been made
   with one of several laser-driver ICs. The optics support is written for the
   one in the developer's stick, which the kernel's log calls GN25L95; that
@@ -190,11 +213,16 @@ Not done yet
 * If the store of the settings cannot be read, root's password is not known:
   the panel refuses every sign-in, ssh takes keys only, and only the serial
   console, inside the stick, takes ``admin``.
-* The stick has no packet filter. Its servers listen only on its addresses
-  on the router's side; whether a session's peer can reach them has not
-  been tested.
+* No packet filter guards the stick's own servers. They listen only on the
+  stick's addresses on the router's side; whether a session's peer can reach
+  them has not been tested. The firewall judges what the stick routes, not
+  what is addressed to it.
+* The stick has no clock that runs while it is off. Until a time source
+  answers (NTP or PTP from the host, or the OLT's time of day), its clock
+  starts at 1970.
 * An update file carries a checksum against damage, but no signature
-  (`ADR 0017 <docs/adr/0017-update-files-carry-no-signature.rst>`__).
+  (`ADR 0014 <docs/adr/0014-update-files-carry-no-signature.rst>`__);
+  check a release's files against its ``SHA256SUMS``.
 * Gaps found from here on are kept as the repository's issues.
 
 Other sticks
@@ -223,8 +251,10 @@ ports are welcome.
 Before you install
 ==================
 
+* **Take the files from a release** (`Releases`_), and check them against
+  its ``SHA256SUMS`` before you install them.
 * **Two ways in.** Through the shipped firmware's web page, with the package
-  ``web-install.tar`` that the build makes, which needs no console
+  ``web-install.tar`` of a release, which needs no console
   (`updating.rst <docs/handbook/updating.rst>`__). Or from the bench, which
   writes the flash from the boot loader's prompt over the serial console
   (`flashing.rst <docs/handbook/flashing.rst>`__). Either way the shipped
@@ -233,11 +263,16 @@ Before you install
   page was, ``192.168.1.1/24`` unless it was changed there (`Reaching the
   panel`_). The host link itself has no address of the stick's: the OLT's
   services may put it in a bridge.
+* **Copy the whole flash first.** The panel's System page does it with one
+  button, "Copy the whole flash", and asks for root's password; ssh does it
+  too (`backup.rst <docs/handbook/backup.rst>`__). Keep the copy private: it
+  holds the unit's registration identity.
+* **The way back.** While the other bank holds the shipped firmware, the
+  same page has "Go back to the shipped firmware", which starts it with its
+  own settings.
 * **The first update overwrites the shipped firmware.** The panel names the
   bank that holds it and asks before it writes over it; ``onu-update write``
-  on the command line does not ask. Copy the whole flash first
-  (`backup.rst <docs/handbook/backup.rst>`__), and keep the copy private: it
-  holds the unit's registration identity (`updating.rst
+  on the command line does not ask (`updating.rst
   <docs/handbook/updating.rst>`__, "The first update").
 * **Builds from before 2026-10-11 erased the shipped firmware's files** in
   the partition ``config``. The system now keeps its settings in a file of
@@ -247,12 +282,12 @@ Before you install
   the shipped firmware's administrator for it. Where that was still the
   default, ``admin``, the password stays ``admin``: the panel then allows
   nothing until a password of your own is set, and ssh takes keys only
-  (`ADR 0012 <docs/adr/0012-one-account-root.rst>`__).
+  (`ADR 0009 <docs/adr/0009-one-account-root.rst>`__).
 * **The panel's certificate is signed by the stick itself**, so a browser
   warns at the first visit. The console and the panel show its fingerprint
-  to compare (`ADR 0016 <docs/adr/0016-the-panel-over-https.rst>`__).
+  to compare (`ADR 0013 <docs/adr/0013-the-panel-over-https.rst>`__).
 * **Install only an update file you built or trust**: nothing checks who
-  made it (`ADR 0017 <docs/adr/0017-update-files-carry-no-signature.rst>`__).
+  made it (`ADR 0014 <docs/adr/0014-update-files-carry-no-signature.rst>`__).
 * **Try it on a lab OLT first.** A stick on a PON shares the fibre with every
   other ONU of its tree (`optical-safety.rst
   <docs/handbook/optical-safety.rst>`__).
@@ -292,6 +327,25 @@ On RouterOS::
 
 The panel can move the stick to another VLAN or address; it keeps the old
 pair until the new one is confirmed from a panel opened at it.
+
+Releases
+--------
+
+Releases are on the repository's Releases page. Each is built by the
+workflow ``.github/workflows/release.yml`` from the commit it names, twice,
+and the two builds must be identical; nothing built elsewhere goes into a
+release. A release is published only after its own files were tested on a
+stick. Its version is the time of its commit in UTC, as ``2026.10.20-0130``,
+and its tag is that version with a ``v`` in front.
+
+A release holds:
+
+* ``web-install.tar``: the package for the shipped firmware's web page;
+* ``update.bin``: an update for a stick that runs this system, from its
+  panel;
+* ``k0.uImage`` and ``r0.squashfs``: the two images, for the bench;
+* the sources and licences of everything in the images;
+* ``SHA256SUMS``: the digests of all of them.
 
 Where to start
 ==============
@@ -343,8 +397,8 @@ Each part keeps the layout of its upstream project: the kernel tree is laid
 out like Linux, the build like Buildroot. So each can be read, reused or sent
 upstream on its own (`ADR 0003 <docs/adr/0003-structure-and-scope.rst>`__).
 The kernel series keeps to mainline Linux's rules, so that anyone can take it
-there, but this project does not submit it (`ADR 0021
-<docs/adr/0021-the-kernel-series-keeps-mainline-rules-without-a-submission.rst>`__).
+there, but this project does not submit it (`ADR 0015
+<docs/adr/0015-the-kernel-series-keeps-mainline-rules-without-a-submission.rst>`__).
 
 Repository map
 --------------
@@ -480,7 +534,8 @@ The top-level ``Makefile`` holds the entry points. You need:
     make clean         # remove the build products; distclean all of build/
 
 The programs of this tree build and test on their own on the host, with
-``make -C <program> check``.
+``make -C <program> check``. A build of your own installs as a release does,
+but only the release workflow makes releases (`Releases`_).
 
 Contributing
 ============
