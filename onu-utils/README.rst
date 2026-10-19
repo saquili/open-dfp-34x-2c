@@ -557,14 +557,21 @@ by its whole path where procd starts it.
 
    The table is the NAT the networks go out through, behind the address of
    the connection each goes out by, a flowtable that hands their TCP and UDP
-   flows to the switch, and the protection that keeps new connections from
-   the operator's side out of the networks; ``src/fwmsg.h`` shows it as nft
+   flows to the switch, the protection that keeps new connections from
+   the operator's side out of the networks, the ports forwarded to their
+   devices, and the firewall's defaults, with the rules that let through
+   what a default drops (ADR 0023); ``src/fwmsg.h`` shows it as nft
    would. ``onu-apply`` writes the file, ``/run/onu-fw.conf``: a line ``lan
    IFNAME ADDRESS/LEN`` for each network, a line ``out IFNAME`` for each
    interface of the operator's side, ``out ppp*`` for the sessions' and the
    interface of each IPoE connection, a line ``wan IFNAME`` for the GEM
-   interface of each connection the networks go out by, and ``offload off``
-   for none of the flowtable. The kernel takes the table whole or not at all, in place of
+   interface of each connection the networks go out by, ``offload off``
+   for none of the flowtable, ``fwd`` and ``dmz`` for each forward and DMZ
+   in force, ``default out block`` and ``default between block`` where the
+   firewall drops a new connection from a network to the internet or
+   between two networks that no rule takes, and ``allow WAY ...`` for each
+   rule that lets one of IPv4 through where its way's default drops it.
+   The kernel takes the table whole or not at all, in place of
    the one there was; when it refuses the flowtable, as one whose devices
    carry no flow in hardware does, the table goes in without it, and the CPU
    carries the flows. ``tests/test_onu_fw.sh`` reads the table back with nft

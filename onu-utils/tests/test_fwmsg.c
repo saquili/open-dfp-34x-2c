@@ -482,12 +482,179 @@ static void test_forward_batch(void)
 	printf("  the longest batch: %zu bytes\n", len);
 }
 
+static void test_rule_lines(void)
+{
+	static const char *const bad[] = {
+		"allow",
+		"allow sideways",
+		"allow in iif",
+		"allow in iif bad/name",
+		"allow in iif net1 iif net2",
+		"allow in oif averyveryverylongname",
+		"allow out ether aa:bb:cc:dd:ee",
+		"allow out ether 00-00-5e-00-53-ff",
+		"allow out ether aa:bb:cc:dd:ee:fg",
+		"allow out saddr 10.0.0.0/33",
+		"allow out saddr 10.0.0/8",
+		"allow out daddr 2001:db8::/32",
+		"allow out daddr 10.0.0.1/",
+		"allow out tcp 0",
+		"allow out tcp 0443",
+		"allow out tcp 65536",
+		"allow out tcp 9000-8000",
+		"allow out tcp 8000-",
+		"allow out icmp 8",
+		"allow out sctp",
+		"allow out tcp 443 iif net1",
+		"allow out tcp 443 80",
+		"allow out colour red",
+		"default in allow",
+		"default in block",
+		"default out deny",
+		"default sideways block",
+		"default out",
+		"default out block x",
+	};
+	struct fw_spec s;
+	struct fw_rule *r;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		fw_spec_init(&s);
+		CHECK(fw_spec_line(&s, bad[i], g_err, sizeof(g_err)) == -1 && *g_err);
+		CHECK(s.nrules == 0 && s.block[FW_IN] && !s.block[FW_OUT] && !s.block[FW_BETWEEN]);
+	}
+	fw_spec_init(&s);
+	CHECK(!fw_spec_line(&s, "default out block", g_err, sizeof(g_err)) && s.block[FW_OUT]);
+	CHECK(!fw_spec_line(&s, "default between allow", g_err, sizeof(g_err)) &&
+	      !s.block[FW_BETWEEN]);
+	CHECK(!fw_spec_line(&s, "default between block", g_err, sizeof(g_err)) &&
+	      s.block[FW_BETWEEN]);
+	CHECK(!fw_spec_line(&s, "allow between iif net2 ether 00:00:5E:00:53:a2 oif net1 "
+			    "daddr 192.168.1.10 tcp 9100", g_err, sizeof(g_err)));
+	r = &s.rule[0];
+	CHECK(r->way == FW_BETWEEN && !strcmp(r->iif, "net2") && !strcmp(r->oif, "net1") &&
+	      r->ether && r->mac[2] == 0x5e && r->mac[5] == 0xa2 && !r->saddr && r->daddr &&
+	      r->dnet == 0xc0a8010au && r->dlen == 32 && r->proto == 6 && r->from == 9100 &&
+	      r->last == 9100);
+	/* A network's bits past its length are cleared, as the panel takes them. */
+	CHECK(!fw_spec_line(&s, "allow in saddr 10.1.2.3/8 oif net1 udp 8000-8100", g_err,
+			    sizeof(g_err)));
+	r = &s.rule[1];
+	CHECK(r->way == FW_IN && r->saddr && r->snet == 0x0a000000u && r->slen == 8 &&
+	      !*r->iif && r->proto == 17 && r->from == 8000 && r->last == 8100);
+	CHECK(!fw_spec_line(&s, "allow out", g_err, sizeof(g_err)) && s.rule[2].way == FW_OUT &&
+	      !s.rule[2].proto && !s.rule[2].from && !*s.rule[2].iif);
+	CHECK(!fw_spec_line(&s, "allow out iif net1 daddr 0.0.0.0/0 icmp", g_err, sizeof(g_err)) &&
+	      s.rule[3].proto == 1 && s.rule[3].daddr && s.rule[3].dlen == 0);
+	CHECK(!fw_spec_line(&s, "allow out tcp", g_err, sizeof(g_err)) && s.rule[4].proto == 6 &&
+	      !s.rule[4].from);
+	CHECK(s.nrules == 5);
+
+	/* No more rules than the panel's, a rule of both protocols two. */
+	fw_spec_init(&s);
+	for (int i = 0; i < FW_RULES_MAX; i++)
+		CHECK(!fw_spec_line(&s, "allow out tcp 443", g_err, sizeof(g_err)));
+	CHECK(fw_spec_line(&s, "allow out tcp 443", g_err, sizeof(g_err)) == -1);
+}
+
+static void test_rule_batch(void)
+{
+	static char k[4096];
+	struct fw_spec s;
+	uint32_t last, acked;
+	size_t len;
+
+	/* Without a rule or a default, the table is as it was. */
+	fw_spec_init(&s);
+	CHECK(!fw_spec_line(&s, "lan net1 192.168.1.0/24", g_err, sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "lan net2 192.168.2.0/24", g_err, sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "out ppp*", g_err, sizeof(g_err)));
+	s.offload = false;
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	kinds(len, k, sizeof(k), &acked);
+	CHECK(len > 0 && !strcmp(k, "<DTCCRRRRRR>") && !has_bytes(len, "allow_in"));
+	/* A rule of a way its default lets through needs no chain. */
+	CHECK(!fw_spec_line(&s, "allow out iif net1 tcp 25", g_err, sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "allow between iif net1 oif net2", g_err, sizeof(g_err)));
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	kinds(len, k, sizeof(k), &acked);
+	CHECK(len > 0 && !strcmp(k, "<DTCCRRRRRR>") && !has_bytes(len, "allow_out"));
+
+	/*
+	 * Out and between blocked: a drop of each network by each way out and
+	 * into each other network, or a jump to the chain of the rules of its
+	 * way, whose rules come last, each chain's with its drop after them.
+	 */
+	CHECK(!fw_spec_line(&s, "default out block", g_err, sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "default between block", g_err, sizeof(g_err)));
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	kinds(len, k, sizeof(k), &acked);
+	/* The chains forward, postrouting, allow_out and allow_between; the MSS, the answers, two of each way, two of NAT, and of the rules' chains a rule and a drop each. */
+	CHECK(len > 0 && !strcmp(k, "<DTCCCCRRRRRRRRRRRRRR>") && last == acked);
+	CHECK(has_bytes(len, "allow_out") && has_bytes(len, "allow_between") &&
+	      !has_bytes(len, "allow_in"));
+	/* A rule from the internet makes the chain of its way, which the drops jump to. */
+	CHECK(!fw_spec_line(&s, "allow in saddr 203.0.113.0/24 oif net1 daddr 192.168.1.10 tcp 443",
+			    g_err, sizeof(g_err)));
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	kinds(len, k, sizeof(k), &acked);
+	CHECK(len > 0 && !strcmp(k, "<DTCCCCCRRRRRRRRRRRRRRRR>") && has_bytes(len, "allow_in"));
+
+	/* The most there may be: every forward moved, every DMZ, every rule of the longest. */
+	fw_spec_init(&s);
+	for (int i = 0; i < FW_LANS_MAX; i++) {
+		char line[48];
+
+		snprintf(line, sizeof(line), "lan averylongname%d 192.168.%d.0/24", i % 10, i + 1);
+		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
+		snprintf(line, sizeof(line), "wan gem%d", 256 + i);
+		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
+	}
+	CHECK(!fw_spec_line(&s, "out ppp*", g_err, sizeof(g_err)));
+	for (int i = 1; i < FW_OUTS_MAX; i++) {
+		char line[48];
+
+		snprintf(line, sizeof(line), "out averylongnam%d", i);
+		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
+	}
+	for (int i = 0; i < FW_FWDS_MAX; i++) {
+		int n = FW_MOVED_MAX / FW_FWDS_MAX + (i < FW_MOVED_MAX % FW_FWDS_MAX);
+		char line[96];
+
+		snprintf(line, sizeof(line),
+			 "fwd averylongname1 203.0.113.24 %s 60000-%d 192.168.255.254 50000",
+			 i % 2 ? "udp" : "tcp", 60000 + n - 1);
+		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
+	}
+	for (int i = 0; i < FW_DMZS_MAX; i++)
+		CHECK(!fw_spec_line(&s, "dmz averylongname1 203.0.113.24 192.168.1.30", g_err,
+				    sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "default out block", g_err, sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "default between block", g_err, sizeof(g_err)));
+	for (int i = 0; i < FW_RULES_MAX; i++) {
+		char line[200];
+
+		snprintf(line, sizeof(line),
+			 "allow %s iif averylongname1 ether 00:00:5e:00:53:ff oif averylongname2 "
+			 "saddr 10.0.0.0/9 daddr 192.168.255.254 %s 60000-60100",
+			 i % 3 == 0 ? "in" : i % 3 == 1 ? "out" : "between", i % 2 ? "udp" : "tcp");
+		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
+	}
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	CHECK(len > 0 && len <= FW_BATCH_MAX &&
+	      last == 1 + 6 + 3 + 7 + 4 * 8 + 2 + 3 * 8 * 7 + 8 * 7 + 3 * FW_FWDS_MAX +
+			      2 * FW_DMZS_MAX + FW_RULES_MAX + 3);
+	printf("  the longest batch, with every rule: %zu bytes\n", len);
+}
+
 int main(void)
 {
 	test_lines();
 	test_batch();
 	test_forward_lines();
 	test_forward_batch();
+	test_rule_lines();
+	test_rule_batch();
 	printf("test_fwmsg: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }

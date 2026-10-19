@@ -74,6 +74,8 @@ check "has 'oifname \"ppp*\" ip saddr 192.168.1.0/24 masquerade'"
 check "has 'oifname \"ppp*\" ip saddr 10.0.0.0/8 masquerade'"
 check '! has "flowtable" && ! has "flow add"'
 check '! has "chain prerouting" && ! has "ct status dnat"'
+# Without a default that blocks, nothing keeps the networks in or apart.
+check '! has "allow_" && ! has "oifname \"ppp*\" ct state new" && ! has "iifname \"net1\" oifname \"sfp\""'
 
 echo "out by a session and by an IPoE connection"
 printf 'lan net1 192.168.1.0/24\nwan gem257\nout ppp*\nout wan421\n' >"$T/fw"
@@ -194,6 +196,98 @@ run apply "$T/fw.over"
 check '[ $rc -eq 2 ] && echo "$err" | grep -q "more than 1024 ports moved"'
 check '[ "$(table | grep -c "dport map {")" -eq 192 ]'
 
+echo "the firewall's defaults, and the rules that let through what they drop"
+{
+	printf 'lan net1 192.168.1.0/24\nlan sfp 10.0.0.0/8\nwan gem257\nout ppp*\nout wan421\n'
+	printf 'default out block\ndefault between block\n'
+	printf 'allow between iif sfp ether 00:00:5e:00:53:a2 oif net1 daddr 192.168.1.10 tcp 9100\n'
+	printf 'allow out iif net1 daddr 203.0.113.0/24 udp 53\n'
+	printf 'allow in saddr 198.51.100.7 oif net1 daddr 192.168.1.10 tcp 8000-8100\n'
+	printf 'allow out icmp\n'
+	printf 'allow between\n'
+} >"$T/fw"
+run apply "$T/fw"
+check '[ $rc -eq 0 ] && echo "$err" | grep -q "flowtable was refused"'
+check 'has "chain allow_in {" && has "chain allow_out {" && has "chain allow_between {"'
+# Each way's new connections jump to the chain of its rules.
+check "has 'iifname \"ppp*\" oifname \"net1\" ct state new jump allow_in'"
+check "has 'iifname \"wan421\" oifname \"sfp\" ct state new jump allow_in'"
+check "has 'iifname \"net1\" oifname \"ppp*\" ct state new jump allow_out'"
+check "has 'iifname \"sfp\" oifname \"wan421\" ct state new jump allow_out'"
+check "has 'iifname \"net1\" oifname \"sfp\" ct state new jump allow_between'"
+check "has 'iifname \"sfp\" oifname \"net1\" ct state new jump allow_between'"
+check '! has "oifname \"net1\" oifname" && ! has "iifname \"net1\" oifname \"net1\""'
+check '[ "$(at "ct state established,related accept")" -lt "$(at "jump allow_in")" ]'
+# The rules, of IPv4, each in its way's chain, which drops what none takes.
+check "has 'iifname \"sfp\" ether saddr 00:00:5e:00:53:a2 oifname \"net1\" ip daddr 192.168.1.10 tcp dport 9100 accept'"
+check "has 'iifname \"net1\" ip daddr 203.0.113.0/24 udp dport 53 accept'"
+check "has 'oifname \"net1\" ip saddr 198.51.100.7 ip daddr 192.168.1.10 tcp dport 8000-8100 accept'"
+check "has 'meta l4proto icmp accept'"
+chain_of() {
+	nft list chain inet onu "$1" 2>/dev/null | grep -v '^table\|chain\|^[[:space:]]*}' | sed 's/^[[:space:]]*//'
+}
+check '[ "$(chain_of allow_out | tail -n 1)" = drop ] && [ "$(chain_of allow_out | wc -l)" -eq 3 ]'
+check '[ "$(chain_of allow_between | tail -n 1)" = drop ] && [ "$(chain_of allow_in | tail -n 1)" = drop ]'
+check 'chain_of allow_between | head -n 1 | grep -q "^iifname \"sfp\" ether saddr"'
+# Of IPv4 alone, though nft does not say so where an address or ICMP does.
+check '[ "$(nft --debug=netlink list chain inet onu allow_out | grep -c "meta load nfproto")" -eq 2 ]'
+
+echo "the rules as nft itself makes them"
+nft add table inet ref &&
+	nft add chain inet ref allow_between &&
+	nft add rule inet ref allow_between meta nfproto ipv4 iifname "sfp" ether saddr 00:00:5e:00:53:a2 \
+		oifname "net1" ip daddr 192.168.1.10 tcp dport 9100 accept &&
+	nft add rule inet ref allow_between meta nfproto ipv4 accept &&
+	nft add rule inet ref allow_between drop &&
+	nft add chain inet ref allow_in &&
+	nft add rule inet ref allow_in meta nfproto ipv4 oifname "net1" ip saddr 198.51.100.7 \
+		ip daddr 192.168.1.10 tcp dport 8000-8100 accept &&
+	nft add rule inet ref allow_in drop &&
+	nft add chain inet ref forward '{ type filter hook forward priority 0; }' &&
+	nft add rule inet ref forward iifname "net1" oifname "sfp" ct state new jump allow_between
+check '[ -n "$(bytecode ref allow_between)" ] &&
+	[ "$(bytecode onu allow_between)" = "$(bytecode ref allow_between)" ]'
+check '[ -n "$(bytecode ref allow_in)" ] && [ "$(bytecode onu allow_in)" = "$(bytecode ref allow_in)" ]'
+check '[ "$(bytecode onu forward | grep -B7 "jump -> allow_between" | head -n 8)" = "$(bytecode ref forward)" ]'
+nft delete table inet ref
+
+echo "the defaults alone: each way blocked by a drop, no chain without rules"
+printf 'lan net1 192.168.1.0/24\nlan sfp 10.0.0.0/8\nout ppp*\ndefault out block\ndefault between block\noffload off\n' >"$T/fw"
+run apply "$T/fw"
+check '[ $rc -eq 0 ] && [ -z "$err" ] && ! has "allow_"'
+check "has 'iifname \"net1\" oifname \"ppp*\" ct state new drop'"
+check "has 'iifname \"sfp\" oifname \"net1\" ct state new drop'"
+check "has 'iifname \"ppp*\" oifname \"sfp\" ct state new drop'"
+# A rule of a way its default lets through is no rule of the table.
+printf 'lan net1 192.168.1.0/24\nout ppp*\ndefault out allow\nallow out tcp 443\noffload off\n' >"$T/fw"
+run apply "$T/fw"
+check '[ $rc -eq 0 ] && ! has "allow_" && ! has "dport 443"'
+printf 'default in allow\n' >"$T/bad"
+run apply "$T/bad"
+check '[ $rc -eq 2 ] && echo "$err" | grep -q "no default of the table"'
+
+echo "the longest table: every rule of the longest beside every forward moved"
+{
+	awk '!/^offload/' "$T/fw.moved"
+	echo "default out block"
+	echo "default between block"
+	i=0
+	while [ $i -lt 192 ]; do
+		case $((i % 3)) in
+		0) w=in ;;
+		1) w=out ;;
+		*) w=between ;;
+		esac
+		echo "allow $w iif averylongname1 ether 00:00:5e:00:53:ff oif averylongname2 saddr 10.0.0.0/9 daddr 192.168.255.254 $([ $((i % 2)) -eq 0 ] && echo tcp || echo udp) 60000-60100"
+		i=$((i + 1))
+	done
+	echo "offload off"
+} >"$T/fw.rules"
+run apply "$T/fw.rules"
+check '[ $rc -eq 0 ] && [ -z "$err" ]'
+check '[ "$(table | grep -c "dport 60000-60100 accept")" -eq 192 ] &&
+	[ "$(table | grep -c "dport map {")" -eq 192 ]'
+
 echo "a table replaces the one there is, whole"
 printf 'lan net1 172.16.0.0/12\nout ppp*\noffload off\n' >"$T/fw"
 run apply "$T/fw"
@@ -300,6 +394,33 @@ EOF
 	$I python3 "$T/pkt.py" send 192.0.2.10 5000 hello
 	wait
 	check '[ "$(cat "$T/s68")" = offer ] && [ "$(cat "$T/d5000")" = hello ]'
+
+	echo "what the defaults keep, and what a rule lets through, packet by packet"
+	$I ip route add 192.168.2.0/24 via 192.0.2.10
+	# Out blocked: the device's datagram to the internet goes nowhere.
+	printf 'lan net2 192.168.2.0/24\nout wan840\noffload off\ndefault out block\n' >"$T/stick"
+	$S "$FW" apply "$T/stick"
+	# The listener prints the first datagram that reaches it.
+	$I python3 "$T/pkt.py" listen 7000 >"$T/i7000" &
+	sleep 0.5
+	$D python3 "$T/pkt.py" send 192.0.2.1 7000 blocked
+	sleep 1
+	echo "allow out iif net2 daddr 192.0.2.1 udp 7000" >>"$T/stick"
+	$S "$FW" apply "$T/stick"
+	$D python3 "$T/pkt.py" send 192.0.2.1 7000 allowed
+	wait
+	check '[ "$(cat "$T/i7000")" = allowed ]'
+	# In: a datagram to the device's own address, which no forward takes, is
+	# dropped, and a rule from the internet lets it through.
+	$D python3 "$T/pkt.py" listen 7001 >"$T/d7001" &
+	sleep 0.5
+	$I python3 "$T/pkt.py" send 192.168.2.30 7001 blocked
+	sleep 1
+	echo "allow in saddr 192.0.2.0/24 oif net2 daddr 192.168.2.30 udp 7001" >>"$T/stick"
+	$S "$FW" apply "$T/stick"
+	$I python3 "$T/pkt.py" send 192.168.2.30 7001 allowed
+	wait
+	check '[ "$(cat "$T/d7001")" = allowed ]'
 fi
 
 echo "test_onu_fw: $checks checks, $failures failed"

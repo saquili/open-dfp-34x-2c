@@ -4,9 +4,10 @@
 /*
  * The stick's own table of nf_tables, "inet onu": the NAT the local networks
  * go out through, the protection that keeps the internet's new connections
- * from them, and the ports forwarded to their devices, as one batch of
- * nf_tables requests, which the kernel takes whole or not at all (ADR 0014).
- * nft would make the same table of
+ * from them, the ports forwarded to their devices, and the firewall's
+ * defaults with the rules that let through what a default refuses, as one
+ * batch of nf_tables requests, which the kernel takes whole or not at all
+ * (ADR 0014). nft would make the same table of
  *
  *   table inet onu {
  *     flowtable ft {
@@ -23,8 +24,22 @@
  *       ct state established,related accept
  *       ct status dnat accept                           with forwards
  *       iifname OUT oifname LAN ct state new drop       for each network
- *                                                        and way out
+ *                                                        and way out, or
+ *         jump allow_in in its place                    with rules in
+ *       iifname LAN oifname OUT ct state new drop       with out blocked,
+ *         or jump allow_out                              as above
+ *       iifname LAN oifname LAN2 ct state new drop      with between
+ *         or jump allow_between                          blocked, for each
+ *                                                        two networks
  *     }
+ *     chain allow_in {                                  with rules of it
+ *       meta nfproto ipv4 [iifname IN] [ether saddr MAC] [oifname LAN]
+ *         [ip saddr NET] [ip daddr NET] [meta l4proto tcp|udp|icmp]
+ *         [tcp|udp dport PORTS] accept                   for each rule
+ *       drop
+ *     }
+ *     chain allow_out { ... }                           as allow_in
+ *     chain allow_between { ... }                       as allow_in
  *     chain postrouting {
  *       type nat hook postrouting priority 100; policy accept;
  *       oifname OUT ip saddr NET masquerade             for each network
@@ -74,8 +89,20 @@
  * and stays with the stick. A session's PPP is no IP, and no chain of the
  * table sees it.
  *
- * The networks, the ways out, the WANs, the forwards and the DMZs are lines
- * of a file, which onu-apply writes:
+ * Where no rule decides, the firewall drops a new connection from the
+ * internet to a network (in), and by its defaults one from a network to
+ * the internet (out) and one between two networks (between). The rules
+ * that block are the switch's ACL's alone, which judges a frame as it
+ * enters a port, before netfilter sees it (ADR 0023); the rules that allow
+ * are the ACL's too, and are here as well where the default of their way
+ * would drop what the ACL let through: each is a rule of the chain of its
+ * way, which a new connection that way jumps to, and which drops what none
+ * of them accepts. The ways are told apart by the interfaces, so the
+ * defaults hold for IPv6 as well; a rule is of IPv4 alone, as the stick
+ * routes no IPv6 to the networks' devices yet.
+ *
+ * The networks, the ways out, the WANs, the forwards, the DMZs and the
+ * firewall's are lines of a file, which onu-apply writes:
  *
  *   lan IFNAME ADDRESS/LEN   a network: its interface and its addresses
  *   out IFNAME               an interface the networks go out by, or with
@@ -87,6 +114,17 @@
  *                            or FROM-LAST, PORT the device's port, for a
  *                            range the first of as many
  *   dmz IFNAME ADDR DEV      a DMZ
+ *   default out|between block|allow
+ *                            what becomes of a new connection that way where
+ *                            no rule decides: allow when there is no line
+ *   allow in|out|between [iif IFNAME] [ether MAC] [oif IFNAME] [saddr NET]
+ *         [daddr NET] [tcp|udp|icmp [PORTS]]
+ *                            a rule that lets a new connection of IPv4
+ *                            through that way: from an interface, and a MAC
+ *                            address there, to an interface, from an address
+ *                            or a network ADDR/LEN, to one, of a protocol
+ *                            and a port or FROM-LAST of TCP or UDP; what it
+ *                            does not name it takes any of
  */
 
 #ifndef ONU_UTILS_FWMSG_H
@@ -117,12 +155,14 @@
  */
 #define FW_MOVED_MAX 1024
 /*
- * The longest batch, of the most of everything, is 255 KiB: about 640 bytes
- * for each forward's rule, 280 more for a range moved, which takes a map,
- * and 28 for each of its ports. The buffer for it is twice as large, for
- * the request that goes past it (mnl_nlmsg_batch_start()).
+ * The longest batch, of the most of everything, is some 490 KiB: about 640
+ * bytes for each forward's rule, 280 more for a range moved, which takes a
+ * map, and 28 for each of its ports; up to 900 for each rule of the
+ * firewall, and 300 for each jump to the chain of a way, of each network
+ * by each way out or into each other network. The buffer for it is twice
+ * as large, for the request that goes past it (mnl_nlmsg_batch_start()).
  */
-#define FW_BATCH_MAX (320 * 1024)
+#define FW_BATCH_MAX (512 * 1024)
 
 /**
  * struct fw_lan - A local network.
@@ -183,6 +223,50 @@ struct fw_dmz {
 	uint32_t dev;
 };
 
+/* The ways of a new connection that the firewall judges. */
+enum fw_way {
+	FW_IN,
+	FW_OUT,
+	FW_BETWEEN,
+	FW_WAYS
+};
+
+/* The panel's 96 rules, a rule of both TCP and UDP two of them. */
+#define FW_RULES_MAX (2 * 96)
+
+/**
+ * struct fw_rule - A rule that lets a new connection of IPv4 through.
+ * @way: %FW_IN, %FW_OUT or %FW_BETWEEN
+ * @iif: the interface it comes in by, "" for any
+ * @oif: the interface it goes out by, "" for any
+ * @ether: whether it comes from @mac
+ * @mac: the MAC address it comes from
+ * @saddr: whether it comes from @snet
+ * @snet: the first address of the network it comes from, in host order
+ * @slen: the length of its prefix
+ * @daddr: whether it goes to @dnet
+ * @dnet: the first address of the network it goes to, in host order
+ * @dlen: the length of its prefix
+ * @proto: IPPROTO_TCP, IPPROTO_UDP or IPPROTO_ICMP; 0 for any
+ * @from: the first port it goes to, of TCP or UDP; 0 for any
+ * @last: the last, @from for one
+ */
+struct fw_rule {
+	uint8_t way;
+	char iif[FW_IFNAMSIZ];
+	char oif[FW_IFNAMSIZ];
+	bool ether;
+	uint8_t mac[6];
+	bool saddr;
+	uint32_t snet;
+	uint8_t slen;
+	bool daddr;
+	uint32_t dnet;
+	uint8_t dlen;
+	uint8_t proto;
+	uint16_t from, last;
+};
+
 /**
  * struct fw_spec - What the table is made of.
  * @lan: the networks, @nlans of them
@@ -192,6 +276,9 @@ struct fw_dmz {
  * @nmoved: the ports of those of them moved to other ports, FW_MOVED_MAX
  *          at most
  * @dmz: the DMZs, @ndmzs of them, after the forwards
+ * @rule: the rules that let new connections through, @nrules of them
+ * @block: whether a new connection of each way that no rule takes is
+ *         dropped: one from the internet always
  * @offload: with the flowtable
  */
 struct fw_spec {
@@ -206,10 +293,16 @@ struct fw_spec {
 	int nmoved;
 	struct fw_dmz dmz[FW_DMZS_MAX];
 	int ndmzs;
+	struct fw_rule rule[FW_RULES_MAX];
+	int nrules;
+	bool block[FW_WAYS];
 	bool offload;
 };
 
-/* An empty spec: no network, no way out, no WAN, no forward, with the flowtable. */
+/*
+ * An empty spec: no network, no way out, no WAN, no forward, no rule, new
+ * connections from the internet dropped and others not, with the flowtable.
+ */
 void fw_spec_init(struct fw_spec *s);
 
 /*

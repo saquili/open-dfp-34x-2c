@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <libmnl/libmnl.h>
+#include <linux/if_arp.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/netfilter/nf_nat.h>
@@ -42,10 +43,24 @@
 #define TYPE_INET_SERVICE 13
 #define MAP_ELEMS_MAX 512
 
+/* The chain of each way's rules, which drops what none of them takes. */
+static const char *const g_way_chain[FW_WAYS] = {
+	[FW_IN] = "allow_in",
+	[FW_OUT] = "allow_out",
+	[FW_BETWEEN] = "allow_between",
+};
+
+static const char *const g_way_name[FW_WAYS] = {
+	[FW_IN] = "in",
+	[FW_OUT] = "out",
+	[FW_BETWEEN] = "between",
+};
+
 void fw_spec_init(struct fw_spec *s)
 {
 	memset(s, 0, sizeof(*s));
 	s->offload = true;
+	s->block[FW_IN] = true;
 }
 
 static bool ifname_ok(const char *v)
@@ -133,6 +148,109 @@ static bool fwd_of(struct fw_fwd *f, const char *ifn, const char *addr,
 	return true;
 }
 
+/*
+ * a.b.c.d or a.b.c.d/len, len from 0 to 32: the network, the bits past its
+ * length cleared, as the panel takes a part of the internet.
+ */
+static bool cidr_of(const char *v, uint32_t *net, uint8_t *len)
+{
+	const char *slash = strchr(v, '/');
+	size_t n = slash ? (size_t)(slash - v) : strlen(v);
+	unsigned long l = 32;
+	char a[16], *end;
+
+	if (n >= sizeof(a))
+		return false;
+	memcpy(a, v, n);
+	a[n] = '\0';
+	if (slash) {
+		if (slash[1] < '0' || slash[1] > '9')
+			return false;
+		l = strtoul(slash + 1, &end, 10);
+		if (*end || l > 32)
+			return false;
+	}
+	if (!addr_of(a, net))
+		return false;
+	*len = (uint8_t)l;
+	*net &= l ? ~0u << (32 - l) : 0;
+	return true;
+}
+
+/* xx:xx:xx:xx:xx:xx, in hexadecimal. */
+static bool mac_of(const char *v, uint8_t mac[6])
+{
+	static const char hex[] = "0123456789abcdef";
+
+	if (strlen(v) != 17)
+		return false;
+	for (int i = 0; i < 6; i++) {
+		const char *hi = strchr(hex, v[3 * i] | 0x20);
+		const char *lo = strchr(hex, v[3 * i + 1] | 0x20);
+
+		if (!v[3 * i] || !v[3 * i + 1] || !hi || !lo || (i < 5 && v[3 * i + 2] != ':'))
+			return false;
+		mac[i] = (uint8_t)((hi - hex) << 4 | (lo - hex));
+	}
+	return true;
+}
+
+static int way_of(const char *v)
+{
+	for (int w = 0; w < FW_WAYS; w++)
+		if (v && !strcmp(v, g_way_name[w]))
+			return w;
+	return -1;
+}
+
+/*
+ * The words of an allow line after "allow": the way, then what the rule
+ * names, each at most once, the protocol and its ports last.
+ */
+static bool rule_of(struct fw_rule *r, char *words)
+{
+	char *save = NULL, *w = strtok_r(words, " ", &save), *v;
+	int way = way_of(w);
+
+	memset(r, 0, sizeof(*r));
+	if (way < 0)
+		return false;
+	r->way = (uint8_t)way;
+	while ((w = strtok_r(NULL, " ", &save))) {
+		v = strtok_r(NULL, " ", &save);
+		if (!strcmp(w, "tcp") || !strcmp(w, "udp") || !strcmp(w, "icmp")) {
+			char *dash;
+
+			r->proto = w[0] == 't' ? IPPROTO_TCP : w[0] == 'u' ? IPPROTO_UDP :
+						 IPPROTO_ICMP;
+			if (!v)
+				return true;
+			if (r->proto == IPPROTO_ICMP || strtok_r(NULL, " ", &save))
+				return false;
+			dash = strchr(v, '-');
+			if (dash)
+				*dash = '\0';
+			return port_of(v, &r->from) && port_of(dash ? dash + 1 : v, &r->last) &&
+			       r->last >= r->from;
+		}
+		if (!v)
+			return false;
+		if (!strcmp(w, "iif") && !*r->iif && ifname_ok(v))
+			memcpy(r->iif, v, strlen(v) + 1);
+		else if (!strcmp(w, "oif") && !*r->oif && ifname_ok(v))
+			memcpy(r->oif, v, strlen(v) + 1);
+		else if (!strcmp(w, "ether") && !r->ether && mac_of(v, r->mac))
+			r->ether = true;
+		else if (!strcmp(w, "saddr") && !r->saddr && cidr_of(v, &r->snet, &r->slen))
+			r->saddr = true;
+		else if (!strcmp(w, "daddr") && !r->daddr && cidr_of(v, &r->dnet, &r->dlen))
+			r->daddr = true;
+		else
+			return false;
+	}
+	return true;
+}
+
 int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 {
 	char word[16], a[64], b[64], c[64], d[64], e[64], f[64], x[2];
@@ -140,8 +258,34 @@ int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 
 	if (!*line || *line == '#')
 		return 0;
+	if (!strncmp(line, "allow ", 6)) {
+		char words[256];
+
+		if (s->nrules == FW_RULES_MAX || strlen(line + 6) >= sizeof(words)) {
+			snprintf(err, errcap, "%.40s: no rule of the table", line);
+			return -1;
+		}
+		memcpy(words, line + 6, strlen(line + 6) + 1);
+		if (!rule_of(&s->rule[s->nrules], words)) {
+			snprintf(err, errcap, "%.40s: no rule of the table", line);
+			return -1;
+		}
+		s->nrules++;
+		return 0;
+	}
 	n = sscanf(line, "%15s %63s %63s %63s %63s %63s %63s %1s", word, a, b, c, d, e,
 		   f, x);
+	if (n == 3 && !strcmp(word, "default")) {
+		int w = way_of(a);
+
+		/* What comes in from the internet is never let in where no rule takes it. */
+		if (w < 0 || w == FW_IN || (strcmp(b, "block") && strcmp(b, "allow"))) {
+			snprintf(err, errcap, "%.40s: no default of the table", line);
+			return -1;
+		}
+		s->block[w] = !strcmp(b, "block");
+		return 0;
+	}
 	if (n == 7 && !strcmp(word, "fwd")) {
 		struct fw_fwd *w = &s->fwd[s->nfwds];
 		int moved;
@@ -415,7 +559,8 @@ static void immediate(struct nlmsghdr *nlh, uint32_t reg, const void *data, uint
 	expr_end(nlh, e);
 }
 
-static void verdict(struct nlmsghdr *nlh, int code)
+/* The verdict @code, and for NFT_JUMP the chain @to. */
+static void verdict_to(struct nlmsghdr *nlh, int code, const char *to)
 {
 	struct expr e = expr_begin(nlh, "immediate");
 	struct nlattr *d, *v;
@@ -424,9 +569,16 @@ static void verdict(struct nlmsghdr *nlh, int code)
 	d = mnl_attr_nest_start(nlh, NFTA_IMMEDIATE_DATA);
 	v = mnl_attr_nest_start(nlh, NFTA_DATA_VERDICT);
 	mnl_attr_put_u32(nlh, NFTA_VERDICT_CODE, htonl((uint32_t)code));
+	if (to)
+		mnl_attr_put_strz(nlh, NFTA_VERDICT_CHAIN, to);
 	mnl_attr_nest_end(nlh, v);
 	mnl_attr_nest_end(nlh, d);
 	expr_end(nlh, e);
+}
+
+static void verdict(struct nlmsghdr *nlh, int code)
+{
+	verdict_to(nlh, code, NULL);
 }
 
 /* A rule of @chain, begun: its expressions follow, then rule_end(). */
@@ -461,6 +613,16 @@ static void chain(struct batch *bt, const char *name, const char *type,
 	mnl_attr_nest_end(nlh, h);
 	mnl_attr_put_u32(nlh, NFTA_CHAIN_POLICY, htonl(NF_ACCEPT));
 	mnl_attr_put_strz(nlh, NFTA_CHAIN_TYPE, type);
+	done(bt);
+}
+
+/* A chain of no hook, which a rule jumps to. */
+static void regular_chain(struct batch *bt, const char *name)
+{
+	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWCHAIN, NLM_F_CREATE);
+
+	mnl_attr_put_strz(nlh, NFTA_CHAIN_TABLE, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_CHAIN_NAME, name);
 	done(bt);
 }
 
@@ -571,15 +733,148 @@ static void accept_answers(struct batch *bt)
 	rule_end(bt, nlh, exprs);
 }
 
-/* A new connection from the way out @o into network @l, dropped. */
-static void keep_out(struct batch *bt, const struct fw_lan *l, const struct fw_out *o)
+/*
+ * Whether the way @w has a chain of its rules: its default drops a new
+ * connection, and a rule lets one through.
+ */
+static bool way_chain(const struct fw_spec *s, int w)
+{
+	if (!s->block[w])
+		return false;
+	for (int i = 0; i < s->nrules; i++)
+		if (s->rule[i].way == w)
+			return true;
+	return false;
+}
+
+/*
+ * A new connection that comes in by @in and goes out by @out, each a name
+ * or the beginning of the names: dropped, or, with @chain, judged by the
+ * rules of its way, whose chain drops what none of them takes.
+ */
+static void guard(struct batch *bt, const struct fw_out *in, const struct fw_out *out,
+		  const char *chain)
 {
 	struct nlattr *exprs;
 	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
 
-	ifname_out(nlh, NFT_META_IIFNAME, o);
-	ifname_is(nlh, NFT_META_OIFNAME, l->ifname, false);
+	ifname_out(nlh, NFT_META_IIFNAME, in);
+	ifname_out(nlh, NFT_META_OIFNAME, out);
 	ct_state_any(nlh, NF_CT_STATE_BIT(IP_CT_NEW));
+	if (chain)
+		verdict_to(nlh, NFT_JUMP, chain);
+	else
+		verdict(nlh, NF_DROP);
+	rule_end(bt, nlh, exprs);
+}
+
+/* Network @l as an interface of guard(). */
+static struct fw_out lan_if(const struct fw_lan *l)
+{
+	struct fw_out o = { .prefix = false };
+
+	memcpy(o.ifname, l->ifname, sizeof(o.ifname));
+	return o;
+}
+
+/*
+ * The new connections each way that its default drops: from the internet
+ * into each network always, from each network to the internet and between
+ * each two networks as the defaults say, each judged by the rules of its
+ * way first when there are some.
+ */
+static void guards(struct batch *bt, const struct fw_spec *s)
+{
+	const char *chain[FW_WAYS];
+
+	for (int w = 0; w < FW_WAYS; w++)
+		chain[w] = way_chain(s, w) ? g_way_chain[w] : NULL;
+	for (int i = 0; i < s->nlans; i++) {
+		struct fw_out l = lan_if(&s->lan[i]);
+
+		for (int o = 0; o < s->nouts; o++)
+			guard(bt, &s->out[o], &l, chain[FW_IN]);
+	}
+	for (int i = 0; s->block[FW_OUT] && i < s->nlans; i++) {
+		struct fw_out l = lan_if(&s->lan[i]);
+
+		for (int o = 0; o < s->nouts; o++)
+			guard(bt, &l, &s->out[o], chain[FW_OUT]);
+	}
+	for (int i = 0; s->block[FW_BETWEEN] && i < s->nlans; i++) {
+		struct fw_out a = lan_if(&s->lan[i]);
+
+		for (int j = 0; j < s->nlans; j++) {
+			struct fw_out b = lan_if(&s->lan[j]);
+
+			if (j != i)
+				guard(bt, &a, &b, chain[FW_BETWEEN]);
+		}
+	}
+}
+
+/* The address at @offset of the IPv4 header in the network @net/@len; any for a length of 0. */
+static void net_is(struct nlmsghdr *nlh, uint32_t offset, uint32_t net, uint8_t len)
+{
+	uint32_t mask = htonl(len == 32 ? ~0u : ~(~0u >> len)), n = htonl(net);
+
+	if (!len)
+		return;
+	payload(nlh, NFT_PAYLOAD_NETWORK_HEADER, offset, 4);
+	if (len < 32)
+		bitwise(nlh, &mask, sizeof(mask));
+	cmp(nlh, NFT_CMP_EQ, &n, sizeof(n));
+}
+
+/*
+ * A rule that lets a new connection of IPv4 through, in the chain of its
+ * way, in the order nft lists what it names.
+ */
+static void allow_rule(struct batch *bt, const struct fw_rule *r)
+{
+	static const uint8_t ipv4 = NFPROTO_IPV4;
+	static const uint16_t ether = ARPHRD_ETHER;
+	uint16_t from = htons(r->from), last = htons(r->last);
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, g_way_chain[r->way], &exprs);
+
+	meta(nlh, NFT_META_NFPROTO);
+	cmp(nlh, NFT_CMP_EQ, &ipv4, sizeof(ipv4));
+	if (*r->iif)
+		ifname_is(nlh, NFT_META_IIFNAME, r->iif, false);
+	if (r->ether) {
+		meta(nlh, NFT_META_IIFTYPE);
+		cmp(nlh, NFT_CMP_EQ, &ether, sizeof(ether));
+		payload(nlh, NFT_PAYLOAD_LL_HEADER, 6, 6);
+		cmp(nlh, NFT_CMP_EQ, r->mac, sizeof(r->mac));
+	}
+	if (*r->oif)
+		ifname_is(nlh, NFT_META_OIFNAME, r->oif, false);
+	if (r->saddr)
+		net_is(nlh, 12, r->snet, r->slen);
+	if (r->daddr)
+		net_is(nlh, 16, r->dnet, r->dlen);
+	if (r->proto) {
+		meta(nlh, NFT_META_L4PROTO);
+		cmp(nlh, NFT_CMP_EQ, &r->proto, sizeof(r->proto));
+	}
+	if (r->from) {
+		payload(nlh, NFT_PAYLOAD_TRANSPORT_HEADER, 2, 2);
+		if (r->last > r->from)
+			range(nlh, &from, &last, sizeof(from));
+		else
+			cmp(nlh, NFT_CMP_EQ, &from, sizeof(from));
+	}
+	verdict(nlh, NF_ACCEPT);
+	rule_end(bt, nlh, exprs);
+}
+
+/* The end of the chain of a way's rules: what none of them took. */
+static void way_drop(struct batch *bt, int w)
+{
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, g_way_chain[w], &exprs);
+
 	verdict(nlh, NF_DROP);
 	rule_end(bt, nlh, exprs);
 }
@@ -839,6 +1134,10 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 	/* Without forwards, no packet goes through a chain of them. */
 	if (forwards)
 		chain(&bt, PREROUTING, "nat", NF_INET_PRE_ROUTING, DSTNAT_PRIORITY);
+	/* A way's chain is there before the rules that jump to it. */
+	for (int w = 0; w < FW_WAYS; w++)
+		if (way_chain(s, w))
+			regular_chain(&bt, g_way_chain[w]);
 	for (int o = 0; o < s->nouts; o++)
 		clamp_mss(&bt, &s->out[o]);
 	for (int i = 0; s->offload && i < s->nlans; i++) {
@@ -850,9 +1149,7 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 	accept_answers(&bt);
 	if (forwards)
 		accept_forwarded(&bt);
-	for (int i = 0; i < s->nlans; i++)
-		for (int o = 0; o < s->nouts; o++)
-			keep_out(&bt, &s->lan[i], &s->out[o]);
+	guards(&bt, s);
 	for (int i = 0; i < s->nlans; i++)
 		for (int o = 0; o < s->nouts; o++)
 			masquerade(&bt, &s->lan[i], &s->out[o]);
@@ -860,6 +1157,14 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		forward_rule(&bt, &s->fwd[i], (uint32_t)i + 1);
 	for (int i = 0; i < s->ndmzs; i++)
 		dmz_rules(&bt, &s->dmz[i]);
+	for (int w = 0; w < FW_WAYS; w++) {
+		if (!way_chain(s, w))
+			continue;
+		for (int i = 0; i < s->nrules; i++)
+			if (s->rule[i].way == w)
+				allow_rule(&bt, &s->rule[i]);
+		way_drop(&bt, w);
+	}
 	return end(&bt, last);
 }
 
