@@ -57,6 +57,27 @@
  * FORWARDn removes one. DMZn, 1 to 7, "CONN/L/MAC", is a connection's DMZ:
  * the device that takes what comes in by it that no forward takes; an empty
  * DMZn removes one.
+ *
+ * The firewall's rules, 1 to 96, are each
+ * RULEn, "ID_ACTION_FROM_TO_PROTO_PORTS_FAMILY_ON", in the order they are
+ * judged in, n, the first that traffic matches deciding: ID, 1 to 96, which names the rule whatever place it
+ * moves to; ACTION, allow or block; FROM and TO, where the traffic comes
+ * from and goes to, each "internet", "internet:ADDR" for a part of it (an
+ * IPv4 or IPv6 address, or a network ADDR/LEN), "lans" for every local
+ * network, "lan:L" for network L or "dev:L:MAC" for a device of it; PROTO,
+ * any, tcp, udp, both (TCP and UDP) or icmp; PORTS, the port or the range of
+ * ports it goes to, A or A-B, for tcp, udp or both, empty for every one;
+ * FAMILY, any, ipv4 or ipv6; ON, on, or off for one kept but not in force.
+ * The fields are apart by '_', which no field holds: an end holds '/', ':'
+ * and '.', and the ports '-'. A rule goes from somewhere to somewhere else,
+ * never from the internet to the internet nor within one network; the
+ * family of its address is its own; a network it names is set up, and a
+ * device it goes to has a fixed address there, by which it is reached.
+ * RULEn_NAME is its name, up to 40 characters; an empty RULEn removes one.
+ * Where no rule decides, FW_OUT says what becomes of a new connection from
+ * the networks to the internet, allow or block, and FW_BETWEEN of one
+ * between two networks; one from the internet to them is blocked, but what a
+ * forward or a DMZ takes.
  */
 
 #ifndef SETTINGS_H
@@ -85,6 +106,13 @@
 #define SETTINGS_MOVED_MAX 1024
 /* A DMZ for each connection at most. */
 #define SETTINGS_DMZS SETTINGS_CONNS
+/*
+ * The firewall's rules, as many as the switch's ACL has entries; a rule's
+ * name, 40 characters of UTF-8, and its value.
+ */
+#define SETTINGS_RULES 96
+#define SETTINGS_RULE_NAME_MAX 164
+#define SETTINGS_RULE_MAX 128
 
 /* The keys of before that are not a session's, read and never written. */
 enum settings_key {
@@ -136,6 +164,13 @@ enum settings_lkey {
 	SETTINGS_NLKEYS
 };
 
+/* What the firewall does where no rule decides, FW_<suffix>: allow or block. */
+enum settings_fkey {
+	SET_F_OUT,
+	SET_F_BETWEEN,
+	SETTINGS_NFKEYS
+};
+
 /* A fixed address: FIXEDn, "L/MAC/IP", and FIXEDn_NAME; empty for none. */
 struct settings_fixed {
 	char spec[48];
@@ -146,6 +181,12 @@ struct settings_fixed {
 struct settings_forward {
 	char spec[64];
 	char name[SETTINGS_VALUE_MAX];
+};
+
+/* A rule of the firewall: RULEn, "ID_ACTION_FROM_TO_PROTO_PORTS_FAMILY_ON", and RULEn_NAME. */
+struct settings_rule {
+	char spec[SETTINGS_RULE_MAX];
+	char name[SETTINGS_RULE_NAME_MAX];
 };
 
 struct settings_account {
@@ -163,6 +204,8 @@ struct settings_account {
  * @fixed: the fixed addresses
  * @fwd: the forwards
  * @dmz: the DMZs, DMZn: "CONN/L/MAC", empty for none
+ * @rule: the firewall's rules, in their order
+ * @fw: what the firewall does where no rule decides, allow or block
  * @legacy_lan: LAN_VLAN, the one link of before, when @had_legacy_lan
  * @had_legacy_lan: whether the set named LAN_VLAN
  */
@@ -175,6 +218,8 @@ struct settings {
 	struct settings_fixed fixed[SETTINGS_FIXED];
 	struct settings_forward fwd[SETTINGS_FORWARDS];
 	char dmz[SETTINGS_DMZS][32];
+	struct settings_rule rule[SETTINGS_RULES];
+	char fw[SETTINGS_NFKEYS][8];
 	char legacy_lan[SETTINGS_VALUE_MAX];
 	bool had_legacy_lan;
 	/*
@@ -235,7 +280,7 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap);
  * @cap: the size of @out
  *
  * The keys of before that are not a session's, then the keys of each of the
- * sessions 1 to %SETTINGS_SESSIONS: what the programs that apply the
+ * sessions 1 to %SETTINGS_SESSIONS, and the firewall's: what the programs that apply the
  * settings start from. This table is the only place that says a default.
  *
  * Return: the length of the lines, which is @cap or more when they did not
@@ -250,8 +295,9 @@ size_t settings_format_defaults(char *out, size_t cap);
  * @cap: the size of @out
  *
  * The keys of each session that has an account, of each IPoE connection, of
- * each local network, the fixed addresses, the forwards and the DMZs; never
- * an account, nor a key of before.
+ * each local network, the fixed addresses, the forwards, the DMZs, the
+ * firewall's rules, and what it does where none decides when that is not
+ * its default; never an account, nor a key of before.
  *
  * Return: the length of the lines, which is @cap or more when they did not
  *         fit.

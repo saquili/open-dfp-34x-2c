@@ -322,10 +322,14 @@ static bool addrs(const char *v)
 	return true;
 }
 
-/* A name for people: printable, UTF-8 too, up to 32 characters. */
+/*
+ * A name for people: printable, UTF-8 too, up to 32 characters; a rule's of
+ * the firewall up to 40, as the panel takes them.
+ */
 #define NAME_CHARS 32
+#define RULE_NAME_CHARS 40
 
-static bool name(const char *v)
+static bool name_upto(const char *v, size_t max, size_t cap)
 {
 	size_t chars = 0;
 
@@ -335,7 +339,12 @@ static bool name(const char *v)
 		/* A character is a byte that continues none. */
 		chars += (*p & 0xc0) != 0x80;
 	}
-	return chars <= NAME_CHARS && strlen(v) < SETTINGS_VALUE_MAX;
+	return chars <= max && strlen(v) < cap;
+}
+
+static bool name(const char *v)
+{
+	return name_upto(v, NAME_CHARS, SETTINGS_VALUE_MAX);
 }
 
 /*
@@ -535,6 +544,143 @@ static bool dmz_spec(const char *v, char cn[8], int *lan, char macv[18])
 	return true;
 }
 
+/* Where a rule of the firewall comes from or goes to. */
+enum end_kind {
+	END_INTERNET,
+	END_LANS,
+	END_LAN,
+	END_DEV,
+};
+
+/**
+ * struct end - An end of a rule, as RULEn says it.
+ * @kind: the internet or a part of it, every network, one, or a device
+ * @family: of the address of a part of the internet, 4 or 6; 0 for none
+ * @lan: the network of %END_LAN and %END_DEV, from 0
+ * @mac: the device's MAC address
+ */
+struct end {
+	enum end_kind kind;
+	int family;
+	int lan;
+	char mac[18];
+};
+
+/*
+ * internet, internet:ADDR (an IPv4 or IPv6 address, or a network
+ * ADDR/LEN, which may name bits past its length, as the panel takes it),
+ * lans, lan:L or dev:L:MAC.
+ */
+static bool end_of(const char *v, struct end *e)
+{
+	memset(e, 0, sizeof(*e));
+	if (!strcmp(v, "internet")) {
+		e->kind = END_INTERNET;
+		return true;
+	}
+	if (!strncmp(v, "internet:", 9)) {
+		const char *a = v + 9, *slash = strchr(a, '/');
+		char addr[INET6_ADDRSTRLEN];
+		size_t n = slash ? (size_t)(slash - a) : strlen(a);
+
+		e->kind = END_INTERNET;
+		if (!n || n >= sizeof(addr))
+			return false;
+		memcpy(addr, a, n);
+		addr[n] = '\0';
+		if (ipv4(addr, NULL) && (!slash || number(slash + 1, 0, 32, NULL)))
+			e->family = 4;
+		else if (ipv6(addr, NULL) && (!slash || number(slash + 1, 0, 128, NULL)))
+			e->family = 6;
+		return e->family != 0;
+	}
+	if (!strcmp(v, "lans")) {
+		e->kind = END_LANS;
+		return true;
+	}
+	if ((strncmp(v, "lan:", 4) && strncmp(v, "dev:", 4)) || v[4] < '1' ||
+	    v[4] > '0' + SETTINGS_LANS)
+		return false;
+	e->lan = v[4] - '1';
+	if (v[0] == 'l') {
+		e->kind = END_LAN;
+		return !v[5];
+	}
+	e->kind = END_DEV;
+	if (v[5] != ':' || !mac(v + 6))
+		return false;
+	memcpy(e->mac, v + 6, sizeof(e->mac));
+	return true;
+}
+
+/* The network an end lies in, from 0, or -1 for the internet and for every network. */
+static int end_lan(const struct end *e)
+{
+	return e->kind == END_LAN || e->kind == END_DEV ? e->lan : -1;
+}
+
+/**
+ * struct rule - A rule of the firewall, as RULEn says it.
+ * @id: its ID, 1 to %SETTINGS_RULES
+ * @from: where the traffic comes from
+ * @to: where it goes to
+ * @family: the families it judges, "any", "ipv4" or "ipv6"
+ */
+struct rule {
+	unsigned long id;
+	struct end from, to;
+	char family[8];
+};
+
+/* The fields of a rule, apart by '_', which no field holds. */
+#define RULE_FIELDS 8
+
+/*
+ * ID_ACTION_FROM_TO_PROTO_PORTS_FAMILY_ON: a rule. PORTS, a port or the
+ * first and the last of a range apart by '-', is for tcp, udp and both, and
+ * empty for every port.
+ */
+static bool rule_spec(const char *v, struct rule *out)
+{
+	char f[RULE_FIELDS][64], *dash;
+	unsigned long from, to;
+	struct rule r;
+	bool ports;
+
+	for (int i = 0; i < RULE_FIELDS; i++) {
+		size_t len = strcspn(v, "_");
+
+		if (len >= sizeof(f[i]) || (i < RULE_FIELDS - 1) != (v[len] == '_'))
+			return false;
+		memcpy(f[i], v, len);
+		f[i][len] = '\0';
+		v += len + (i < RULE_FIELDS - 1);
+	}
+	if (!number(f[0], 1, SETTINGS_RULES, &r.id) ||
+	    (strcmp(f[1], "allow") && strcmp(f[1], "block")) || !end_of(f[2], &r.from) ||
+	    !end_of(f[3], &r.to))
+		return false;
+	ports = !strcmp(f[4], "tcp") || !strcmp(f[4], "udp") || !strcmp(f[4], "both");
+	if (!ports && strcmp(f[4], "any") && strcmp(f[4], "icmp"))
+		return false;
+	if (*f[5]) {
+		dash = strchr(f[5], '-');
+		if (dash)
+			*dash = '\0';
+		if (!ports || !number(f[5], 1, 65535, &from) ||
+		    !number(dash ? dash + 1 : f[5], from, 65535, &to))
+			return false;
+	}
+	if (strcmp(f[6], "any") && strcmp(f[6], "ipv4") && strcmp(f[6], "ipv6"))
+		return false;
+	if (strcmp(f[7], "on") && strcmp(f[7], "off"))
+		return false;
+	memcpy(r.family, f[6], strlen(f[6]) + 1);
+	if (out)
+		*out = r;
+	return true;
+}
+
 /* A user or a secret: printable, without blanks, which separate the two. */
 static bool word(const char *v, size_t max)
 {
@@ -657,9 +803,23 @@ static bool account_key(const char *name, int *n, bool *user)
 	return true;
 }
 
+/*
+ * What the firewall does where no rule decides, and its defaults: it lets
+ * the networks out to the internet, and keeps them from each other.
+ */
+static const struct {
+	const char *name;
+	const char *dflt;
+} g_fkeys[SETTINGS_NFKEYS] = {
+	[SET_F_OUT] = { "FW_OUT", "allow" },
+	[SET_F_BETWEEN] = { "FW_BETWEEN", "block" },
+};
+
 void settings_defaults(struct settings *s)
 {
 	memset(s, 0, sizeof(*s));
+	for (int k = 0; k < SETTINGS_NFKEYS; k++)
+		snprintf(s->fw[k], sizeof(s->fw[k]), "%s", g_fkeys[k].dflt);
 	for (int k = 0; k < SETTINGS_NKEYS; k++)
 		snprintf(s->val[k], SETTINGS_VALUE_MAX, "%s", g_keys[k].dflt);
 	for (int n = 0; n < SETTINGS_SESSIONS; n++)
@@ -789,6 +949,30 @@ int settings_line(struct settings *s, const char *line, char *err,
 			return -1;
 		}
 		snprintf(s->dmz[n], sizeof(s->dmz[n]), "%s", v);
+		return 0;
+	}
+	if (list_key(key, "RULE", SETTINGS_RULES, &n, &user)) {
+		struct settings_rule *r = &s->rule[n];
+
+		if (user ? !name_upto(v, RULE_NAME_CHARS, sizeof(r->name)) :
+			   *v && (strlen(v) >= sizeof(r->spec) || !rule_spec(v, NULL))) {
+			snprintf(err, errcap, "%s: not a value of it", key);
+			return -1;
+		}
+		if (user)
+			snprintf(r->name, sizeof(r->name), "%s", v);
+		else
+			snprintf(r->spec, sizeof(r->spec), "%s", v);
+		return 0;
+	}
+	for (k = 0; k < SETTINGS_NFKEYS; k++) {
+		if (strcmp(key, g_fkeys[k].name))
+			continue;
+		if (strcmp(v, "allow") && strcmp(v, "block")) {
+			snprintf(err, errcap, "%s: not a value of it", key);
+			return -1;
+		}
+		snprintf(s->fw[k], sizeof(s->fw[k]), "%s", v);
 		return 0;
 	}
 	if (!strcmp(key, LEGACY_LAN)) {
@@ -1285,6 +1469,65 @@ static bool forwards_coherent(const struct settings *s, char *err, size_t errcap
 	return true;
 }
 
+/*
+ * A rule goes from somewhere to somewhere else: never from the internet to
+ * the internet, nor within one network. The address of a part of the
+ * internet is of the rule's family. A network it names is set up, and a
+ * device it goes to has a fixed address, by which it is reached. No two
+ * rules have one ID.
+ */
+static bool rules_coherent(const struct settings *s, char *err, size_t errcap)
+{
+	for (int i = 0; i < SETTINGS_RULES; i++) {
+		struct rule a, b;
+
+		if (!*s->rule[i].spec)
+			continue;
+		(void)rule_spec(s->rule[i].spec, &a);
+		if (a.from.kind == END_INTERNET && a.to.kind == END_INTERNET) {
+			snprintf(err, errcap, "rule %d: from the internet to the internet", i + 1);
+			return false;
+		}
+		if (end_lan(&a.from) >= 0 && end_lan(&a.from) == end_lan(&a.to)) {
+			snprintf(err, errcap, "rule %d: within one network, %d", i + 1,
+				 a.from.lan + 1);
+			return false;
+		}
+		for (int e = 0; e < 2; e++) {
+			const struct end *x = e ? &a.to : &a.from;
+
+			if ((x->family == 4 && !strcmp(a.family, "ipv6")) ||
+			    (x->family == 6 && !strcmp(a.family, "ipv4"))) {
+				snprintf(err, errcap, "rule %d: an address of IPv%d in a rule of %s",
+					 i + 1, x->family, a.family);
+				return false;
+			}
+			if (end_lan(x) >= 0 && !lan_on(s, x->lan)) {
+				snprintf(err, errcap, "rule %d: network %d is not set up", i + 1,
+					 x->lan + 1);
+				return false;
+			}
+		}
+		if (a.to.kind == END_DEV && !has_fixed(s, a.to.lan, a.to.mac)) {
+			snprintf(err, errcap,
+				 "rule %d: the device %s has no fixed address in network %d", i + 1,
+				 a.to.mac, a.to.lan + 1);
+			return false;
+		}
+		for (int j = i + 1; j < SETTINGS_RULES; j++) {
+			if (!*s->rule[j].spec)
+				continue;
+			(void)rule_spec(s->rule[j].spec, &b);
+			if (a.id == b.id) {
+				snprintf(err, errcap, "rules %d and %d have one ID, %lu", i + 1, j + 1,
+					 a.id);
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 {
 	for (int n = 0; n < SETTINGS_SESSIONS; n++) {
@@ -1351,7 +1594,8 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 		}
 	}
 	return ipoe_coherent(s, err, errcap) && lans_coherent(s, err, errcap) &&
-	       fixed_coherent(s, err, errcap) && forwards_coherent(s, err, errcap);
+	       fixed_coherent(s, err, errcap) && forwards_coherent(s, err, errcap) &&
+	       rules_coherent(s, err, errcap);
 }
 
 size_t settings_format_defaults(char *out, size_t cap)
@@ -1370,6 +1614,10 @@ size_t settings_format_defaults(char *out, size_t cap)
 						len < cap ? cap - len : 0,
 						"SESSION%d_%s=%s\n", n + 1,
 						g_skeys[k].suffix, g_skeys[k].dflt);
+	for (int k = 0; k < SETTINGS_NFKEYS; k++)
+		len += (size_t)snprintf(out + (len < cap ? len : cap),
+					len < cap ? cap - len : 0, "%s=%s\n",
+					g_fkeys[k].name, g_fkeys[k].dflt);
 	return len;
 }
 
@@ -1444,5 +1692,24 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 			len += (size_t)snprintf(out + (len < cap ? len : cap),
 						len < cap ? cap - len : 0,
 						"DMZ%d=%s\n", i + 1, s->dmz[i]);
+	for (int i = 0; i < SETTINGS_RULES; i++) {
+		const struct settings_rule *r = &s->rule[i];
+
+		if (!*r->spec)
+			continue;
+		len += (size_t)snprintf(out + (len < cap ? len : cap),
+					len < cap ? cap - len : 0,
+					"RULE%d=%s\n", i + 1, r->spec);
+		if (*r->name)
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0,
+						"RULE%d_NAME=%s\n", i + 1, r->name);
+	}
+	/* What the firewall does where no rule decides, when it is not its default. */
+	for (int k = 0; k < SETTINGS_NFKEYS; k++)
+		if (strcmp(s->fw[k], g_fkeys[k].dflt))
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0, "%s=%s\n",
+						g_fkeys[k].name, s->fw[k]);
 	return len;
 }

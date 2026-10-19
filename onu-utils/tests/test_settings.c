@@ -25,7 +25,7 @@ static int checks;
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 static char g_err[256];
-static char g_out[16384];
+static char g_out[65536];
 
 /* Take the lines of @text over the defaults, as onu-config check does: 0, or
  * -1 at the first line that is not taken, or -2 when the whole makes no
@@ -35,7 +35,8 @@ static unsigned int g_mgmt[2];
 
 static int judge(struct settings *s, const char *text)
 {
-	char copy[16384], *line, *save = NULL;
+	static char copy[65536];
+	char *line, *save = NULL;
 
 	snprintf(copy, sizeof(copy), "%s", text);
 	settings_defaults(s);
@@ -270,7 +271,8 @@ static void test_defaults_format(void)
 			bad++;
 	}
 	CHECK(bad == 0);
-	CHECK(lines == SET_WAN_MAC + 1 + SETTINGS_SESSIONS * SETTINGS_NSKEYS);
+	CHECK(lines == SET_WAN_MAC + 1 + SETTINGS_SESSIONS * SETTINGS_NSKEYS + SETTINGS_NFKEYS);
+	CHECK(strstr(out, "FW_OUT=allow\n") && strstr(out, "FW_BETWEEN=block\n"));
 	/* The values given are the ones the table starts from. */
 	CHECK(strstr(out, "WAN_MAC=\n") != NULL);
 	need = settings_format_defaults(small, sizeof(small));
@@ -725,6 +727,165 @@ static void test_forwards(void)
 	}
 }
 
+/* Network 2, besides network 1 and its device DEV with its fixed address. */
+#define TWO_NETS PINNED NET2
+
+static void test_rules(void)
+{
+	static const char *const bad[] = {
+		"RULE0=1_allow_lans_internet_tcp_443_any_on",
+		"RULE97=1_allow_lans_internet_tcp_443_any_on",
+		"RULE01=1_allow_lans_internet_tcp_443_any_on",
+		"RULE1_FOO=x",
+		"RULE1=0_allow_lans_internet_tcp_443_any_on",
+		"RULE1=97_allow_lans_internet_tcp_443_any_on",
+		"RULE1=01_allow_lans_internet_tcp_443_any_on",
+		"RULE1=1_pass_lans_internet_tcp_443_any_on",
+		"RULE1=1_allow_lan_internet_tcp_443_any_on",
+		"RULE1=1_allow_lan:0_internet_tcp_443_any_on",
+		"RULE1=1_allow_lan:9_internet_tcp_443_any_on",
+		"RULE1=1_allow_lan:10_internet_tcp_443_any_on",
+		"RULE1=1_allow_dev:1_internet_tcp_443_any_on",
+		"RULE1=1_allow_dev:1:01:00:5e:00:00:01_internet_tcp_443_any_on",
+		"RULE1=1_allow_dev:1-" DEV "_internet_tcp_443_any_on",
+		"RULE1=1_allow_lans_internet:_tcp_443_any_on",
+		"RULE1=1_allow_lans_internet:10.0.0.0/33_tcp_443_any_on",
+		"RULE1=1_allow_lans_internet:10.0.0/8_tcp_443_any_on",
+		"RULE1=1_allow_lans_internet:2001:db8::/129_tcp_443_any_on",
+		"RULE1=1_allow_lans_internet:example.net_tcp_443_any_on",
+		"RULE1=1_allow_lans_internet_sctp_443_any_on",
+		"RULE1=1_allow_lans_internet_tcp_0_any_on",
+		"RULE1=1_allow_lans_internet_tcp_65536_any_on",
+		"RULE1=1_allow_lans_internet_tcp_0443_any_on",
+		"RULE1=1_allow_lans_internet_tcp_9000-8000_any_on",
+		"RULE1=1_allow_lans_internet_tcp_8000-_any_on",
+		"RULE1=1_allow_lans_internet_any_443_any_on",
+		"RULE1=1_allow_lans_internet_icmp_443_any_on",
+		"RULE1=1_allow_lans_internet_tcp_443_ipx_on",
+		"RULE1=1_allow_lans_internet_tcp_443_any_yes",
+		"RULE1=1_allow_lans_internet_tcp_443_any",
+		"RULE1=1_allow_lans_internet_tcp_443_any_on_x",
+		"RULE1=1/allow/lans/internet/tcp/443/any/on",
+		"RULE1_NAME=a\tb",
+		/* 41 characters. */
+		"RULE1_NAME=12345678901234567890123456789012345678901",
+		"FW_OUT=deny",
+		"FW_OUT=",
+		"FW_BETWEEN=on",
+		"FW_IN=block",
+	};
+	struct settings s;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		int rc = judge(&s, bad[i]);
+
+		CHECK(rc == -1 && *g_err);
+		if (rc != -1)
+			printf("    taken: %s\n", bad[i]);
+	}
+
+	/* The panel's rules, written as they are, in their order, with names for people. */
+	CHECK(judge(&s, TWO_NETS
+		    "RULE1=1_allow_lan:2_dev:1:" DEV "_tcp_9100_any_on\n"
+		    "RULE1_NAME=Drukarka dla Biura\n"
+		    "RULE2=2_block_lans_internet_tcp_25_any_on\n"
+		    "RULE3=3_allow_internet_dev:1:" DEV "_tcp_443_ipv6_on\n"
+		    "RULE3_NAME=NAS po IPv6 \xc5\xbc\xc3\xb3\xc5\x82w\n"
+		    "RULE4=4_block_dev:1:" DEV "_internet_any__any_off\n"
+		    "RULE96=7_allow_internet:203.0.113.0/24_lans_both_8000-8100_ipv4_on\n"
+		    "RULE95=9_allow_lans_internet:2001:db8::/32_icmp__ipv6_on\n"
+		    "RULE94=10_allow_lans_internet:198.51.100.7_udp__any_on\n"
+		    "RULE93=11_block_internet:10.1.2.3/8_lan:2_any__ipv4_on\n"
+		    /* 40 characters, of two bytes each. */
+		    "RULE93_NAME=\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc"
+		    "\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc"
+		    "\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc"
+		    "\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc"
+		    "\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\xc5\xbc\n"
+		    "FW_OUT=block\nFW_BETWEEN=allow\n") == 0);
+	CHECK(has("RULE1=1_allow_lan:2_dev:1:" DEV "_tcp_9100_any_on") &&
+	      has("RULE1_NAME=Drukarka dla Biura") && has("RULE4=4_block_dev:1:" DEV "_internet_any__any_off") &&
+	      has("RULE96=7_allow_internet:203.0.113.0/24_lans_both_8000-8100_ipv4_on") &&
+	      !strstr(g_out, "RULE2_NAME") && has("FW_OUT=block") && has("FW_BETWEEN=allow"));
+	/* The rules in their order, after the forwards. */
+	CHECK(strstr(g_out, "RULE1=") < strstr(g_out, "RULE2=") &&
+	      strstr(g_out, "RULE95=") < strstr(g_out, "RULE96="));
+	/* A default is not written, and an empty rule is none, its name gone with it. */
+	CHECK(judge(&s, TWO_NETS "FW_OUT=allow\nFW_BETWEEN=block\n"
+		    "RULE5=5_block_lans_internet_tcp_25_any_on\nRULE5_NAME=x\nRULE5=\n") == 0 &&
+	      !strstr(g_out, "FW_") && !strstr(g_out, "RULE"));
+	/* Without any network, a default is kept all the same. */
+	CHECK(judge(&s, "FW_OUT=block\n") == 0 && !strcmp(g_out, "FW_OUT=block\n"));
+
+	/* From somewhere to somewhere else. */
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_internet_internet:10.0.0.0/8_any__any_on\n") == -2 &&
+	      strstr(g_err, "rule 1: from the internet to the internet"));
+	CHECK(judge(&s, TWO_NETS "RULE2=1_block_lan:1_dev:1:" DEV "_any__any_on\n") == -2 &&
+	      strstr(g_err, "rule 2: within one network, 1"));
+	CHECK(judge(&s, TWO_NETS "RULE2=1_block_dev:2:00:00:5e:00:53:a2_dev:2:00:00:5e:00:53:a2_any__any_on\n") == -2 &&
+	      strstr(g_err, "within one network, 2"));
+	CHECK(judge(&s, TWO_NETS "RULE1=1_block_lans_lan:1_any__any_on\n"
+		    "RULE2=2_block_lan:1_lans_any__any_on\nRULE3=3_block_lans_lans_any__any_on\n") == 0);
+	/* The family of its address. */
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_internet:192.0.2.0/24_lan:1_any__ipv6_on\n") == -2 &&
+	      strstr(g_err, "rule 1: an address of IPv4 in a rule of ipv6"));
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:1_internet:2001:db8::1_any__ipv4_on\n") == -2 &&
+	      strstr(g_err, "rule 1: an address of IPv6 in a rule of ipv4"));
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:1_internet:2001:db8::1_any__any_on\n") == 0);
+	/* A network it names is set up; a device it goes to has a fixed address. */
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:3_internet_any__any_on\n") == -2 &&
+	      strstr(g_err, "rule 1: network 3 is not set up"));
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:1_dev:4:00:00:5e:00:53:a4_any__any_on\n") == -2 &&
+	      strstr(g_err, "rule 1: network 4 is not set up"));
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:2_dev:1:00:00:5e:00:53:a9_any__any_off\n") == -2 &&
+	      strstr(g_err, "rule 1: the device 00:00:5e:00:53:a9 has no fixed address in network 1"));
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_dev:1:00:00:5e:00:53:a9_lan:2_any__any_on\n") == 0);
+	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:2_dev:1:00:00:5E:00:53:A1_any__any_on\n") == 0);
+	/* An ID is one rule's. */
+	CHECK(judge(&s, TWO_NETS "RULE1=5_allow_lans_internet_any__any_on\n"
+		    "RULE7=5_block_lans_internet_any__any_on\n") == -2 &&
+	      strstr(g_err, "rules 1 and 7 have one ID, 5"));
+
+	/*
+	 * The most rules there may be, each of the longest and with a name of
+	 * 40 characters of four bytes, beside 512 fixed addresses, eight
+	 * networks and seven sessions: within the 64 KiB of the store.
+	 */
+	{
+		static char text[65536];
+		size_t at = 0;
+
+		for (int n = 1; n <= SETTINGS_SESSIONS; n++)
+			at += (size_t)snprintf(text + at, sizeof(text) - at,
+					       "PPPOE%d_USER=user%d\nPPPOE%d_SECRET=x\n"
+					       "SESSION%d_PASS=off\nSESSION%d_VLAN=%d\n",
+					       n, n, n, n, n, 30 + n);
+		for (int l = 1; l <= SETTINGS_LANS; l++)
+			at += (size_t)snprintf(text + at, sizeof(text) - at,
+					       "LAN%d_CONN=pppoe:%d\nLAN%d_VLAN=%d\n"
+					       "LAN%d_ADDRESS=10.%d.0.1/16\n",
+					       l, (l - 1) % 7 + 1, l, 100 + l, l, l);
+		for (int i = 0; i < SETTINGS_FIXED; i++)
+			at += (size_t)snprintf(text + at, sizeof(text) - at,
+					       "FIXED%d=%d/02:00:00:00:%02x:%02x/10.%d.%d.%d\n",
+					       i + 1, i / 64 + 1, i / 64 + 1, i % 64, i / 64 + 1,
+					       100 + i % 64, 100 + i % 64);
+		for (int i = 1; i <= SETTINGS_RULES; i++) {
+			at += (size_t)snprintf(text + at, sizeof(text) - at,
+					       "RULE%d=%d_block_dev:%d:02:00:00:00:%02x:%02x_internet:"
+					       "0000:0000:0000:0000:0000:ffff:255.255.255.255/128_"
+					       "both_65000-65535_any_off\nRULE%d_NAME=",
+					       i, i, (i - 1) % 8 + 1, (i - 1) % 8 + 1, i % 64, i);
+			for (int c = 0; c < 40; c++)
+				at += (size_t)snprintf(text + at, sizeof(text) - at, "\xf0\x9f\x98\x80");
+			at += (size_t)snprintf(text + at, sizeof(text) - at, "\n");
+		}
+		CHECK(at < sizeof(text) && judge(&s, text) == 0 && strstr(g_out, "RULE96=96_block") &&
+		      strlen(g_out) < 65536);
+		printf("  96 rules beside 512 fixed addresses: %zu bytes\n", strlen(g_out));
+	}
+}
+
 int main(void)
 {
 	test_defaults();
@@ -740,6 +901,7 @@ int main(void)
 	test_fixed();
 	test_ipoe();
 	test_forwards();
+	test_rules();
 	printf("test_settings: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }
