@@ -287,3 +287,22 @@ lines name the field, map it to the daemon's key, or carry a made-up value in
 a test; none holds a unit's identifier, and the logical password beside it is
 never served.
 """
+
+[[allow]]
+gate = "unit-ids"
+rules = ["ipv4-address"]
+paths = [
+  "br2-external/board/dfp-34x-2c3/overlay/etc/init.d/rcS",
+  "br2-external/tests/image/test_overlay.py",
+  "docs/handbook/*.rst",
+  "README.rst",
+  "tools/provenance/allowlist.toml",
+]
+values = ["192.168.1.1"]
+reason = """
+The address the shipped firmware gives the host link when a stick is sold,
+where a person finds its page and installs this system; the boot script
+gives the host link the same when the shipped firmware's files name none. A
+fact of the product, the same on every unit: it identifies none. This entry
+names it too.
+"""
