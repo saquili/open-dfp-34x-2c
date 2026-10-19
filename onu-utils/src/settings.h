@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * The settings of the stick's data path, as one table (ADR 0014): each key
+ * The settings of the stick's data path, as one table (ADR 0011): each key
  * of /run/onu.conf, the shape of its values and its default, the PPPoE
  * account of each session, and the rules that bind them together. onu-config
  * checks a whole set of settings against it ("onu-config check") and hands the

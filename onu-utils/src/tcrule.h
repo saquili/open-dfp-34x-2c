@@ -3,7 +3,7 @@
 
 /*
  * The traffic control the stick's scripts set, as route netlink requests
- * (ADR 0014, step 9g): the clsact qdisc of an interface, which filters hang
+ * (ADR 0017): the clsact qdisc of an interface, which filters hang
  * from, and filters on its ingress that take the frames of a VLAN, or every
  * frame, and trap them to the CPU, drop them or hand them to the ingress of
  * another interface. The requests are those tc makes for

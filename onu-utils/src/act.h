@@ -3,7 +3,7 @@
 
 /*
  * What onu-act does for the programs that may not do it themselves (ADR
- * 0014, step 8): a fixed table of methods, each a program of the stick run
+ * 0011): a fixed table of methods, each a program of the stick run
  * with fixed arguments, the caller's values in their places and, for some,
  * the caller's text, KEY=VALUE lines, on its standard input. A value is
  * taken only when it is short enough and of the characters its place

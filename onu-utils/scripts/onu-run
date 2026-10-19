@@ -14,7 +14,7 @@
 #                   script's copy of onu-config's, and on port 80 to send
 #                   browsers there; without the key, over HTTP on port 80.
 #                   It runs as the account pond that procd starts it as (ADR
-#                   0014), which may listen on these ports as the boot script
+#                   0011), which may listen on these ports as the boot script
 #                   lets every account from port 80 up: its output goes to
 #                   /run/pond/log, and the token of scripts is the file
 #                   /run/pond/token, onu-config's copy (onu-config token),

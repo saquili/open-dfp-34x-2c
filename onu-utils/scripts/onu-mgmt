@@ -38,7 +38,7 @@
 set -u
 ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
-# onu-net is one of the helpers out of a person's way (ADR 0015).
+# onu-net is one of the helpers out of a person's way (ADR 0012).
 PATH=$PATH:$ROOT/usr/lib/onu
 STATE=$RUN/onu-mgmt
 PENDING=$RUN/onu-trial.d/mgmt

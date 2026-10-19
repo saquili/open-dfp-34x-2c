@@ -73,7 +73,7 @@
 # pass and gateway once its address went down. Each session is an interface
 # of netifd, sesN, of the protocol "pppoed": netifd keeps pppoed and starts it
 # again when it ends, puts what the session brought in place, and runs
-# "onu-apply iface" when the interface comes up or goes down (ADR 0014).
+# "onu-apply iface" when the interface comes up or goes down (ADR 0011).
 # In passthrough, the address handed down goes on no interface of the
 # stick's, and the one host on its link, the router behind the stick, takes
 # it by DHCP, as a /32 with the concentrator's address as its gateway. Each
@@ -132,7 +132,7 @@
 # address.
 #
 # The firewall's rules, RULEk ("ID_ACTION_FROM_TO_PROTO_PORTS_FAMILY_ON"),
-# are the switch's ACL's (ADR 0023). Where no rule decides, the table drops
+# are the switch's ACL's (ADR 0019). Where no rule decides, the table drops
 # a new connection from the internet into a network, one from a network to
 # the internet when FW_OUT is block, and one between two networks when
 # FW_BETWEEN is block, as lines "default out|between block|allow" of
@@ -172,7 +172,7 @@ NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
 # The helpers of this tree that only other programs run, out of a person's
-# way (ADR 0015).
+# way (ADR 0012).
 LIB=$ROOT/usr/lib/onu
 PATH=$PATH:$LIB
 # Starts a program as an account of its own with the powers it needs, and the
@@ -1019,7 +1019,7 @@ session_dev() {
 # hands down by which link, the default routes among it. sessions_sync()
 # takes a session down and up again when this changes, and leaves the others
 # up: a change of one session leaves the other sessions as they are (ADR
-# 0014). It is in /run/session/N/makings, for root only.
+# 0011). It is in /run/session/N/makings, for root only.
 session_makings() {
 	mk_dev=$(session_dev "$1" "$2")
 	mk_role=- mk_role6=-
@@ -1770,7 +1770,7 @@ acl_clear() {
 	rm -f "$RUN/onu-fw-acl.conf" "$RUN/onu-fw.acl"
 }
 
-# The firewall's rules in the switch's ACL (ADR 0023), as onu-fw's file of
+# The firewall's rules in the switch's ACL (ADR 0019), as onu-fw's file of
 # them: each network with its addresses and the connection it goes out by,
 # each connection that has an address now with its interface, the fixed
 # address of each device a rule names, the forwards and the DMZs in force, $1
@@ -2209,7 +2209,7 @@ pending_take() {
 	rm -rf "$PENDING"
 }
 
-# A change on trial (ADR 0014): the settings of /run/onu.conf and the accounts
+# A change on trial (ADR 0011): the settings of /run/onu.conf and the accounts
 # applied but not saved, and the ones applied before kept aside. Unless it
 # is confirmed in TRIAL_LIMIT seconds, the stick goes back to those, so that
 # a change that cut off whoever made it comes undone. A change during a

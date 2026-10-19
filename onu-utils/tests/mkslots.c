@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * mkslots FILE SIZE: a partition of the store of before step 9 for the
- * tests, SIZE bytes of erased flash with the KEY=VALUE lines of the standard
- * input in its first slot (cfgstore.h).
+ * mkslots FILE SIZE: a partition holding a two-slot store of older builds,
+ * for the tests: SIZE bytes of erased flash with the KEY=VALUE lines of the
+ * standard input in its first slot (cfgstore.h).
  */
 
 #include <stdint.h>

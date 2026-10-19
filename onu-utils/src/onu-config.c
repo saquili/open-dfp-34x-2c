@@ -50,7 +50,7 @@
  * The store is a file of KEY=VALUE lines, at most 64 KiB:
  * /config/open-dfp-34x-2c.conf, in the JFFS2 file system of the flash
  * partition "config", which the shipped firmware keeps its own files in
- * (ADR 0014, step 9), unless --store or ONU_STORE names another. A file
+ * (ADR 0016), unless --store or ONU_STORE names another. A file
  * that is missing is an empty store. A change writes the whole store to a
  * new file beside it, which it then renames over it, so that a power loss in
  * the middle keeps the old one; a change that leaves the store as it was
@@ -60,10 +60,11 @@
  * file system mounted read-only, mounts it read-write for the write alone,
  * and read-only again after it.
  *
- * Before step 9 the store was the whole partition, two slots of its own
- * format, where the shipped firmware's file system had been. slots and
- * erase-slots let onu-config load take such a store into the file before
- * the partition is mounted, since JFFS2 would erase what it does not know.
+ * Builds before 2026-10-11 kept the store in the whole partition, two slots
+ * of its own format, where the shipped firmware's file system had been.
+ * slots and erase-slots let onu-config load take such a store into the file
+ * before the partition is mounted, since JFFS2 would erase what it does not
+ * know.
  *
  * check and settings read KEY=VALUE lines of the data path's settings and
  * PPPoE accounts, a later line over an earlier one (settings.h), and print
@@ -86,7 +87,7 @@
  * or the VLAN it hands down in, is a management VLAN in use, of
  * /run/onu-mgmt or of a pair on trial, whose frames the switch keeps
  * between the host side and the stick. onu-apply try applies what it wrote.
- * The status daemon has them run through onu-act (ADR 0014).
+ * The status daemon has them run through onu-act (ADR 0011).
  *
  * password-check and password-state read root's hash from /run/onu-auth,
  * which root alone may read, so that a program that checks a password need
@@ -102,8 +103,6 @@
  * without the PLOAM and the logical passwords: ploam_set and
  * loid_password_set say whether each is set. source= is where the
  * identity came from, of /run/onu-identity-source.
- *
- * onu-config was onucfg and onu-store before (ADR 0015).
  */
 
 #include <errno.h>

@@ -7,7 +7,7 @@
  * from them, the ports forwarded to their devices, and the firewall's
  * defaults with the rules that let through what a default refuses, as one
  * batch of nf_tables requests, which the kernel takes whole or not at all
- * (ADR 0014). nft would make the same table of
+ * (ADR 0011). nft would make the same table of
  *
  *   table inet onu {
  *     flowtable ft {
@@ -93,7 +93,7 @@
  * internet to a network (in), and by its defaults one from a network to
  * the internet (out) and one between two networks (between). The rules
  * that block are the switch's ACL's alone, which judges a frame as it
- * enters a port, before netfilter sees it (ADR 0023); the rules that allow
+ * enters a port, before netfilter sees it (ADR 0019); the rules that allow
  * are the ACL's too, and are here as well where the default of their way
  * would drop what the ACL let through: each is a rule of the chain of its
  * way, which a new connection that way jumps to, and which drops what none

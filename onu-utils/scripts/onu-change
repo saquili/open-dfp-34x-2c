@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# onu-change: the changes on trial (ADR 0014), whichever program made them:
+# onu-change: the changes on trial (ADR 0011), whichever program made them:
 # the settings (onu-apply try), the setting of the SFP lane (onu-lane try)
 # and the management pair (onu-mgmt add). Each is a file of /run/onu-trial.d
 # named for it, with the moment it goes back, UNTIL, in seconds of
@@ -35,7 +35,7 @@ DIR=$ROOT/run/onu-trial.d
 # The longest the keeper waits when no deadline is nearer: a change that
 # starts meanwhile is seen then, and its deadline is minutes away.
 IDLE=${KEEPER_IDLE:-5}
-# onu-lane and onu-mgmt are helpers out of a person's way (ADR 0015).
+# onu-lane and onu-mgmt are helpers out of a person's way (ADR 0012).
 PATH=$PATH:$ROOT/usr/lib/onu
 
 log() {

@@ -3,7 +3,7 @@
 
 /*
  * The parameters of a devlink instance, as the "devlink" generic netlink
- * family carries them (ADR 0014, step 9g): the stick's one instance is its
+ * family carries them (ADR 0017): the stick's one instance is its
  * switch's, whose parameters Documentation/networking/devlink/rtl9602c.rst
  * lists. A parameter's value is read and set in the runtime configuration
  * mode, the only one the switch driver has, as text: a number in decimal,

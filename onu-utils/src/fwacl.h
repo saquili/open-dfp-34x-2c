@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * The firewall's rules as the switch's ACL (ADR 0023): the compiler of the
+ * The firewall's rules as the switch's ACL (ADR 0019): the compiler of the
  * rules in their order, with the networks, the devices' fixed addresses, the
  * forwards, the DMZs and the connections' addresses, to an ordered list of
  * tc flower rules on the ingress of sfp, the host link, and of pon, the

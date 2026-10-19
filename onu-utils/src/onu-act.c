@@ -3,7 +3,7 @@
 
 /*
  * onu-act: does, as root, what the programs that run as an account of their
- * own may ask of the stick (ADR 0014, step 8), and nothing else. It is the
+ * own may ask of the stick (ADR 0011), and nothing else. It is the
  * object "onu-act" on ubus, with a method for each entry of the table of
  * act.h; ubusd's access lists say who may call which. A method runs its
  * program, without a shell, with the caller's values in their places once

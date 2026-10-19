@@ -9,7 +9,7 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 ``onu-apply``, ``onu-update``, ``onu-svc``, ``pon``, ``onu-nl`` and
 ``passwd``, which are in ``/usr/sbin`` and ``/usr/bin``. The others only other
 programs run, and they are in ``/usr/lib/onu``, out of a person's way (ADR
-0015): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``,
+0012): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``,
 ``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call``,
 ``onu-fw``, ``onu-dhcpc`` and ``onu-config.sh``. A script that runs one of them finds it there, and names it
 by its whole path where procd starts it.
@@ -32,12 +32,12 @@ by its whole path where procd starts it.
 
 ``onu-config``
    the stick's settings, their store in the flash and their rules, in one
-   program (ADR 0015; it was ``onucfg`` and ``onu-store`` before). It reads
+   program (ADR 0012). It reads
    and changes the configuration store: the file
    ``/config/open-dfp-34x-2c.conf`` of ``KEY=VALUE`` lines, at most 64 KiB,
    in the JFFS2 file system of the partition ``config``, beside the files the
    shipped firmware keeps there, which it never writes, so that the shipped
-   firmware finds them after a switch of the bank (ADR 0014, step 9). A
+   firmware finds them after a switch of the bank (ADR 0016). A
    change writes the whole store to a new file and renames it over the old
    one, so that a power loss in the middle leaves the old store whole; a
    change that changes nothing writes nothing. ``--store`` or ``ONU_STORE``
@@ -49,12 +49,12 @@ by its whole path where procd starts it.
       onu-config unset KEY
       onu-config import <lines     # every KEY=VALUE and -KEY, one write
 
-   Before step 9 the store took the whole partition, in two slots of its
-   own format; ``onu-config slots DEVICE`` prints such a store and
+   Builds before 2026-10-11 kept the store in the whole partition, in two
+   slots of its own format; ``onu-config slots DEVICE`` prints such a store and
    ``onu-config erase-slots DEVICE`` erases its partition, refusing one that
    holds none, for the boot to take it into the file (below).
 
-   It also holds the one table of the data path's settings (ADR 0014,
+   It also holds the one table of the data path's settings (ADR 0011,
    ``src/settings.h``): each key of ``/run/onu.conf``, the shape of its values
    and its default, the PPPoE account of each session, and the rules that bind
    them together, such as one session in a VLAN to the host handing its IPv4
@@ -285,7 +285,7 @@ by its whole path where procd starts it.
 ``onu-nl``
    makes, through netlink, the requests of tc, ip (the links) and devlink that
    the boot script and the scripts here make, since the image carries
-   neither: iproute2 is in the RAM image only (ADR 0014)::
+   neither: iproute2 is in the RAM image only (ADR 0017)::
 
       onu-nl clsact add|del DEV
       onu-nl filter add DEV [pref N] [vlan VID] [hw] trap|drop|redirect TO
@@ -325,8 +325,7 @@ by its whole path where procd starts it.
 ``onu-apply``
    turns the settings into what the stick runs: procd and netifd carry out,
    but know nothing of sessions, of an address handed down or of omcid, and
-   onu-apply tells them (ADR 0014; it was called ``onu-mode``, of the modes
-   the stick no longer has). It gives the stick's data path the shape its
+   onu-apply tells them (ADR 0011). It gives the stick's data path the shape its
    settings give (``/run/onu.conf``, seeded from ``/etc/onu.conf``, which sets
    nothing and says what each key means; the default of a key is the table of
    ``onu-config``, which ``onu-config defaults`` prints); there is no
@@ -400,7 +399,7 @@ by its whole path where procd starts it.
       onu-apply iface      # netifd's, for an interface that came up or down
       onu-apply sync       # follow what changed outside the settings
 
-   A change on trial (ADR 0014) is applied but not saved, and the settings
+   A change on trial (ADR 0011) is applied but not saved, and the settings
    and accounts applied before it are kept aside, in ``/run/onu-kept``,
    readable by root alone; unless ``confirm`` keeps it within 90 s
    (``TRIAL_LIMIT``), the stick goes back to them by itself, so that a
@@ -441,7 +440,7 @@ by its whole path where procd starts it.
       onu-mgmt status
 
 ``onu-change``
-   the changes on trial (ADR 0014), whichever program made them: the
+   the changes on trial (ADR 0011), whichever program made them: the
    settings (``onu-apply try``), the setting of the SFP lane (``onu-lane
    try``) and the management pair (``onu-mgmt add``). Each is a file of
    ``/run/onu-trial.d`` named for it, with the moment it goes back; the
@@ -488,7 +487,7 @@ by its whole path where procd starts it.
    program for each file of a directory, whose name is the instance's and
    whose line is what ``start`` takes after the name: procd starts what is
    new, ends what has no file any more, starts again only what changed, and
-   leaves the rest alone (ADR 0014). ``onu-apply`` keeps its programs so, in
+   leaves the rest alone (ADR 0011). ``onu-apply`` keeps its programs so, in
    ``/run/onu-svc.d``, as the service ``onu``: omcid, dhcp6d and udhcpd. A
    sync holds the directory while it reads
    it and tells procd, so that the last one sends what the directory holds
@@ -502,7 +501,7 @@ by its whole path where procd starts it.
 
 ``onu-act``
    does, as root, what a program that runs as an account of its own may ask
-   of the stick, and nothing else (ADR 0014): the status daemon's changes of
+   of the stick, and nothing else (ADR 0011): the status daemon's changes of
    the SFP lane, of the management pair, of the name and of the identity, the
    confirmation of the changes on trial, the updates' status and trial, the
    restart, the settings of the data path (``onu-config current`` and
@@ -530,7 +529,7 @@ by its whole path where procd starts it.
 
 ``onu-drop``
    starts a program as an account of its own, with only the powers it needs
-   (ADR 0014)::
+   (ADR 0011)::
 
       onu-drop [-c CAP[,CAP...]] USER PROGRAM [ARGUMENT...]
 
@@ -586,7 +585,7 @@ by its whole path where procd starts it.
    flows to the switch, the protection that keeps new connections from
    the operator's side out of the networks, the ports forwarded to their
    devices, and the firewall's defaults, with the rules that let through
-   what a default drops (ADR 0023); ``src/fwmsg.h`` shows it as nft
+   what a default drops (ADR 0019); ``src/fwmsg.h`` shows it as nft
    would. ``onu-apply`` writes the file, ``/run/onu-fw.conf``: a line ``lan
    IFNAME ADDRESS/LEN`` for each network, a line ``out IFNAME`` for each
    interface of the operator's side, ``out ppp*`` for the sessions' and the
@@ -603,7 +602,7 @@ by its whole path where procd starts it.
    carries the flows. ``tests/test_onu_fw.sh`` reads the table back with nft
    on dummy interfaces, with root's CAP_NET_ADMIN.
 
-   The firewall's rules are the switch's ACL's (ADR 0023), which judges each
+   The firewall's rules are the switch's ACL's (ADR 0019), which judges each
    frame as it enters a port and keeps no state. ``onu-fw acl`` compiles
    them (``src/fwacl.h``) to ``tc`` flower filters on the ingress of ``sfp``
    and ``pon``, in the switch alone, a ``drop`` for a rule that blocks and a

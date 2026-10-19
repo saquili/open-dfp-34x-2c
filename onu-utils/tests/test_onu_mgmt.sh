@@ -137,7 +137,7 @@ check 'logged "onu-net wait mgmt100 192.0.2.6/30 10"'
 check 'logged "onu-nl filter add sfp pref 2 vlan 100 hw trap"'
 check 'logged "onu-nl filter add pon pref 2 vlan 100 hw drop"'
 check 'grep -q -- "-p 192.0.2.6:22" "$LOG"'
-# Root's password as well as keys, as the boot's ssh server (ADR 0012).
+# Root's password as well as keys, as the boot's ssh server (ADR 0009).
 check '! grep -q "^dropbear .*-[sB]\b" "$LOG"'
 run status
 check 'echo "$out" | grep -qx PENDING_VLAN=100'

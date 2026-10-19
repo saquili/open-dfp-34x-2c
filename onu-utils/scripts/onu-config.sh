@@ -5,9 +5,9 @@
 # onu-config.sh: the files the running system reads, to and from the stick's
 # configuration store, which onu-config keeps: a file of the JFFS2 file system
 # of the flash partition "config", which "onu-config load" mounts on /config,
-# beside the files of the firmware the stick shipped with (ADR 0014, step 9).
+# beside the files of the firmware the stick shipped with (ADR 0016).
 # onu-config runs it for these verbs, and is how a person or a program asks
-# for them (ADR 0015; it was onu-store before):
+# for them (ADR 0012):
 #
 #   onu-config load      at boot: /config mounted, and the identity, the
 #                        settings and the PPPoE accounts from the store into
@@ -64,7 +64,7 @@ set -u
 
 ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
-# ponid is one of the helpers out of a person's way (ADR 0015).
+# ponid is one of the helpers out of a person's way (ADR 0012).
 PATH=$PATH:$ROOT/usr/lib/onu
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
@@ -114,8 +114,8 @@ store() {
 }
 
 # The partition "config" mounted on /config, read-only: onu-config mounts it
-# read-write for each change of the store alone. One that still holds the store
-# of before step 9, the two slots that took the whole partition, has it taken
+# read-write for each change of the store alone. One that still holds the
+# two-slot store of older builds, which took the whole partition, has it taken
 # into the file first: its lines are kept in memory, the partition is erased
 # and mounted empty, and the lines go to the file, since JFFS2 would erase the
 # blocks it does not know. Fails when the partition cannot be mounted.
@@ -509,7 +509,7 @@ hash_secret() {
 # in this repository: then nothing is taken, and the panel asks for a
 # password. A password with a control character, or longer than this
 # system's limit, is not taken either. Later starts, and a password cleared
-# to have the default back (ADR 0012), take nothing.
+# to have the default back (ADR 0009), take nothing.
 first_password() {
 	secret=$(ponid admin_password 2>/dev/null) || return 0
 	[ -n "$secret" ] && [ "$secret" != admin ] && [ ${#secret} -le 128 ] ||

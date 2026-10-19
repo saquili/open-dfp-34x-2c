@@ -65,7 +65,7 @@ run ssh
 check '[ $rc -eq 0 ]'
 check '[ "$(head -n 1 "$LOG")" = "dropbearkey -t ed25519 -f $ONU_ROOT/run/dropbear/host_key" ]'
 check 'logged "dropbear -F -r $ONU_ROOT/run/dropbear/host_key -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
-# Root's password as well as keys (ADR 0012).
+# Root's password as well as keys (ADR 0009).
 check '! grep -q "^dropbear .*-[sB]\\b" "$LOG"'
 : >"$LOG"
 run ssh

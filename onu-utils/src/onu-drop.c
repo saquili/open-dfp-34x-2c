@@ -3,7 +3,7 @@
 
 /*
  * onu-drop: start a program as an account of its own, with only the powers
- * it needs (ADR 0014, rule 2).
+ * it needs (ADR 0011, rule 2).
  *
  *   onu-drop [-c CAP[,CAP...]] USER PROGRAM [ARGUMENT...]
  *

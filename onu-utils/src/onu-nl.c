@@ -4,7 +4,7 @@
 /*
  * onu-nl: the traffic control, the links and the switch's parameters that the
  * stick's scripts set, through netlink, in place of tc, ip and devlink of
- * iproute2, which only the RAM image carries (ADR 0014, step 9g).
+ * iproute2, which only the RAM image carries (ADR 0017).
  *
  *   onu-nl clsact add|del DEV
  *   onu-nl filter add DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw]

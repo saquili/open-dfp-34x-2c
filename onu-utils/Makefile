@@ -110,7 +110,7 @@ $(BUILD)/test_pondev: $(BUILD)/tests/test_pondev.o $(BUILD)/src/pondev.o \
 $(BUILD)/test_genl: $(BUILD)/tests/test_genl.o $(BUILD)/src/genl.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
-# mkslots writes a store of before step 9 for test_onu_config.sh.
+# mkslots writes a two-slot store of older builds for test_onu_config.sh.
 $(BUILD)/mkslots: $(BUILD)/tests/mkslots.o $(BUILD)/src/cfgstore.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 

@@ -2,7 +2,7 @@
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
 /*
- * Root's password against its hash (ADR 0012): a hash of crypt()'s form,
+ * Root's password against its hash (ADR 0009): a hash of crypt()'s form,
  * "$5$...", which the console's login and the ssh server check too, or one
  * of the form the status daemon made before, PBKDF2-HMAC-SHA256,
  * "pbkdf2-sha256$ITERATIONS$SALT$HASH" with a 16-byte salt and the hash in
