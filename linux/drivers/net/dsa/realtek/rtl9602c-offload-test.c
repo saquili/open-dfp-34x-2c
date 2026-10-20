@@ -702,6 +702,96 @@ static void rtl9602c_test_vlan_rewrite(struct kunit *test)
 			-EOPNOTSUPP);
 }
 
+/*
+ * A C-tag written, onto an untagged frame or over the outer C-tag, and an
+ * S-tag pushed in front of it make one entry with both planes; the S-tag
+ * comes last, onto a frame with a C-tag and no S-tag.
+ */
+static void rtl9602c_test_vlan_two_tags(struct kunit *test)
+{
+	static const struct rtl9602c_test_vlan_act untagged[] = {
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021Q, 410, 5 },
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021AD, 200, 3 },
+	};
+	static const struct rtl9602c_test_vlan_act modify[] = {
+		{ FLOW_ACTION_VLAN_MANGLE, ETH_P_8021Q, 100, 6 },
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021AD, 200, 3 },
+	};
+	static const struct rtl9602c_test_vlan_act repush[] = {
+		{ FLOW_ACTION_VLAN_POP },
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021Q, 100, 0 },
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021AD, 200, 3 },
+	};
+	static const struct rtl9602c_test_vlan_act s_first[] = {
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021AD, 200, 3 },
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021Q, 410, 5 },
+	};
+	static const struct rtl9602c_test_vlan_act s_rewrite[] = {
+		{ FLOW_ACTION_VLAN_MANGLE, ETH_P_8021AD, 300, 4 },
+		{ FLOW_ACTION_VLAN_PUSH, ETH_P_8021AD, 200, 3 },
+	};
+	const u32 stag = FIELD_PREP(RTL9602C_CLS_ACT_STAG, RTL9602C_CLS_ACT_STAG_ADD) |
+			 RTL9602C_CLS_ACT_SVID_SET | FIELD_PREP(RTL9602C_CLS_ACT_SVID, 200) |
+			 RTL9602C_CLS_ACT_SPRI_SET | FIELD_PREP(RTL9602C_CLS_ACT_SPRI, 3);
+	const u32 ctag = RTL9602C_CLS_ACT_CVID_SET |
+			 FIELD_PREP(RTL9602C_CLS_ACT_CTAG, RTL9602C_CLS_ACT_CTAG_TAG);
+	struct rtl9602c_cf_xlate x;
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, untagged, 2, 0, &x), 0);
+	KUNIT_EXPECT_EQ(test, x.act[0], stag);
+	KUNIT_EXPECT_EQ(test, x.act[1],
+			ctag | FIELD_PREP(RTL9602C_CLS_ACT_CVID, 410) |
+			RTL9602C_CLS_ACT_CPRI_SET | FIELD_PREP(RTL9602C_CLS_ACT_CPRI, 5));
+	KUNIT_EXPECT_EQ(test, x.out_vid, 200);
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, modify, 2, ETH_P_8021Q, &x), 0);
+	KUNIT_EXPECT_EQ(test, x.act[0], stag);
+	KUNIT_EXPECT_EQ(test, x.act[1],
+			ctag | FIELD_PREP(RTL9602C_CLS_ACT_CVID, 100) |
+			RTL9602C_CLS_ACT_CPRI_SET | FIELD_PREP(RTL9602C_CLS_ACT_CPRI, 6));
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, repush, 3, ETH_P_8021Q, &x), 0);
+	KUNIT_EXPECT_EQ(test, x.act[0], stag);
+	KUNIT_EXPECT_EQ(test, x.act[1],
+			ctag | FIELD_PREP(RTL9602C_CLS_ACT_CVID, 100) | RTL9602C_CLS_ACT_CPRI_SET);
+	KUNIT_EXPECT_EQ(test, x.out_vid, 200);
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, untagged, 2, ETH_P_8021Q, &x),
+			-EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, modify, 2, 0, &x), -EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, repush, 3, 0, &x), -EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, s_first, 2, 0, &x), -EOPNOTSUPP);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_vlan_act(test, s_rewrite, 2, ETH_P_8021AD, &x),
+			-EOPNOTSUPP);
+}
+
+/*
+ * Of a rule that writes both tags into a VLAN whose GEM ports divide its
+ * priorities, the S-tag's priority chooses the flow, and the rule, which
+ * writes it, stays one entry.
+ */
+static void rtl9602c_test_vlan_two_tags_flow(struct kunit *test)
+{
+	struct rtl9602c_cf_xlate x = { .out_vid = 200, .pcp = -1 };
+	struct rtl9602c_priv *p;
+	unsigned int pcp;
+
+	p = kunit_kzalloc(test, sizeof(*p), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, p);
+	p->gem_vid_flow = kunit_kcalloc(test, VLAN_N_VID, sizeof(*p->gem_vid_flow),
+					GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, p->gem_vid_flow);
+	for (pcp = 0; pcp < 8; pcp++)
+		p->gem_vid_flow[200][pcp] = pcp < 4 ? 6 : 7;
+
+	x.act[0] = RTL9602C_CLS_ACT_SPRI_SET | FIELD_PREP(RTL9602C_CLS_ACT_SPRI, 3);
+	x.act[1] = RTL9602C_CLS_ACT_CPRI_SET | FIELD_PREP(RTL9602C_CLS_ACT_CPRI, 5);
+	KUNIT_EXPECT_FALSE(test, rtl9602c_cf_xlate_split(p, &x));
+	KUNIT_EXPECT_EQ(test, rtl9602c_cf_xlate_flow(p, &x), 5);
+	x.act[0] = 0;
+	KUNIT_EXPECT_EQ(test, rtl9602c_cf_xlate_flow(p, &x), 6);
+}
+
 static struct kunit_case rtl9602c_offload_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_napt_example),
 	KUNIT_CASE(rtl9602c_test_napt_rem_hash),
@@ -717,6 +807,8 @@ static struct kunit_case rtl9602c_offload_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_cf_depth),
 	KUNIT_CASE(rtl9602c_test_cf_forget),
 	KUNIT_CASE(rtl9602c_test_vlan_rewrite),
+	KUNIT_CASE(rtl9602c_test_vlan_two_tags),
+	KUNIT_CASE(rtl9602c_test_vlan_two_tags_flow),
 	{ }
 };
 

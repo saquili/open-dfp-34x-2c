@@ -1283,6 +1283,16 @@ Entries and rules
        100 and of 200 alone, with the VID 300 and the priority 4 assigned: 1
        and 5 delivered S-VID 300 with priority 4, 2 C-VID 300 with priority 4,
        3 the frames without the S-tag, and 0 and 4 the frames as sent.
+   * - The two planes are separate fields of one action entry, so one entry
+       can act on both tags: its C-tag plane gives an untagged frame a C-tag,
+       or rewrites the frame's C-tag, and its S-tag plane puts an S-tag in
+       front of it. The driver writes both for a rule that writes two tags
+       (see the *bridging* page, "VLAN tag operations").
+     - I
+     - Each plane is measured alone (the rows above), the two together not;
+       untagged frames upstream under an entry that writes C-VID 410 and
+       S-VID 200, leaving the far side of an OLT with both tags, would settle
+       it.
    * - ``RTL9602C_CLS_ACT_EN(i)`` (``0x016038`` + 4i): which of entry i's action
        classes apply. The driver writes ``RTL9602C_CLS_ACT_EN_OTHERS`` and
        ``RTL9602C_CLS_ACT_EN_FLOW`` together (``0x3f``) for an upstream entry,
@@ -1358,10 +1368,10 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        priority the rule names and no S-tag, or an S-tag with the VID and the
        priority of the S-tag or of the C-tag behind it, and that C-tag if the
        rule names one.
-     - The C-tag or S-tag operation of the rule (see "Entries and rules"), and
-       the stream of the GEM interface that claims the VID the operation
-       writes, or else the one the rule's port's stream entry gives. Classes
-       ``0x3f``.
+     - The C-tag or S-tag operation of the rule, or both (see "Entries and
+       rules"), and the stream of the GEM interface that claims the VID the
+       operation writes in the outer tag, or else the one the rule's port's
+       stream entry gives. Classes ``0x3f``.
      - The bottom of the usable range, upwards.
    * - Upstream VLAN rule into a VLAN whose priorities GEM interfaces divide,
        that keeps a priority it neither matches nor writes: eight entries
@@ -1376,7 +1386,7 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - Downstream; no tag, or a C-tag with the VID and the priority the rule
        names and no S-tag, or an S-tag with the VID and the priority of the
        S-tag or of the C-tag behind it, and that C-tag if the rule names one.
-     - The C-tag or S-tag operation of the rule. Classes ``0x1f``.
+     - The C-tag or S-tag operation of the rule, or both. Classes ``0x1f``.
      - The bottom of the usable range, upwards.
 
 .. list-table::
@@ -3287,6 +3297,10 @@ Assumptions the driver depends on
    * - The PON port needs its thresholds at the global ones plus ``0x30``
        ("Flow-control thresholds").
      - Repeating the bridged-traffic check with the write removed.
+   * - One classifier entry acts on both tags, its C-tag plane and its S-tag
+       plane ("Entries and rules").
+     - Untagged frames upstream under an entry that writes C-VID 410 and S-VID
+       200, read at the far side of an OLT.
 
 Questions the code does not depend on
 -------------------------------------

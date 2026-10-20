@@ -325,10 +325,11 @@ static bool rtl9602c_cf_xlate_split(const struct rtl9602c_priv *p,
  * of the VLAN they leave in, of the priority they leave with when the GEM
  * interfaces of that VLAN divide its priorities. That priority is the one the
  * entry matches when the rule is written per priority
- * (rtl9602c_cf_xlate_split()), else the one the rule writes, or else the one
- * it matches. A rule that keeps a priority it does not match and is written as
- * one entry, an S-tag rule on the C-tag behind or one the classifier had no
- * room to write per priority, is given the flow of priority 0, with a warning.
+ * (rtl9602c_cf_xlate_split()), else the one the rule writes into the outer
+ * tag, the S-tag's when it writes both, or else the one it matches. A rule
+ * that keeps a priority it does not match and is written as one entry, an
+ * S-tag rule on the C-tag behind or one the classifier had no room to write
+ * per priority, is given the flow of priority 0, with a warning.
  * Return the flow; -1 when no GEM interface claims the VLAN; -2 when none
  * claims the priority, so that the frames get no stream, as those of a
  * priority an IEEE 802.1p mapper sends nowhere are discarded.
@@ -349,10 +350,10 @@ static int rtl9602c_cf_xlate_flow(const struct rtl9602c_priv *p,
 
 	if (x->pcp >= 0) {
 		pcp = x->pcp;
-	} else if (x->act[1] & RTL9602C_CLS_ACT_CPRI_SET) {
-		pcp = FIELD_GET(RTL9602C_CLS_ACT_CPRI, x->act[1]);
 	} else if (x->act[0] & RTL9602C_CLS_ACT_SPRI_SET) {
 		pcp = FIELD_GET(RTL9602C_CLS_ACT_SPRI, x->act[0]);
+	} else if (x->act[1] & RTL9602C_CLS_ACT_CPRI_SET) {
+		pcp = FIELD_GET(RTL9602C_CLS_ACT_CPRI, x->act[1]);
 	} else if ((x->care & RTL9602C_CLS_RULE_PRI) == RTL9602C_CLS_RULE_PRI) {
 		pcp = FIELD_GET(RTL9602C_CLS_RULE_PRI, x->value);
 	} else {
@@ -3495,13 +3496,18 @@ static int rtl9602c_flower_vlan_act1(const struct flow_action_entry *act,
  *   behind it;
  * - vlan pop of the outer tag and vlan push of a tag of the same protocol: the
  *   tag rewritten with the push's VID and priority, a priority of 0 included,
- *   as a push always names its priority.
+ *   as a push always names its priority;
+ * - an S-tag pushed in front of the C-tag that the actions before it write: a
+ *   C-tag pushed onto an untagged frame, or the outer C-tag rewritten by vlan
+ *   modify or by a pop and a push. The entry then acts on both tags, the
+ *   C-tag in its C-tag plane and the S-tag in its S-tag plane.
  */
 static int rtl9602c_flower_vlan_act(const struct flow_action *a, u16 outer,
 				    struct rtl9602c_cf_xlate *x,
 				    struct netlink_ext_ack *extack)
 {
 	const struct flow_action_entry *e = a->entries;
+	const struct flow_action_entry *c, *s;
 	unsigned int n = a->num_entries;
 
 	if (n == 1)
@@ -3531,8 +3537,36 @@ static int rtl9602c_flower_vlan_act(const struct flow_action *a, u16 outer,
 		return 0;
 	}
 
+	if (n < 2 || n > 3)
+		goto refuse;
+	s = &e[n - 1];
+	c = &e[n - 2];
+	if (rtl9602c_vlan_act_is(s, FLOW_ACTION_VLAN_PUSH, ETH_P_8021AD)) {
+		if (!outer && n == 2 &&
+		    rtl9602c_vlan_act_is(c, FLOW_ACTION_VLAN_PUSH, ETH_P_8021Q))
+			rtl9602c_cf_ctag(x, c->vlan.vid, true, c->vlan.prio);
+		else if (outer == ETH_P_8021Q && n == 2 &&
+			 rtl9602c_vlan_act_is(c, FLOW_ACTION_VLAN_MANGLE,
+					      ETH_P_8021Q))
+			rtl9602c_cf_ctag(x, c->vlan.vid, c->vlan.prio != 0,
+					 c->vlan.prio);
+		else if (outer == ETH_P_8021Q && n == 3 &&
+			 rtl9602c_vlan_act_is(&e[0], FLOW_ACTION_VLAN_POP, 0) &&
+			 rtl9602c_vlan_act_is(c, FLOW_ACTION_VLAN_PUSH,
+					      ETH_P_8021Q))
+			rtl9602c_cf_ctag(x, c->vlan.vid, true, c->vlan.prio);
+		else
+			goto refuse;
+		/* Both planes of one entry: the C-tag, and the S-tag before it. */
+		rtl9602c_cf_stag(x, RTL9602C_CLS_ACT_STAG_ADD, s->vlan.vid, true,
+				 s->vlan.prio);
+		x->out_vid = s->vlan.vid;
+		return 0;
+	}
+
+refuse:
 	NL_SET_ERR_MSG_MOD(extack,
-			   "one action, two vlan pops of an S-tag, or a pop and a push of the outer tag's protocol");
+			   "one action; two vlan pops of an S-tag; a pop and a push of the outer tag's protocol; or a C-tag written and an S-tag pushed in front of it");
 	return -EOPNOTSUPP;
 }
 

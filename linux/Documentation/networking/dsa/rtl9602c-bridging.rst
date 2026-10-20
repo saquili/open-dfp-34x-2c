@@ -2180,6 +2180,15 @@ A translation from VID 410 to VID 1410 that gives the tag priority 0, which a
     tc filter add dev sfp ingress protocol 802.1Q flower skip_sw \
             vlan_id 410 action vlan pop action vlan push id 1410 priority 0
 
+An untagged frame given C-VID 410 with priority 5 behind S-VID 200 with
+priority 3 upstream, and both tags taken off again downstream::
+
+    tc filter add dev sfp ingress protocol all flower skip_sw \
+            num_of_vlans 0 action vlan push id 410 priority 5 \
+            action vlan push id 200 priority 3 protocol 802.1ad
+    tc filter add dev pon ingress protocol 802.1ad flower skip_sw \
+            vlan_id 200 vlan_ethtype 802.1Q action vlan pop action vlan pop
+
 .. list-table::
    :header-rows: 1
    :widths: 58 6 36
@@ -2255,6 +2264,37 @@ A translation from VID 410 to VID 1410 that gives the tag priority 0, which a
        measured on the board; 100 frames of C-VID 410 and priority 5 under the
        rule of the example above, leaving the far side of the OLT as 1410 with
        priority 0, would settle it.
+   * - A C-tag that the actions write, pushed onto an untagged frame or put
+       over the outer C-tag by ``vlan modify`` or by a pop and a push,
+       followed by a ``vlan push`` of an S-tag, becomes one entry that acts on
+       both tags: its C-tag plane writes the C-tag and its S-tag plane puts
+       the S-tag in front of it, each as it does alone (see the *acl-qos*
+       page, "Entries and rules"). An upstream entry takes the stream of the
+       GEM interface of the S-VID, and where the GEM interfaces of that VLAN
+       divide its priorities, of the S-tag's priority: the outer tag's, as for
+       every other rule. As the entry writes that priority, it stays one entry
+       (the per-priority row below).
+     - T, I
+     - T: the KUnit cases ``rtl9602c_test_vlan_two_tags`` and
+       ``rtl9602c_test_vlan_two_tags_flow``. I: the two planes together in
+       one entry are not measured; untagged frames under the rule of the
+       example above leaving the far side of the OLT as S-VID 200 with
+       priority 3 in front of C-VID 410 with priority 5, and frames of S-VID
+       200 in front of C-VID 410 sent from there arriving untagged, would
+       settle it.
+   * - The priority fields of the two planes hold more than an assignment:
+       ``RTL9602C_CLS_ACT_SPRI_SET`` is the low bit of a field at bits 20:18
+       of action word 0, and ``RTL9602C_CLS_ACT_CPRI_SET`` of one at bits
+       23:21 of word 1. Their other values are taken to copy the priority of
+       the frame's outer or inner tag, to give the switch's internal
+       priority, or to derive one from the frame's DSCP. The driver writes 1,
+       the assignment, or 0. A tc vlan action cannot ask for a copy, as a push
+       names its priority: an S-tag that takes the priority of the C-tag
+       behind it is pushed by one rule for each priority.
+     - I
+     - Not measured, and not driven. Each value under frames of two
+       priorities in two tags, both ways, read at the far side of the OLT,
+       would settle it.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress rules (the classifier
        acts on ingress); any key but the VLAN tags (with the basic and control
        keys), or an EtherType behind them; a VID or priority with a partial
@@ -2262,14 +2302,15 @@ A translation from VID 410 to VID 1410 that gives the tag priority 0, which a
        outer tag that is neither 802.1Q nor 802.1ad, or with no protocol; a
        second tag behind an outer C-tag, or anything but a C-tag behind an
        S-tag; the VID or priority of both an S-tag and the C-tag behind it;
-       more than one action, but two pops on an S-tag, and a pop and a push of
-       the outer tag's protocol (the row above); any action but ``vlan
-       modify``, ``push`` and ``pop`` (a drop, trap or pass goes to the ACL,
-       and ``police`` on a destination-address match to storm control, both on
-       the *acl-qos* page); a modify of an untagged frame, or of a C-tag into
-       anything but a C-tag; a C-tag pushed onto a tagged frame, or an S-tag
-       onto a frame with one; a pop of an untagged frame. With no free entry:
-       ``-ENOSPC`` and the message ``the classifier is full``.
+       more than one action, but two pops on an S-tag, a pop and a push of the
+       outer tag's protocol, and a C-tag written with an S-tag pushed in front
+       of it (the rows above); any action but ``vlan modify``, ``push`` and
+       ``pop`` (a drop, trap or pass goes to the ACL, and ``police`` on a
+       destination-address match to storm control, both on the *acl-qos*
+       page); a modify of an untagged frame, or of a C-tag into anything but a
+       C-tag; a C-tag pushed onto a tagged frame, or an S-tag onto a frame
+       with one; a pop of an untagged frame. With no free entry: ``-ENOSPC``
+       and the message ``the classifier is full``.
      - M
      - ``num_of_vlans 1`` with a VID, a pop with ``num_of_vlans 0``, a C-tag
        pushed onto a C-tag, an S-tag pushed onto an S-tag, two pops on a
@@ -2726,6 +2767,11 @@ Assumptions the driver depends on
        operations").
      - Frames of C-VID 410 and priority 5 under a pop and a push of 1410 with
        priority 0, read at the far side of the OLT.
+   * - One classifier entry acts on both tags, its C-tag plane and its S-tag
+       plane, and leaves the S-tag in front of the C-tag ("VLAN tag
+       operations").
+     - Untagged frames under a push of C-VID 410 and of S-VID 200, read at the
+       far side of the OLT, and the two pops of the way back.
 
 Questions the code does not depend on
 -------------------------------------
@@ -2761,6 +2807,10 @@ Questions the code does not depend on
    * - What ``RTL9602C_ISOLATE_EXT_HAIRPIN`` does ("Port isolation").
      - Nothing on this board reaches an extension port, so nothing settles it
        here.
+   * - What the other values of the classifier's priority fields do: copies of
+       the outer or the inner tag's priority, the internal priority, a
+       priority from the DSCP ("VLAN tag operations").
+     - Each value under frames of two priorities in two tags, both ways.
    * - What the S-VLAN block's other fields do, and whether a bridge VLAN takes
        the S-tag of its VID off frames leaving by its untagged ports ("The
        S-VLAN block").
