@@ -20,14 +20,6 @@ PROCD_LICENSE_FILES = signal.c rcS.c
 PROCD_DEPENDENCIES = json-c libubox ubus
 PROCD_MAKE_OPTS = procd setlbf
 
-# udebug, which procd logs to as well, updates a buffer shared between
-# processes with atomic operations.
-ifeq ($(BR2_TOOLCHAIN_HAS_ATOMIC),y)
-PROCD_CONF_OPTS += -DUDEBUG=ON
-else
-PROCD_CONF_OPTS += -DUDEBUG=OFF
-endif
-
 define PROCD_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/procd $(TARGET_DIR)/sbin/procd
 	$(INSTALL) -D -m 0755 $(@D)/libsetlbf.so $(TARGET_DIR)/usr/lib/procd/libsetlbf.so
