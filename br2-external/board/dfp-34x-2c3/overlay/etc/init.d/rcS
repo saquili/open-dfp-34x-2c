@@ -208,7 +208,11 @@ onu-nl link set sfp up || warn "no interface sfp"
 # seconds for each. netifd alone sets them (ADR 0011), and procd starts it
 # again if it ends; an address it does not bring up is in the log. Each
 # interface that comes up or goes down, netifd tells onu-apply (its -h),
-# which hands a PPPoE session's address on or takes it back.
+# which hands a PPPoE session's address on or takes it back. onu-mgmt start
+# also has onu-apply put the guard of the stick's own programs in place
+# (onu-apply guard, onu-fw guard), before any server starts: what comes in
+# to the stick by any interface but the management VLAN's is dropped, but
+# what one of its programs takes there.
 onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" || {
 	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS is not a pair, the image's instead"
 	MGMT_VLAN=$BOARD_MGMT_VLAN
@@ -233,8 +237,10 @@ if [ -n "$SYS_LOG_SERVER" ]; then
 		warn "the system log stays on the stick"
 fi
 
-# The servers listen on the addresses of the host side and nowhere else: no
-# packet filter guards them, and nothing on the PON side is to reach them.
+# The servers listen on the management addresses and nowhere else, and the
+# guard drops what comes to them by any other interface than the management
+# VLAN's (and the host link's to its own address there, a bench's): nothing
+# on the PON side, nor a local network, is to reach them, in any mode.
 # They start now that the addresses are there (onu-run): the ssh server, which
 # takes the keys of /root/.ssh/authorized_keys, which an image built with a
 # bench's keys carries and this one does not, and root's password once it is

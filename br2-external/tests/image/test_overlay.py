@@ -287,11 +287,19 @@ class Watchdog(unittest.TestCase):
 
 
 class ServersOnTheHostSide(unittest.TestCase):
-    """No packet filter guards the servers: they listen on the host side alone."""
+    """The servers listen on the management addresses, and answer there alone:
+    onu-apply's guard drops what comes to them by any other interface."""
 
-    def test_there_is_no_packet_filter(self):
+    def test_the_guard_is_onu_fws_not_nft(self):
+        # The image has no nft: onu-fw puts the guard in place through netlink.
         self.assertNotIn("nft", called(RCS))
         self.assertFalse(os.path.exists(os.path.join(OVERLAY, "etc", "nftables.conf")))
+
+    def test_the_guard_is_in_place_before_a_server_starts(self):
+        # onu-mgmt start has onu-apply put the guard in place.
+        text = read(RCS)
+        self.assertLess(text.index("\nonu-mgmt start "), text.index("onu-svc start ssh "))
+        self.assertLess(text.index("\nonu-mgmt start "), text.index("onu-svc start pond "))
 
     def test_the_two_addresses_are_those_of_the_host_side(self):
         text = read(RCS)
