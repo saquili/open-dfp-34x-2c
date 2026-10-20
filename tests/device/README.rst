@@ -90,9 +90,20 @@ today's image, but none has run on it. What a case expects of the image:
   ``--tools`` gives it what the cases need. The data-path cases read the
   switch's own frame counts with ``ethtool`` when the stick has it, and do
   without otherwise.
-* No packet filter guards the stick's own servers (``docs/handbook/system.rst``):
-  what keeps them off the PON side is the addresses they listen on, which
-  ``net.listeners`` checks.
+* The stick's own servers answer on its management VLAN alone
+  (``docs/handbook/system.rst``): they listen on the management addresses,
+  which ``net.listeners`` checks, and the stick's guard drops what comes to
+  them by any other interface, which ``net.guard`` checks from the bench's
+  subscriber-side port. It sends a TCP SYN to ssh and to the panel at the
+  management address, from a raw socket, in the management VLAN, where it
+  must be answered, then untagged and in each other VLAN the stick has on
+  its host link, where nothing may answer, not even a reset. By a local
+  network's VLAN the SYN comes from an address of that network, the last
+  but one, as a device of it would send it, and the bench answers the
+  stick's ARP for that address for the length of the probe; elsewhere it
+  comes from the bench's own address on the management network, and the
+  record names the interface's reverse-path check. With ``--bench-netns``
+  the probe runs inside the namespace, as the other cases' commands do.
 * procd feeds the watchdog (ADR 0010): ``system.watchdog`` looks for procd
   holding the device, and ``system.watchdog-reset`` has procd let go of it
   without closing it properly, so that nobody feeds an armed watchdog.

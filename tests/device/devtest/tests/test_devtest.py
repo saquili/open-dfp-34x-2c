@@ -535,6 +535,61 @@ class Cases(unittest.TestCase):
         self.assertEqual(self.listening(self.NETSTAT, [("open", 0.01), ("open", 0.01),
                                                        ("timeout", 3.0)]).status, FAIL)
 
+    VLANS = ("VLAN Dev name    | VLAN ID\n"
+             "Name-Type: VLAN_NAME_TYPE_RAW_PLUS_VID_NO_PAD\n"
+             "mgmt           | 4094  | sfp\n"
+             "net1           | 100  | sfp\n"
+             "wan410         | 410  | gem256\n")
+    ADDRS = ("1: lo    inet 127.0.0.1/8 scope host lo\n"
+             "5: mgmt    inet 192.0.2.1/30 brd 192.0.2.3 scope global mgmt\n"
+             "7: net1    inet 203.0.113.1/24 brd 203.0.113.255 scope global net1\n")
+
+    def guarded(self, answers, subscriber_port="eth1"):
+        """The case net.guard, the probe of each way answering from @answers in
+        turn: the management VLAN's first."""
+        seen = []
+        answered = iter(answers)
+        real = cases_net.probe, cases_net.guard_probe
+        cases_net.probe = lambda ctx, port, wait=3.0: ("open", 0.01)
+        cases_net.guard_probe = (lambda ctx, vid, mac, dst, src, arp=False:
+                                 seen.append((vid, src, arp)) or next(answered))
+        trail: list[str] = []
+        settings = dataclasses.replace(SETTINGS, subscriber_port=subscriber_port)
+        stick = Canned("stick", [("cat /run/onu-mgmt", 0, self.MGMT),
+                                 ("sfp/address", 0, "00:00:5e:00:53:01"),
+                                 ("ip -4 -o addr", 0, self.ADDRS),
+                                 ("vlan/config", 0, self.VLANS),
+                                 ("rp_filter", 0, "0")], trail)
+        bench = Canned("bench", [("route get", 0, "192.0.2.1 dev eth1.4094 src 192.0.2.2 uid 0")],
+                       trail)
+        try:
+            return cases_net.guarded(Context(settings, stick, bench, trail)), seen
+        finally:
+            cases_net.probe, cases_net.guard_probe = real
+
+    def test_the_guard_keeps_the_servers_to_the_management_vlan(self):
+        both, none = {22: True, 443: True}, {22: False, 443: False}
+        result, seen = self.guarded([both, none, none])
+        self.assertEqual(result.status, PASS)
+        # The management VLAN, untagged from the bench's own address, and the
+        # network's VLAN from an address of the network, whose ARP the bench answers.
+        self.assertEqual(seen, [(4094, "192.0.2.2", False), (0, "192.0.2.2", False),
+                                (100, "203.0.113.254", True)])
+        self.assertIn("a SYN in VLAN 4094 answered on 22, 443", result.evidence)
+        self.assertIn("net1 (VLAN 100, from 203.0.113.254 of 203.0.113.0/24): no answer",
+                      result.evidence)
+        self.assertIn("sfp (untagged, from the bench's address, rp_filter 0): no answer",
+                      result.evidence)
+
+    def test_a_server_reached_by_another_vlan_fails(self):
+        both, none = {22: True, 443: True}, {22: False, 443: False}
+        result, _ = self.guarded([both, none, {22: False, 443: True}])
+        self.assertEqual(result.status, FAIL)
+        self.assertIn("answered on 443", result.evidence)
+        # Nor does a probe that the management VLAN does not answer prove anything.
+        self.assertEqual(self.guarded([none, none, none])[0].status, FAIL)
+        self.assertEqual(self.guarded([], subscriber_port="")[0].status, SKIP)
+
     def test_the_listeners_are_read_from_netstat(self):
         text = self.NETSTAT + "tcp        0      0 :::80                   :::*                    LISTEN\n"
         self.assertEqual(cases_net.listeners(text),
