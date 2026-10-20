@@ -1563,10 +1563,7 @@ check 'logged "^udhcpc -f -R -i wan420"'
 # Until the lease comes, the interface is up without an address.
 check 'has ipoe-1 "interface ipoe1: device=wan420 proto=none"'
 check '! part ipoe-1 | grep -q route'
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "onu-call dhcpc" && break
-	"$REAL_SLEEP" 0.1
-done
+soon 'logged "onu-call dhcpc"'
 check 'logged "onu-call dhcpc"'
 check '[ "$(cat "$ONU_ROOT/run/ipoe/1/ipv4")" = 198.51.100.77/24 ] &&
 	[ "$(cat "$ONU_ROOT/run/ipoe/1/router")" = 198.51.100.1 ] &&
@@ -1608,6 +1605,10 @@ check '! logged "link set wan420 mtu 1508"'
 check 'grep -qx "out wan420" "$T/fw.conf" || [ ! -e "$ONU_ROOT/run/onu-fw.conf" ]'
 "$MODE_SCRIPT" state >"$T/state" 2>/dev/null
 check 'grep -qx "session.1.dev=wan420" "$T/state" && grep -qx "ipoe.1.dev=wan420" "$T/state"'
+# The connection went down and up again, without the network's route, and
+# its new client has its lease a moment later; the connection goes after
+# that, not while the client writes into its directory.
+soon '[ -s "$ONU_ROOT/run/ipoe/1/ipv4" ]'
 
 echo "the connection gone"
 printf '%s\n' SESSION1_VLAN=420 SESSION1_FAMILY=ipv4 SESSION1_PASS=off >"$ONU_ROOT/run/onu.conf"
