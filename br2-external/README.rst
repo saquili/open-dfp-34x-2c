@@ -113,7 +113,7 @@ gcc 14.4.0              C only; no C++, no Fortran, one library set (no
 binutils 2.44
 uClibc-ng 1.0.59        static and shared libraries, no threads, the stack
                         protector on (see below)
-Linux 6.18.48 headers   those of ``linux/`` (see below)
+Linux 6.18.57 headers   those of ``linux/`` (see below)
 ======================= ======================================================
 
 ``BR2_REPRODUCIBLE`` is on, and binutils is configured with
@@ -206,7 +206,7 @@ the ``linux/`` tree of the checked-out commit, and declares the series as
 is ``file://$(OPEN_DFP_34X_2C_KERNEL_ARCHIVE)``; ``external.mk`` stops a build
 that does not set the variable. The sysroot then holds
 ``usr/include/linux/pon.h`` and both files of the pairs that differ only in
-case, and ``usr/include/linux/version.h`` says 6.18.48.
+case, and ``usr/include/linux/version.h`` says 6.18.57.
 
 Buildroot does not check a hash for a custom archive. The archive's name carries
 the id of the ``linux/`` tree it was made from, so that the download cache,
