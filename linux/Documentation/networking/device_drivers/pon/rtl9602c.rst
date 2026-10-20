@@ -1375,13 +1375,16 @@ T-CONT 16.
        cleared in the T-CONT's map; it is made strict and unshaped; and the
        T-CONT's enable bit is cleared once its map is empty. Queue 64 is never
        detached from T-CONT 16, the OMCC's.
-     - I
-     - Assumption, load-bearing for every detach: no step of it has been run
-       on the board. Deleting the only GEM port of a queue while another port
-       of the same T-CONT sends upstream, reading the ``ponmac`` view before
-       and after, would confirm it: the ``qmap`` line loses the queue's bit
-       and keeps the other's, the other port's upstream octets keep rising,
-       and with the T-CONT's last queue its bit leaves ``tcont en``.
+     - M, I
+     - M for the detach of a T-CONT's only queue when the T-CONT loses its
+       Alloc-ID, under upstream traffic: the stream parked, no drain error,
+       the ``qmap[ 0]`` line gone and T-CONT 0's bit gone from ``tcont en``
+       (the row on a T-CONT that loses its Alloc-ID, under "Flows, streams
+       and T-CONTs"). I for the detach of one queue while another stays:
+       deleting the only GEM port of a queue while another port of the same
+       T-CONT sends upstream, reading the ``ponmac`` view before and after,
+       would show the ``qmap`` line lose the queue's bit and keep the other's,
+       and the other port's upstream octets keep rising.
    * - ``RTL9602C_PONSCH_TOKEN_CLK``, ``0xf02190``: the token-bucket clock of
        the queue rate limiters, ``RTL9602C_PONSCH_TOKEN_CLK_PERIOD`` (bits 7:0)
        = ``0x6e`` and ``RTL9602C_PONSCH_TOKEN_CLK_TOKENS`` (bits 15:8) =
@@ -1553,14 +1556,16 @@ saw the end.
        its T-CONTs hold Alloc-IDs, O4 to O6, or has just given them back with
        its ONU-ID, for O1, O2 or O7. Frames may still wait in the queue, which
        its T-CONT is no longer granted to send.
-     - I
-     - Assumption, load-bearing for the detach. Only drains before an attach
-       have been seen: in O1 at the build, and in O5 when a T-CONT is given
-       its first GEM port, each time before any stream was admitted to the
-       queue. The ``PON queue N did not drain`` error in the kernel log after
-       a GEM interface is deleted, after a port's queue is changed, after the
-       OLT takes an Alloc-ID back, or after the ONU leaves O5, would refute
-       it.
+     - M, I
+     - M: with the CPU sending 1000-byte frames up the T-CONT's one GEM port
+       at 2000 to 3000 a second until its stream was parked, queue 7 of GEM
+       T-CONT 0 was drained and detached in O5 after Assign_Alloc-ID type
+       255, in O2 after Deactivate_ONU-ID, with 3000 frames a second going
+       up, and in O1 after ``ip link set pon down``, each time with no ``PON
+       queue N did not drain`` error. The whole kernel log of that session
+       holds no drain error, no ``WARNING`` and no ``BUG``. I: O7 under
+       traffic, and a drain after a GEM interface is deleted or a port's
+       queue is changed while the T-CONT stays bound, have not been run.
    * - The driver's clock advances in steps of 10 ns on this board (timer 1,
        Documentation/arch/mips/rtl9602c.rst), but a sleep between polls lasts
        until the next 4 ms tick (HZ 250, and the tick timer has no one-shot
@@ -1849,13 +1854,24 @@ Flows, streams and T-CONTs
        queue that does not drain ends the detaching, and it and the queues
        after it stay. An Alloc-ID bound to the T-CONT again starts its ports
        as a first one does ("upstream started").
-     - I
-     - Not run on the board. On a test image, with upstream traffic on a GEM
-       port of the OLT's T-CONT, an Assign_Alloc-ID type 255 for its
-       Alloc-ID written to ``ploaminject`` would show the log line, the
-       ``qmap`` line of its T-CONT gone from the ``ponmac`` view and its bit
-       gone from ``tcont en``, and the port's upstream octets standing still;
-       taking ``pon`` down and up would show the upstream start again.
+     - M, I
+     - M, on a test image: GEM port 258, the OLT's data port, on GEM T-CONT 0
+       with Alloc-ID 258, its stream 1 on queue 7, while the CPU sent
+       1000-byte frames up a VLAN device on its interface at 2000 to 3000 a
+       second. An Assign_Alloc-ID type 255 for Alloc-ID 258, written to
+       ``ploaminject``, logged once
+       ``<GEM> port 258: upstream parked, T-CONT 0 lost its Alloc-ID``, and
+       no drain error; the ``ponmac`` view then showed ``tcont en 00010000``,
+       no ``qmap[ 0]`` line and no ``sid 1`` line, and the ``gpon`` view
+       ``tcont 0=-/258``; the ONU stayed in O5, and OMCI went on (``omci tx``
+       348, then 353). A Deactivate_ONU-ID injected while 3000 frames a
+       second went up logged the same line 7 ms after ``the OLT deactivated
+       this ONU in O5``; the ONU went through O2, O3 and O4 to O5, and
+       ``upstream started, T-CONT 0 assigned`` came 1.5 s after the
+       deactivation. ``ip link set pon down`` under the traffic left ``tcont
+       en 00010000``; after ``up``, in O5, T-CONT 0 held 258, ``qmap[ 0]``
+       read ``00000080`` and the ``sid 1`` line named queue 7 again. I: an
+       Alloc-ID mapped to another T-CONT, and a queue that does not drain.
    * - ``RTL9602C_GEM_PARKING_QUEUE`` is queue 63, ``RTL9602C_PON_QUEUE(15,
        31)``, which is also GEM T-CONT 7's queue of the highest priority. A
        parked stream is not admitted, and a stream that is not admitted sends
@@ -1876,8 +1892,13 @@ Flows, streams and T-CONTs
        gets its downstream half, the "upstream parked" warning and its stream
        parked, not admitted and on queue 63 as a new port's is, until the
        Alloc-ID arrives.
-     - I
-     - What happens to the frames that the switch forwards to a parked stream
+     - M, I
+     - M for the take-down: ``ip link set pon down`` under upstream traffic
+       left T-CONT 0 off, and after ``up`` it was bound, its queue attached
+       and its port's stream admitted again (the row on a T-CONT that loses
+       its Alloc-ID). omcid deleted the GEM interfaces and made them again on
+       that re-activation, so the port seen after ``up`` was a new one. I:
+       what happens to the frames that the switch forwards to a parked stream
        is not measured. Sending upstream through the port between the
        take-down and the Assign_Alloc-ID, reading port 2's transmit counters
        and the switch's ingress-discard counter, would show where they are
@@ -2527,13 +2548,13 @@ them before it is called.
 2. Drain the queue (see "Draining a queue"); a drain that does not end leaves
    the queue in the map and the T-CONT on, and is logged. Purpose: nothing is
    left in the queue, and no frame waits there for the next port that the
-   queue is given. (I)
+   queue is given. (M for a drain that ends, I for one that does not)
 3. Clear the queue's bit in the T-CONT's map. Purpose: the T-CONT no longer
-   schedules it. (I)
+   schedules it. (M)
 4. Set the queue strict, committed rate 0, peak rate the maximum, weight 1.
    Purpose: the queue is as the build left it. (T)
 5. If the map is now empty, clear the T-CONT's enable bit. Purpose: a T-CONT
-   without a queue is switched off, as it was before its first queue. (I)
+   without a queue is switched off, as it was before its first queue. (M)
 
 Taking an Alloc-ID away from a GEM T-CONT
 -----------------------------------------
@@ -2549,16 +2570,18 @@ ONU gives back its ONU-ID (``rtl9602c_gpon_o5_teardown()``).
 2. Park the stream of each upstream GEM port on the T-CONT, and log "upstream
    parked, T-CONT N lost its Alloc-ID". Purpose: no admitted stream feeds a
    queue that is granted nothing, and the drains below find no stream feeding
-   them. (M for what parking does, I for the moment)
+   them. (M)
 3. Detach every queue in the T-CONT's map, the lowest first (previous list).
    The first queue whose drain does not end stops this step, and it and the
    queues after it stay attached, the T-CONT on. Purpose: nothing waits in the
    T-CONT's queues for a later Alloc-ID; and since a drain's end is taken to
    depend on the GPON MAC's state rather than on the queue (see "What a queue
-   drain depends on"), a second drain would most likely wait as long. (I)
+   drain depends on"), a second drain would most likely wait as long. (M for
+   a T-CONT's one queue, I for several and for a drain that does not end)
 4. If the map was empty to begin with, clear the T-CONT's enable bit; the last
    detach of step 3 clears it otherwise. Purpose: a T-CONT without an Alloc-ID
-   is switched off, also one that a failed attach left on. (I)
+   is switched off, also one that a failed attach left on. (M for the last
+   detach, I for a map empty to begin with)
 
 When an Alloc-ID is bound to the T-CONT again, its ports are programmed as on
 a first Alloc-ID (see "Programming a GEM port").
@@ -2787,16 +2810,18 @@ Assumptions the driver depends on
        ("Upstream streams, queues and T-CONTs").
      - Removing each write and repeating the OMCI exchange; a limited peak rate
        against a flood above it. Revision 1 has not been seen.
-   * - The detach of a queue: its order, and that its drain completes once no
-       admitted stream feeds the queue, also with frames waiting in it after
-       its T-CONT lost its Alloc-ID, and with the ONU just gone to O1, O2 or
-       O7 ("Upstream streams, queues and T-CONTs", "What a queue drain depends
-       on", "GEM ports as network interfaces").
+   * - The detach of one queue of a T-CONT while another stays in its map,
+       after the last GEM port of the queue is deleted or moves to another
+       queue; and the drain before a detach with the ONU just gone to O7
+       under traffic. The detach of a T-CONT's only queue on the loss of its
+       Alloc-ID, in O5, O2 and O1, is measured ("Upstream streams, queues and
+       T-CONTs", "What a queue drain depends on", "GEM ports as network
+       interfaces").
      - Deleting the only GEM port of a queue while another port of its T-CONT
        sends upstream, reading the ``ponmac`` view and the other port's
-       upstream octets before and after; on a test image, an Assign_Alloc-ID
-       type 255 and a Deactivate_ONU-ID written to ``ploaminject`` during an
-       upstream flood; each with no drain error in the kernel log.
+       upstream octets before and after; on a test image, a
+       Disable_Serial_Number written to ``ploaminject`` during an upstream
+       flood; each with no drain error in the kernel log.
    * - What the drain waits for, and what it does to a queue that other streams
        go on feeding ("What a queue drain depends on").
      - A drain with the GPON MAC held in O1 against one in O5, each with a known
