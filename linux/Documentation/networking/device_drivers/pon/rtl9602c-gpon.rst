@@ -2089,12 +2089,26 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
        while no serial number is set.
      - P
      - ITU-T G.984.3 clause 9.2.4.1; the ONU reaches O5 on an OLT.
-   * - The random delay of the serial-number response (0 to 48 us, new for each
-       response) is left zero in the template; that the MAC inserts the delay
-       and writes it into the message is not established.
+   * - The ONU waits a random delay before each serial-number response, 0 to
+       48 us in units of 32 bytes and new for each response, and reports it in
+       the message: twelve bits, the high eight in octet 11 and the low four
+       in the high four bits of octet 12. In ranging the field is 0.
+     - P
+     - ITU-T G.984.3 clause 9.2.4.1, clause 10.4.2.1 and clause A.6.5.2.
+   * - The template carries a random delay of 0, and the driver applies none.
+       No control of a random delay of the MAC's own has been found yet; bit
+       11 of ``RTL9602C_GTC_US_CTRL``, which the driver leaves at its reset
+       value, taken to be 1, is the one candidate. The driver writes no random
+       value into the template: the OLT takes the field as the delay the ONU
+       applied, and a value the burst did not carry would place the response
+       up to 48 us from where the OLT reckons it. Where one ONU answers a
+       request the delay changes nothing; ONUs at one distance that answer
+       the same request can collide without it.
      - I
-     - ITU-T G.984.3 clause 10.4.2.1; a capture of the serial-number responses
-       at the OLT, or the spread of their arrival across discovery attempts.
+     - The register read before the bring-up; a capture of the serial-number
+       responses at the OLT, their arrival against the grant and their octets
+       11 and 12, with bit 11 at 1 and at 0 (written under the key); or two
+       ONUs at one distance, discovered together, with bit 11 at each value.
    * - TT says the level the ONU sends at, in the reverse of the coding of
        Upstream_Overhead's level modes: mode 0, normal, the highest, is TT 2,
        high. The ONU sends at mode 0, and the ONU reaches O5 on the test OLT,
@@ -3578,6 +3592,10 @@ Known limitations
   only injected messages have set a lower level, and the ONU's own steps have
   run only in KUnit. With TO1 at 10 s, an OLT that asks for serial numbers
   less often than once a second never makes the ONU step.
+- The serial-number response reports a random delay of 0, and whether the MAC
+  delays it by itself is not known: no control of such a delay has been found
+  yet (see "PLOAM transmit"). ONUs at one distance that answer the same
+  discovery request can collide, and the OLT then asks again.
 - A laser that stays on by itself is not detected: the MAC's check of the
   optics' signal detect against the burst reports nothing on this board, and
   the module's own indication of light also rises in normal operation, for up
@@ -3687,9 +3705,10 @@ Assumptions the driver depends on
    * - That a write into a full upstream PLOAM queue overwrites its tail ("PLOAM
        transmit").
      - Filling a queue and reading its slot.
-   * - That the MAC inserts the serial-number response's random delay ("PLOAM
-       transmit").
-     - The spread of the responses' arrival at the OLT.
+   * - That the serial-number response needs no random delay where several
+       ONUs are discovered together, and what bit 11 of
+       ``RTL9602C_GTC_US_CTRL`` does to the delay ("PLOAM transmit").
+     - The responses captured at the OLT with the bit at 1 and at 0.
    * - That arming the Serial_Number_ONU template again on entering O4 is needed
        ("PLOAM transmit").
      - Removing it and checking that the ONU reaches O5 on an OLT.
