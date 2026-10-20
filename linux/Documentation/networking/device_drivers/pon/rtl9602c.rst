@@ -2677,9 +2677,12 @@ Known limitations
   stays attached, strict and unshaped, and its T-CONT stays on.
 - A VLAN rule (tc flower, offloaded to the classifier) that sends frames into
   a VLAN whose priorities several GEM ports divide, and that keeps a priority
-  it neither matches nor writes, takes eight of the classifier's 128 usable
-  entries, one per priority (see "Bridges and VLANs"). A new such rule that
-  finds fewer than eight free is refused with ``-ENOSPC``; a rule that has
+  it neither matches nor writes, takes eight entries of the classifier, one
+  per priority (see "Bridges and VLANs"): of the 224 of pattern 1, which it
+  shares with the other rules on a C-tag or an untagged frame and with the
+  stream entries, or of the 32 of pattern 0 for a rule on an S-tag (see the
+  *acl-qos* page). A new such rule that finds fewer than eight free in its
+  pattern is refused with ``-ENOSPC``; a rule that has
   its entry already, into a VLAN that comes to be divided, keeps one entry
   when there is no room for the other seven, and puts all its frames on the
   GEM port of priority 0, with a warning. So does a rule that rewrites an

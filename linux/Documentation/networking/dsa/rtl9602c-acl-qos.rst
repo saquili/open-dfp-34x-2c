@@ -275,12 +275,12 @@ Interfaces to user space
   weights; last, each storm-control class's enable and meter-select words and
   the rate word of each of the sixteen meters.
 - The kernel log lines of these blocks. At setup ``rtl9602c-switch: classifier:
-  128 entries usable of 256``; the loop lines ``rtl9602c-switch: port N: loop
-  detected, closing through port M`` and ``rtl9602c-switch: port N: loop
-  cleared``; and, rate-limited and carrying the device's name instead,
-  ``meters 0x... exceeded their rate`` and ``acl templates 0x... matched``. The
-  messages that refuse a ``tc`` rule are returned to ``tc`` and begin
-  ``rtl9602c:``.
+  entries 0 to 31 of pattern 0, 32 to 255 of pattern 1``; the loop lines
+  ``rtl9602c-switch: port N: loop detected, closing through port M`` and
+  ``rtl9602c-switch: port N: loop cleared``; and, rate-limited and carrying the
+  device's name instead, ``meters 0x... exceeded their rate`` and
+  ``acl templates 0x... matched``. The messages that refuse a ``tc`` rule are
+  returned to ``tc`` and begin ``rtl9602c:``.
 
 How to read the fact tables
 ===========================
@@ -1095,8 +1095,11 @@ of a UDP or TCP header, at the start of the IP payload, and never changes them.
 The classifier
 ==============
 
-The classifier has 256 entries, of which the driver uses the lower part (see
-the depth row below). An entry is a rule, an action and a set of action classes.
+The classifier has 256 entries in two patterns, which lay a rule out
+differently (see the pattern rows below): the driver keeps the VLAN rules that
+compare an S-tag in the 32 entries of pattern 0, and the other VLAN rules and
+the stream entries in the 224 of pattern 1. An entry is a rule, an action and
+a set of action classes.
 A rule keys on the direction of the frame, upstream when it enters by a user
 port and downstream when it enters by the PON port, and, if it asks, on the
 ingress port and on the frame's tags, the C-tag's VID and its priority. An
@@ -1132,20 +1135,63 @@ Entries and rules
      - Frames that the switch forwards to the PON port reach the far side of an
        OLT only through the stream entries: bridged traffic from the host, and a
        routing test.
-   * - ``RTL9602C_CLS_CTRL`` (``0x01600c``) bits 12:5,
-       ``RTL9602C_CLS_CTRL_LAYOUT1_START``, is the first entry matched with a
-       second rule layout; the entries below it take the layout that the driver
-       writes. It reads 128 on this board. The driver reads it at setup and uses
-       only the entries below it (all 256 if it reads 0).
+   * - ``RTL9602C_CLS_CTRL`` (``0x01600c``) bits 12:5 read 128 on this board
+       before the driver wrote them, and the entries below 128 matched rules
+       in the layout that the rows below describe.
      - M
-     - The boot log line ``classifier: 128 entries usable of 256``; the driver's
-       stream entries sit at 127 downwards.
-   * - The entries from ``RTL9602C_CLS_CTRL_LAYOUT1_START`` upward interpret a
-       rule in a different layout, so a rule of the driver's layout written
-       there does not match as written.
+     - The boot log line ``classifier: 128 entries usable of 256`` of an
+       earlier driver, which read the field and used the entries below it; its
+       stream entries at 127 downwards gave bridged and routed frames their
+       streams.
+   * - The field, ``RTL9602C_CLS_CTRL_PATTERN1_NUM``, is the number of entries
+       at the top of the table whose rules follow a second pattern, pattern 1:
+       entry i follows it when i is at least 256 less the field, and the
+       others follow pattern 0, the layout of the rows below. At 128 this and
+       the reading of an earlier driver, the first entry of a second layout,
+       agree. Setup writes ``RTL9602C_CLS_PATTERN1_NUM`` (224) there before it
+       retires every entry, reads it back, logs the patterns (``classifier:
+       entries 0 to 31 of pattern 0, 32 to 255 of pattern 1``) and keeps the
+       first entry of pattern 1 (``cf_p1``).
      - I
-     - The driver never writes there, so this is load-bearing only as its depth
-       limit. A frame test of an entry above the boundary would settle it.
+     - Not measured. The boot log line and the ``cf`` view's first line, with
+       the frame tests of the *bridging* page ("VLAN tag operations") passing
+       through entries of pattern 1, would settle it; the field read after a
+       reset by the watchdog, before setup writes it, would give its value out
+       of reset.
+   * - A rule of pattern 1 on template 0 keeps the bits of rule word 0 that the
+       driver writes where pattern 0 has them: ``RTL9602C_CLS_RULE_UNI``,
+       ``_CTAG``, ``_STAG``, ``_PRI``, ``_VID`` and ``_DS``, and the internal
+       priority at bits 7:5 (``RTL9602C_CLS_RULE_INTPRI``). In bits 30:23 it
+       holds the IP TOS octet of an upstream frame or the GEM index of a
+       downstream one (``RTL9602C_CLS_RULE1_TOS``), and in word 1 bits 15:0,
+       below ``RTL9602C_CLS_RULE_VALID``, the frame's EtherType; on template
+       1, word 1 holds the TCI of the inner tag instead. The driver compares
+       none of these other bits and writes every entry of pattern 1 on
+       template 0, so its entries mean in pattern 1 what they meant in
+       pattern 0.
+     - I
+     - Not measured. The translation of 410 to 1410 both ways, the push of
+       410 onto untagged frames and its pop, and bridged and routed traffic
+       through the stream entries, each through entries of pattern 1, would
+       settle the bits the driver writes; the fields it does not write need
+       frames of their own.
+   * - In pattern 1, ``RTL9602C_CLS_RULE_VID`` and ``_PRI`` are those of the
+       frame's outer tag, the S-tag of a frame with one, and
+       ``RTL9602C_CLS_TMPL_CFG`` applies to pattern 0 alone. The driver's
+       rules of pattern 1 compare the S-tag bit as 0, so their outer tag is
+       the C-tag that template 0 names in pattern 0.
+     - I
+     - The driver does not depend on it. An entry of pattern 1 with the S-tag
+       bit and VID 200 matching S-VID 200 alone and in front of C-VID 100, and
+       not C-VID 200 alone, would settle it.
+   * - Across the two patterns, as within one, the lowest matching entry
+       applies: a VLAN rule of pattern 0 on an S-tag takes precedence over a
+       stream entry of pattern 1 that keys on the port alone.
+     - I
+     - Not measured across patterns. Frames of an S-VID from the host under an
+       S-tag rule of pattern 0, arriving at the far side of an OLT with the
+       rule's tag operation, the port's stream entry at the top of pattern 1
+       matching them too, would settle it.
    * - ``RTL9602C_CLS_CTRL`` bits 1:0 are one field that decides what happens to
        a frame that matches no entry: the value 2 drops it (forwarding reason
        239), in whichever direction has no matching entry; 0, 1 and 3 let it
@@ -1309,13 +1355,16 @@ Entries and rules
    * - ``RTL9602C_CLS_ENTRY_TMPL`` (``0x016010`` + 4(i/32), bit i mod 32): the
        template that entry i is matched with. The driver sets the bit, template
        1, for an entry on the VID or priority of an S-tag, and clears it,
-       template 0, for every other.
-     - M
-     - The template rows above.
+       template 0, for every other; an entry on an S-tag is in pattern 0, so
+       every entry of pattern 1 has template 0.
+     - M, I
+     - M: the template rows above, all in pattern 0. I: that the bit chooses
+       what word 1 holds in pattern 1 (the pattern rows above).
    * - When a frame matches several entries, the classifier acts on the
        lowest-numbered one. The driver depends on it: stream entries are taken
-       from the top of the usable range and translations from the bottom, so a
-       translation must name the stream itself.
+       from the top of pattern 1 and the VLAN rules below them, so an upstream
+       rule must name the stream itself; and the VLAN rules of a pattern are
+       kept in the order of their tc priorities.
      - M
      - Against an operator's OLT, an entry that passed the same VID through at a
        lower index applied instead of a translation at a higher index; once the
@@ -1349,7 +1398,7 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - Upstream; the ingress port (``RTL9602C_CLS_RULE_UNI``).
      - ``RTL9602C_CLS_ACT_FLOW_SET`` and ``RTL9602C_CLS_ACT_FLOW``: the routed
        flow, or the bridge's upstream flow. Classes ``0x3f``.
-     - The top of the usable range, downwards.
+     - The top of pattern 1, downwards.
    * - Stream entry of a port in the GEM bridge that also sends routed frames,
        while VLANs claim GEM flows
      - Upstream; the ingress port.
@@ -1358,11 +1407,11 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        frames none of them takes: the routed ones, which arrive in the VLAN
        of the link the session's address is handed on in, which the bridge
        does not carry.
-     - The top of the usable range, downwards.
+     - The top of pattern 1, downwards.
    * - Stream entry of a bridged port for one claimed VLAN
      - Upstream; the ingress port; a C-tag with that VID; no S-tag.
      - The stream of that VLAN's GEM interface. Classes ``0x3f``.
-     - The top of the usable range, downwards.
+     - The top of pattern 1, downwards.
    * - Upstream VLAN rule
      - Upstream; the ingress port; no tag, or a C-tag with the VID and the
        priority the rule names and no S-tag, or an S-tag with the VID and the
@@ -1372,7 +1421,8 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        rules"), and the stream of the GEM interface that claims the VID the
        operation writes in the outer tag, or else the one the rule's port's
        stream entry gives. Classes ``0x3f``.
-     - The bottom of the usable range, upwards.
+     - Pattern 0 for a rule on an S-tag, else pattern 1 below the stream
+       entries, in the order of the rules' tc priorities.
    * - Upstream VLAN rule into a VLAN whose priorities GEM interfaces divide,
        that keeps a priority it neither matches nor writes: eight entries
      - As the upstream VLAN rule, and one priority each
@@ -1381,13 +1431,13 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - The operation of the rule, and the stream of the GEM interface that
        claims that priority of the VID the operation writes; no stream for a
        priority no interface claims. Classes ``0x3f``.
-     - The bottom of the usable range, upwards.
+     - As the upstream VLAN rule; the eight lie together.
    * - Downstream VLAN rule
      - Downstream; no tag, or a C-tag with the VID and the priority the rule
        names and no S-tag, or an S-tag with the VID and the priority of the
        S-tag or of the C-tag behind it, and that C-tag if the rule names one.
      - The C-tag or S-tag operation of the rule, or both. Classes ``0x1f``.
-     - The bottom of the usable range, upwards.
+     - As the upstream VLAN rule.
 
 .. list-table::
    :header-rows: 1
@@ -1403,33 +1453,35 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        a port outside the GEM interfaces' bridge gets one entry giving its
        frames the routed upstream flow, if one is registered; a port inside that
        bridge gets one entry giving its frames the bridge's upstream flow while
-       no VLAN names a flow. Entries are allocated from the top of the usable
-       range downwards. A port for which the classifier has no room is left
-       without a stream, with a warning in the kernel log. When upstream GEM
-       interfaces claim VLANs, a bridged port gets one entry for each claimed
-       VLAN instead, and a frame in no claimed VLAN gets no stream (see the
-       *bridging* page, "Bridging the GEM ports"), unless a routed flow is
+       no VLAN names a flow. Entries are allocated from the top of pattern 1
+       downwards, after the VLAN rules of pattern 1 have moved down into the
+       free entries below them. A port for which the classifier has no room is
+       left without a stream, with a warning in the kernel log. When upstream
+       GEM interfaces claim VLANs, a bridged port gets one entry for each
+       claimed VLAN instead, and a frame in no claimed VLAN gets no stream (see
+       the *bridging* page, "Bridging the GEM ports"), unless a routed flow is
        registered: then the port also gets, above those entries, one giving
        the rest of its frames the routed flow.
      - T, M
      - T: bridged upstream traffic from the host reaches the far side of an OLT;
        in a routing test the routed port's entry is a ``VALID`` line in ``cf``
-       and the flow is forwarded. M: the per-VLAN entries, with two upstream
-       GEM interfaces in two VLANs, each VLAN's frames counted in its own GEM
-       port's upstream octets (the *bridging* page). T: with the GEM interface
-       of two PPPoE sessions bridged with the SFP port in VLANs 3001 and 3002,
-       the SFP port's entries were the routed one at 127 and the VLANs' at 126
-       and 125; 200 of 200 frames of 3001 crossed translated to 3002 and back,
-       and the sessions carried 933 Mb/s down and 929 up in hardware.
-   * - A VLAN rule of tc flower (see the *bridging* page, "VLAN tag
-       operations") becomes one entry (or eight, next row): the tag bits, and
-       the VID and priority the rule names, compared on the template of their
-       tag; the direction taken from the port (the PON
-       port is downstream, every other port upstream), and for an upstream rule
-       the port compared; the tag operation of its action; the action classes
-       as in the table above; and the entry taken from the bottom of the usable
-       range (``rtl9602c_flower_vlan()``). The driver keeps each entry as
-       composed (``cf_xlate``) and writes an upstream rule's stream with it
+       and the flow is forwarded. M: the per-VLAN entries, with two upstream GEM
+       interfaces in two VLANs, each VLAN's frames counted in its own GEM port's
+       upstream octets (the *bridging* page). T: with the GEM interface of two
+       PPPoE sessions bridged with the SFP port in VLANs 3001 and 3002, the SFP
+       port's entries were the routed one at 127 and the VLANs' at 126 and 125,
+       the top of the entries an earlier driver used; 200 of 200 frames of 3001
+       crossed translated to 3002 and back, and the sessions carried 933 Mb/s
+       down and 929 up in hardware.
+   * - A VLAN rule of tc flower (see the *bridging* page, "VLAN tag operations")
+       becomes one entry (or eight, next row): the tag bits, and the VID and
+       priority the rule names, compared on the template of their tag; the
+       direction taken from the port (the PON port is downstream, every other
+       port upstream), and for an upstream rule the port compared; the tag
+       operation of its action; the action classes as in the table above; and
+       the entry taken in its pattern, in the order of the rules' tc priorities
+       (the rows below; ``rtl9602c_flower_vlan()``). The driver keeps each entry
+       as composed (``cf_xlate``) and writes an upstream rule's stream with it
        (``rtl9602c_cf_write_xlate()``): the flow of the upstream GEM interface
        that is a member of the VLAN the rule writes, or else the flow that the
        stream entry of the rule's port gives, which the frame would have had
@@ -1452,11 +1504,13 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        A rule that rewrites an S-tag and matches the C-tag behind it stays one
        entry, as an entry compares the VID and priority of one tag. Each change
        of the stream entries lays the upstream rules out again, after the
-       stream entries (``rtl9602c_cf_xlate_relayout()``): a rule takes its
-       eight entries from the bottom of the usable range, keeping those it
-       has, and gives up all but its lowest when its VLAN is no longer
-       divided; the entries given up are retired after the rules are written.
-       A new rule that finds fewer than eight free is refused with
+       stream entries (``rtl9602c_cf_xlate_relayout()``): a rule keeps the
+       entries it has and takes the others right above them, the rules above
+       moving up, and gives up all but its lowest when its VLAN is no longer
+       divided. Its entries are written from the top down, so that its lowest
+       takes every priority until the others are in place, and those it gives
+       up are retired once its lowest takes every priority again. A new rule
+       whose pattern has fewer than eight entries free is refused with
        ``-ENOSPC``; a rule with an entry already keeps one, which gives the
        flow of priority 0, with a warning in the kernel log. The entries of a
        rule are told apart by its cookie and its port, as a rule of a block
@@ -1465,6 +1519,33 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - The KUnit cases ``rtl9602c_test_cf_*`` of ``rtl9602c-offload-test.c``
        check the entries composed and the layout, the depth limit included;
        not yet on the board (see "Open questions").
+   * - The VLAN rules of a pattern keep the order of their tc priorities, a
+       smaller value at a lower index: a new rule goes right above the rules
+       of its own value and of smaller ones, and a rule's entries lie
+       together. To make room the rules above move up into the free entries
+       above them, the topmost first, each copied to its new place before the
+       copy below it is replaced, and the copies left behind are retired last,
+       the topmost first, as the ACL makes room (``rtl9602c_cf_shift()``).
+       When too few entries are free above them, the rules first move down
+       into the free entries below them, the lowest first
+       (``rtl9602c_cf_compact()``); each rebuild of the stream entries does
+       the same with the rules of pattern 1, so that the stream entries find
+       the free entries at its top. A moved entry keeps its stream.
+     - T
+     - The KUnit cases ``rtl9602c_test_cf_order``, ``rtl9602c_test_cf_gather``
+       and ``rtl9602c_test_cf_relayout`` check the entries each rule takes.
+   * - The room of each pattern: pattern 0 has 32 entries for the VLAN rules
+       that compare an S-tag, both ways; a rule takes one, or eight when it is
+       written per priority, so four of those fill it. Pattern 1 has 224
+       entries for the other VLAN rules, both ways, and the stream entries,
+       which take one per port, or one per port and claimed VLAN or priority
+       of a VLAN (above). A rule that finds no room in its pattern is refused
+       with ``-ENOSPC`` and the messages of the *bridging* page, however much
+       room the other pattern has. Before the driver used the two patterns,
+       all of these shared the 128 entries below the field's old value.
+     - T
+     - The KUnit cases ``rtl9602c_test_cf_patterns`` and
+       ``rtl9602c_test_cf_depth``.
    * - The upstream and downstream directions are the only ones the classifier
        sees: a frame from the SFP port to the CPU crosses neither, so a
        translation cannot be observed on it.
@@ -1492,6 +1573,13 @@ Retiring entry i writes both words of its ones plane as 0
 (``rtl9602c_cf_invalidate()``). Purpose: the valid bit goes and the entry stops.
 (T)
 
+Moving a VLAN rule's entry from i to j (``rtl9602c_cf_move()``), to make room
+or to gather the free entries: retire j if it holds an entry, write the entry
+at j by the five steps, then leave i to the caller, who retires it or moves
+another entry there. Purpose: no frame meets half of two entries, and each rule
+is in force throughout, at the lowest of its copies. (I: the order is the
+driver's; that no frame goes astray while the entries move is not measured)
+
 The steps are checked by the stream entries doing their work: bridged traffic
 from the host reaches the far side of an OLT, a routing test and PPPoE over a
 routed port pass traffic, and a removed translation no longer shows ``VALID``.
@@ -1509,9 +1597,9 @@ engine's lock itself, so the view does not hold it.
 
    * - Output
      - Shows
-   * - ``N classifier entries, pattern-1 boundary B``
-     - The number of entries the driver uses, and
-       ``RTL9602C_CLS_CTRL_LAYOUT1_START``.
+   * - ``pattern-1 entries N, from B``
+     - ``RTL9602C_CLS_CTRL_PATTERN1_NUM`` as it reads, and the first entry of
+       pattern 1 that the driver uses (``cf_p1``); 224 and 32 after setup.
    * - ``cls cfg W  upstream permit V``
      - The whole ``RTL9602C_CLS_CTRL`` word, and its bits 1:0, the field that
        decides the fate of a frame that no entry matches.
@@ -3129,9 +3217,13 @@ state that the driver depends on.
 2. Mark the DSCP table switch-wide (``dscp_prio_mapping_is_global``) and give
    apptrust no owner. Purpose: one map serves the switch, and the first port to
    set a trust order becomes the owner of the weights. (T)
-3. Read ``RTL9602C_CLS_CTRL_LAYOUT1_START`` as the usable classifier depth and
-   log it (``classifier: 128 entries usable of 256``). Purpose: only the entries
-   below the boundary are written. (M)
+3. Write ``RTL9602C_CLS_PATTERN1_NUM`` (224) to
+   ``RTL9602C_CLS_CTRL_PATTERN1_NUM``, read it back, keep the first entry of
+   pattern 1 (``cf_p1``) and log the patterns (``classifier: entries 0 to 31 of
+   pattern 0, 32 to 255 of pattern 1``). Purpose: the driver owns the
+   patterns, whatever an earlier kernel left: the VLAN rules on an S-tag in
+   pattern 0 and the others with the stream entries in pattern 1 (see "The
+   classifier"). (I)
 4. Write ``RTL9602C_DOS_CHECK_CTRL``, ``RTL9602C_DOS_PORT_EN`` and the three
    flood thresholds to 0 and zero the driver's copy of the thresholds. Purpose:
    the checks start off, whatever the chip held before the driver started. (M)
@@ -3174,18 +3266,18 @@ state that the driver depends on.
 
 The steps are checked as follows. Step 1 by the meter interrupt: an exceeded
 meter is logged and counted in ``/proc/interrupts``. Step 2 by the scheduling
-checks, whose two classes differ only in DSCP. Step 3 by the boot log line. Step
-4 by a check enabled before a reload reading off after it, and step 5 by the
-classes, meters and latches read after a reload and after a full chip reset.
-Step 6 by ``qos`` and ``cf`` after a warm reboot from a kernel that had left
-rules, entries, maps and limits in force (see "Reach and state"). Step 7 by the
-floods of "The limit on frames to the CPU". Step 8 by the port matches that drop
-their traffic, step 9 by the bridge's group timers restarting on reports to a
-group in the table, and step 10 by the frame capture in drop mode. Step 11 by
-the board booting with the block off, step 12 by the latch register read after
-a reset and armed in mode none, and step 13 by the parameters and the region
-being there again after a reload. Step 14 by bridged upstream traffic and a
-routing test, which find the entries in ``cf``.
+checks, whose two classes differ only in DSCP. Step 3 is not checked yet (see
+"Open questions"). Step 4 by a check enabled before a reload reading off after
+it, and step 5 by the classes, meters and latches read after a reload and after
+a full chip reset. Step 6 by ``qos`` and ``cf`` after a warm reboot from a
+kernel that had left rules, entries, maps and limits in force (see "Reach and
+state"). Step 7 by the floods of "The limit on frames to the CPU". Step 8 by the
+port matches that drop their traffic, step 9 by the bridge's group timers
+restarting on reports to a group in the table, and step 10 by the frame capture
+in drop mode. Step 11 by the board booting with the block off, step 12 by the
+latch register read after a reset and armed in mode none, and step 13 by the
+parameters and the region being there again after a reload. Step 14 by bridged
+upstream traffic and a routing test, which find the entries in ``cf``.
 
 Measured, not driven
 ====================
@@ -3242,6 +3334,12 @@ Known limitations
   ``0x02600c`` and ``0x026010``, by any means other than the driver's, for
   instance through a mapping of the register window, has stalled the board until
   the soft-lockup detector reset it. The driver never reads them.
+- The VLAN rules that compare an S-tag have the 32 entries of the
+  classifier's pattern 0 to themselves, so four of them written per priority
+  fill it, however much room pattern 1 has; the other VLAN rules and the
+  stream entries share the 224 of pattern 1 (see "The classifier"). Making
+  room for a rule can move every rule above it in its pattern, an entry at a
+  time.
 
 Open questions
 ==============
@@ -3261,9 +3359,19 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - The entries from ``RTL9602C_CLS_CTRL_LAYOUT1_START`` up use another rule
-       layout, and the driver's depth limit is right ("Entries and rules").
-     - A frame test of an entry above the boundary.
+   * - ``RTL9602C_CLS_CTRL_PATTERN1_NUM`` counts the entries of pattern 1 from
+       the top of the table, and a rule of pattern 1 on template 0 keeps the
+       bits that the driver writes where pattern 0 has them ("Entries and
+       rules").
+     - The frame tests of the *bridging* page ("VLAN tag operations") and
+       bridged and routed traffic, through entries of pattern 1 after setup
+       wrote 224, with ``cf`` showing them at 32 upwards and the stream
+       entries at 255 downwards.
+   * - The lowest matching entry applies across the two patterns, so that a
+       VLAN rule on an S-tag in pattern 0 takes precedence over the port's
+       stream entry at the top of pattern 1 ("Entries and rules").
+     - Frames of an S-VID from the host under an upstream S-tag rule, arriving
+       at the far side of an OLT with the rule's tag operation.
    * - An upstream VLAN rule written as one entry per priority sends each
        priority up the GEM port of its entry's stream, and drops a priority
        whose entry has none ("What the driver writes").
@@ -3316,6 +3424,17 @@ Questions the code does not depend on
        and is cleared by writing ones ("Actions"; the interrupt is also a
        question on the *main* page).
      - A rule whose action raises the interrupt.
+   * - Whether in pattern 1 the VID and priority are those of the outer tag
+       whatever the templates say, which only a rule of pattern 1 on an S-tag
+       would show; and what the fields of pattern 1 that the driver does not
+       write compare: the TOS octet or GEM index in bits 30:23, the EtherType
+       in word 1, and the inner tag's TCI on template 1 ("Entries and
+       rules").
+     - Entries of pattern 1 written by hand in a test build, with frames that
+       differ in the field alone.
+   * - The value of ``RTL9602C_CLS_CTRL_PATTERN1_NUM`` out of reset, which an
+       earlier driver read as 128 after the boot loader ("Entries and rules").
+     - The field read after a reset by the watchdog, before setup writes it.
    * - Whether ``RTL9602C_ACL_TMPL_FIELD_CTAG`` holds the C-tag of a frame
        with an S-tag in front of it ("What the driver does with tc flower").
      - Frames of S-VID 200 in front of C-VID 410 under a ``pass`` on VID 410,

@@ -1902,8 +1902,8 @@ A step that belongs to another page is named and handed over.
    table engine reaches the VLAN entries where the driver expects them. A
    failure is logged and setup continues. (T)
 6. Set up the interrupt (see "Interrupt setup"). (T)
-7. Mark the DSCP map switch-wide, forget the apptrust owner and read the
-   classifier depth (*acl-qos*). (T)
+7. Mark the DSCP map switch-wide, forget the apptrust owner and write the
+   classifier's two patterns (*acl-qos*). (T; the patterns I, see *acl-qos*)
 8. Report the memory self-test (see "Access and identification"). (T)
 9. Switch the DoS checks off, with the flood thresholds at 0 in the registers
    and in the driver's copy (*acl-qos*). Purpose: no check enabled before the

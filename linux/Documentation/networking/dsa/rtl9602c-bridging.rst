@@ -2373,13 +2373,23 @@ priority 3 upstream, and both tags taken off again downstream::
      - Against an operator's OLT, a pass-through entry for the same VID at a
        lower index applied instead of the translation, until it was removed,
        after which PPPoE over the translated VLAN came up within 15 s.
-   * - tc rules take the lowest free entry and the stream entries of "Bridging
-       the GEM ports" take the highest, downward, so with the previous row a
-       user rule takes precedence over its port's stream entry.
-     - T
-     - The stream entry read back at the top index (see "Bridging the GEM
-       ports"); routing tests in which the routed port's stream entry is found
-       where the driver put it.
+   * - The stream entries of "Bridging the GEM ports" take the top of the
+       classifier's pattern 1, downward, and the tc rules the entries below
+       them: in pattern 1 a rule on a C-tag or an untagged frame, in pattern 0,
+       below pattern 1, a rule on an S-tag (see the *acl-qos* page, "The
+       classifier"). So with the previous row a user rule takes precedence
+       over its port's stream entry. The rules of a pattern keep the order of
+       their tc priorities, so of two rules that match one frame the one tc
+       takes first applies.
+     - T, I
+     - T: with an earlier driver, which took the rules from the bottom of its
+       128 entries, the stream entry read back at the top index (see "Bridging
+       the GEM ports"), and routing tests in which the routed port's stream
+       entry is found where the driver put it; the KUnit cases
+       ``rtl9602c_test_cf_order`` and ``rtl9602c_test_cf_patterns`` for the
+       order and the patterns. I: the entries of pattern 1, and the order
+       across the two patterns, are not yet on the board (see the *acl-qos*
+       page, "Open questions").
    * - An upstream rule therefore carries the stream itself: when an upstream
        GEM interface claims the VID that the rule's modify or push writes (see
        "Bridging the GEM ports"), the entry also sets
@@ -2488,15 +2498,16 @@ class* page).
        classifier, downward.
      - M
      - On a board provisioned by an OLT, the one entry read back at index 127,
-       the top of 128 usable, matching ingress port 0 and assigning the upstream
-       flow (debugfs ``rtl9602c/cf``); upstream frames from the host arrive at
-       the OLT. A second upstream GEM interface (Port-ID 300, made by hand on
-       the same T-CONT) that joined took the entry, and 200 untagged frames
-       from the host were counted in its upstream octets; when it left the
-       bridge, and again when it was deleted while in it, the entry named the
-       first interface's flow again and the frames arrived at the OLT. Before
-       the driver chose another interface, no entry remained once it had left,
-       and every upstream frame from the host was lost.
+       the top of the 128 entries an earlier driver used (the driver now takes
+       255, the top of pattern 1), matching ingress port 0 and assigning the
+       upstream flow (debugfs ``rtl9602c/cf``); upstream frames from the host
+       arrive at the OLT. A second upstream GEM interface (Port-ID 300, made by
+       hand on the same T-CONT) that joined took the entry, and 200 untagged
+       frames from the host were counted in its upstream octets; when it left
+       the bridge, and again when it was deleted while in it, the entry named
+       the first interface's flow again and the frames arrived at the OLT.
+       Before the driver chose another interface, no entry remained once it had
+       left, and every upstream frame from the host was lost.
    * - Once VLANs are claimed, one entry for each port and claimed VLAN instead,
        matching the ingress port and the C-tag's VID and assigning that VLAN's
        flow, with no entry for a VLAN that no upstream GEM interface claims. A
@@ -2721,6 +2732,11 @@ Known limitations
   there.
 - A router of the second protocol behind a GEM port that is a router port
   already takes effect at the next group change (see "Multicast snooping").
+- The tc rules on an S-tag have 32 classifier entries to themselves, eight
+  for a rule written per priority, and the other rules 224, shared with the
+  stream entries (see the *acl-qos* page, "The classifier"): a rule on an
+  S-tag finds no room once the 32 are taken, however many the others leave
+  free.
 
 Open questions
 ==============
@@ -2762,6 +2778,14 @@ Assumptions the driver depends on
        it that keeps the priority; frames of each priority from the host,
        counted in each port's upstream octets; the eight entries in ``cf``,
        and back to one when one interface takes every priority.
+   * - The rules on a C-tag or an untagged frame, in entries of the
+       classifier's pattern 1, match and act as the measured ones did in
+       pattern 0, and a rule on an S-tag in pattern 0 takes precedence over
+       its port's stream entry at the top of pattern 1 ("VLAN tag operations";
+       the *acl-qos* page, "The classifier").
+     - The frame tests of "VLAN tag operations" and of "Bridging the GEM
+       ports" again, with ``cf`` showing the rules at 32 upwards and the
+       stream entries at 255 downwards.
    * - ``RTL9602C_CLS_ACT_CPRI_SET`` with the priority 0 writes priority 0, so
        a pop and a push give a translated tag priority 0 ("VLAN tag
        operations").

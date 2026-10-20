@@ -1089,16 +1089,21 @@ enum rtl9602c_ptp_tc {
 
 /*
  * The classifier, whose rules are two entries as in the ACL; the lowest
- * matching entry applies. Entries from LAYOUT1_START up are matched with
- * another rule layout, taken to differ from the driver's (not verified), and
- * are not used.
+ * matching entry applies (measured). An entry's rule follows one of two
+ * patterns: PATTERN1_NUM is the number of entries at the top of the table
+ * that follow pattern 1, entry i when i >= 256 - PATTERN1_NUM, and the
+ * others follow pattern 0 (not verified; the field read 128, where this
+ * reading and that of a first entry agree). Setup writes
+ * RTL9602C_CLS_PATTERN1_NUM: the driver's entries that compare an S-tag in
+ * pattern 0, the others in pattern 1.
  */
 #define RTL9602C_TBLACC_CMD_TABLE_CLS_RULE	4
 #define RTL9602C_TBLACC_CMD_TABLE_CLS_ACT	5
 #define RTL9602C_CLS_RULE_ONES_PLANE		0x100
 #define RTL9602C_CLS_ENTRIES		256
 #define RTL9602C_CLS_CTRL			0x01600c
-#define RTL9602C_CLS_CTRL_LAYOUT1_START	GENMASK(12, 5)
+#define RTL9602C_CLS_CTRL_PATTERN1_NUM	GENMASK(12, 5)
+#define RTL9602C_CLS_PATTERN1_NUM		224
 
 /*
  * The classifier's actions on the C-tag apply to the PON port's frames only
@@ -1113,14 +1118,20 @@ enum rtl9602c_ptp_tc {
  * whether it carries an S-tag, which the switch recognises only on a port in
  * S-VLAN uplink mode (RTL9602C_SVLAN_UPLINK_PORTS). VID and PRI are those of
  * the tag that the entry's template takes them from, RTL9602C_CLS_TMPL_CFG
- * (all measured).
+ * (all measured in pattern 0). INTPRI is the frame's internal priority, which
+ * the driver does not compare. Pattern 1 keeps these bits where pattern 0 has
+ * them, and puts in bits 30:23 the IP TOS octet of an upstream frame or the
+ * GEM index of a downstream one (RULE1_TOS), which the driver does not
+ * compare either (not verified).
  */
 #define RTL9602C_CLS_RULE_DS		BIT(31)
 #define RTL9602C_CLS_RULE_CTAG	BIT(3)
 #define RTL9602C_CLS_RULE_STAG	BIT(4)
 #define RTL9602C_CLS_RULE_VID			GENMASK(22, 11)
 #define RTL9602C_CLS_RULE_PRI			GENMASK(10, 8)
+#define RTL9602C_CLS_RULE_INTPRI		GENMASK(7, 5)
 #define RTL9602C_CLS_RULE_UNI			GENMASK(2, 0)
+#define RTL9602C_CLS_RULE1_TOS		GENMASK(30, 23)
 #define RTL9602C_CLS_RULE_VLAN_CARE		(RTL9602C_CLS_RULE_CTAG | \
 					 RTL9602C_CLS_RULE_STAG | \
 					 RTL9602C_CLS_RULE_VID)
@@ -1175,7 +1186,13 @@ enum rtl9602c_ptp_tc {
 #define RTL9602C_CLS_ACT_EN_FLOW		BIT(5)
 #define RTL9602C_CLS_ACT_EN_OTHERS	GENMASK(4, 0)
 
-/* One bit per entry, its template, RTL9602C_CLS_TMPL_C or _S. */
+/*
+ * One bit per entry, its template: in pattern 0 RTL9602C_CLS_TMPL_C or _S,
+ * which RTL9602C_CLS_TMPL_CFG gives the tag of the VID and priority; in
+ * pattern 1 what rule word 1 holds, with 0 the EtherType and with 1 the TCI
+ * of the inner tag (not verified). The driver writes 0 for every entry of
+ * pattern 1.
+ */
 #define RTL9602C_CLS_ENTRY_TMPL	0x016010
 
 /*
@@ -2071,25 +2088,30 @@ struct rtl9602c_priv {
 	 * the VLAN whose upstream GEM interface gives an upstream rule its
 	 * stream, VLAN_N_VID for none; the port the rule is on, so that the
 	 * stream can be chosen again when the streams change; its template,
-	 * RTL9602C_CLS_TMPL_C or _S; and the priority the entry adds to the
+	 * RTL9602C_CLS_TMPL_C or _S; the priority the entry adds to the
 	 * rule's match when the rule is written as one entry per priority
-	 * (rtl9602c_cf_xlate_split()), -1 for none. The entries of one rule
-	 * share its cookie and port.
+	 * (rtl9602c_cf_xlate_split()), -1 for none; and the rule's tc
+	 * priority, which orders the rules of a pattern. The entries of one
+	 * rule share its cookie and port.
 	 */
 	struct rtl9602c_cf_xlate {
 		u32 value;
 		u32 care;
 		u32 act[3];
 		u16 out_vid;
+		u16 prio;
 		u8 port;
 		u8 tmpl;
 		s8 pcp;
 	} cf_xlate[RTL9602C_CLS_ENTRIES];
 
 	/**
-	 * @cf_entries: the classifier entries usable with the driver's layout
+	 * @cf_p1: the first classifier entry of pattern 1
+	 * (RTL9602C_CLS_CTRL_PATTERN1_NUM): the VLAN rules that compare an
+	 * S-tag take the entries below it, the other rules and the stream
+	 * entries those from it up
 	 */
-	unsigned int cf_entries;
+	unsigned int cf_p1;
 
 	/** @acl_lock: serialises the ACL's rules and templates */
 	struct mutex acl_lock;

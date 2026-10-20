@@ -428,9 +428,25 @@ static int rtl9602c_cf_invalidate(struct rtl9602c_priv *p, unsigned int idx)
  * written per priority, each recorded in p->cf_xlate[] with the rule's
  * cookie, which with its port tells its entries from those of other rules: a
  * rule of a block that several ports share reaches the driver once for each
- * port, with one cookie. The functions down to rtl9602c_cf_xlate_relayout()
- * change the bookkeeping only; their callers write and retire the entries.
+ * port, with one cookie. A rule that compares an S-tag takes entries of
+ * pattern 0, below p->cf_p1, whose templates choose the tag that the VID and
+ * the priority are taken from; every other rule takes entries of pattern 1,
+ * below the stream entries at its top (rtl9602c_cf_xlate_p1()). In each
+ * pattern the rules keep the order of their tc priorities, a smaller value
+ * at a lower index and a rule after those of its own value, as the lowest
+ * matching entry applies and tc takes the smaller value first; and a rule's
+ * entries lie together.
+ *
+ * The functions down to rtl9602c_cf_xlate_relayout() take a struct
+ * rtl9602c_cf_txn. They change the bookkeeping, and with its @hw the table as
+ * well, in an order that keeps every rule in force throughout, in at least one
+ * entry, and the rules in their order; without @hw, as in the KUnit tests,
+ * they change the bookkeeping only.
  */
+struct rtl9602c_cf_txn {
+	bool hw;
+	int err;
+};
 
 /* Whether entry @idx holds a part of the VLAN rule of @cookie on @port. */
 static bool rtl9602c_cf_xlate_of(const struct rtl9602c_priv *p,
@@ -441,42 +457,218 @@ static bool rtl9602c_cf_xlate_of(const struct rtl9602c_priv *p,
 	       p->cf_xlate[idx].port == port;
 }
 
-static void rtl9602c_cf_xlate_set(struct rtl9602c_priv *p, unsigned int idx,
-				  const struct rtl9602c_cf_xlate *x,
-				  unsigned long cookie, int pcp)
+/* Whether VLAN rule @x takes entries of pattern 1: it compares no S-tag. */
+static bool rtl9602c_cf_xlate_p1(const struct rtl9602c_cf_xlate *x)
 {
-	p->cf_xlate[idx] = *x;
-	p->cf_xlate[idx].pcp = pcp;
-	p->cf_cookie[idx] = cookie;
+	return !(x->value & x->care & RTL9602C_CLS_RULE_STAG);
+}
+
+/* The first entry of the VLAN rules of pattern 1, with @p1, or of pattern 0. */
+static unsigned int rtl9602c_cf_lo(const struct rtl9602c_priv *p, bool p1)
+{
+	return p1 ? p->cf_p1 : 0;
+}
+
+/*
+ * The end of the room of the VLAN rules of pattern 1, with @p1, or of pattern
+ * 0: in pattern 1 its lowest stream entry, as the stream entries take its top
+ * (rtl9602c_cf_sid_alloc()); in pattern 0 the first entry of pattern 1.
+ */
+static unsigned int rtl9602c_cf_top(const struct rtl9602c_priv *p, bool p1)
+{
+	if (!p1)
+		return p->cf_p1;
+	return find_next_bit(p->cf_sid_owned, RTL9602C_CLS_ENTRIES, p->cf_p1);
+}
+
+static void rtl9602c_cf_txn_err(struct rtl9602c_cf_txn *t, int err)
+{
+	if (err && !t->err)
+		t->err = err;
+}
+
+/* Retire entry @idx, in the bookkeeping and, with @t->hw, in the table. */
+static void rtl9602c_cf_txn_retire(struct rtl9602c_priv *p, unsigned int idx,
+				   struct rtl9602c_cf_txn *t)
+{
+	clear_bit(idx, p->cf_used);
+	if (t->hw)
+		rtl9602c_cf_txn_err(t, rtl9602c_cf_invalidate(p, idx));
+}
+
+/*
+ * Copy VLAN rule entry @from to @to: what @to held is retired first, so that
+ * no frame meets half of each, and @from keeps its copy until the caller
+ * retires it or copies another entry there.
+ */
+static void rtl9602c_cf_move(struct rtl9602c_priv *p, unsigned int from,
+			     unsigned int to, struct rtl9602c_cf_txn *t)
+{
+	if (test_bit(to, p->cf_used))
+		rtl9602c_cf_txn_retire(p, to, t);
+	p->cf_xlate[to] = p->cf_xlate[from];
+	p->cf_cookie[to] = p->cf_cookie[from];
+	set_bit(to, p->cf_used);
+	if (t->hw)
+		rtl9602c_cf_txn_err(t, rtl9602c_cf_write_xlate(p, to));
+}
+
+/*
+ * Free the @n entries from @at up, in a pattern whose rules end below @top:
+ * the entries from @at up to the @n-th free one move up past the free ones
+ * among them, the topmost first, each copied to its new place before the copy
+ * below it is replaced; then the copies left from @at up are retired, the
+ * topmost first. A frame meets each rule throughout, at the lowest of its
+ * copies, and the rules in their order, as in the ACL (rtl9602c_acl_place()).
+ * Return -ENOSPC, having moved nothing, when fewer than @n entries are free
+ * from @at up to @top.
+ */
+static int rtl9602c_cf_shift(struct rtl9602c_priv *p, unsigned int at,
+			     unsigned int n, unsigned int top,
+			     struct rtl9602c_cf_txn *t)
+{
+	u8 used[RTL9602C_CLS_ENTRIES];
+	unsigned int idx, c = 0, f = 0;
+
+	for (idx = at; idx < top && f < n; idx++) {
+		if (test_bit(idx, p->cf_used))
+			used[c++] = idx;
+		else
+			f++;
+	}
+	if (f < n)
+		return -ENOSPC;
+
+	while (c--)
+		if (used[c] != at + n + c)
+			rtl9602c_cf_move(p, used[c], at + n + c, t);
+	for (idx = at + n; idx-- > at;)
+		if (test_bit(idx, p->cf_used))
+			rtl9602c_cf_txn_retire(p, idx, t);
+	return 0;
+}
+
+/*
+ * Move the VLAN rule entries from @lo to @top down into the free entries below
+ * them, the lowest first: each is copied to its new place, with only free
+ * entries between, and then retired at the old one. The free entries then lie
+ * above the rules.
+ */
+static void rtl9602c_cf_compact(struct rtl9602c_priv *p, unsigned int lo,
+				unsigned int top, struct rtl9602c_cf_txn *t)
+{
+	unsigned int idx, to = lo;
+
+	for (idx = lo; idx < top; idx++) {
+		if (!test_bit(idx, p->cf_used))
+			continue;
+		if (idx != to) {
+			rtl9602c_cf_move(p, idx, to, t);
+			rtl9602c_cf_txn_retire(p, idx, t);
+		}
+		to++;
+	}
+}
+
+/*
+ * The entry above which the new entries of VLAN rule @x of @cookie go, among
+ * the rules from @lo to @top: the highest of the rule's own, or for a rule
+ * with none the highest of a rule of its tc priority or a smaller one; @lo - 1
+ * when there is none.
+ */
+static int rtl9602c_cf_after(const struct rtl9602c_priv *p,
+			     const struct rtl9602c_cf_xlate *x,
+			     unsigned long cookie, unsigned int lo,
+			     unsigned int top)
+{
+	int after = (int)lo - 1, own = -1;
+	unsigned int idx;
+
+	for (idx = lo; idx < top; idx++) {
+		if (!test_bit(idx, p->cf_used))
+			continue;
+		if (rtl9602c_cf_xlate_of(p, idx, cookie, x->port))
+			own = idx;
+		else if (p->cf_xlate[idx].prio <= x->prio)
+			after = idx;
+	}
+	return own >= 0 ? own : after;
+}
+
+/*
+ * Give VLAN rule @x of @cookie @n more entries in its pattern, right above
+ * its own or where its tc priority puts it (rtl9602c_cf_after()): the free
+ * entries there, and as many more as needed by moving the rules above up
+ * (rtl9602c_cf_shift()), after gathering the free entries of the pattern
+ * above its rules (rtl9602c_cf_compact()) when those above are too few.
+ * Return -ENOSPC when the pattern has fewer than @n free entries.
+ */
+static int rtl9602c_cf_take(struct rtl9602c_priv *p,
+			    const struct rtl9602c_cf_xlate *x,
+			    unsigned long cookie, unsigned int n,
+			    struct rtl9602c_cf_txn *t)
+{
+	const bool p1 = rtl9602c_cf_xlate_p1(x);
+	const unsigned int lo = rtl9602c_cf_lo(p, p1);
+	const unsigned int top = rtl9602c_cf_top(p, p1);
+	unsigned int at, next, k, pass;
+
+	for (pass = 0; pass < 2; pass++) {
+		if (pass)
+			rtl9602c_cf_compact(p, lo, top, t);
+		at = rtl9602c_cf_after(p, x, cookie, lo, top) + 1;
+		next = find_next_bit(p->cf_used, top, at);
+		if (next - at >= n ||
+		    !rtl9602c_cf_shift(p, next, n - (next - at), top, t))
+			break;
+	}
+	if (pass == 2)
+		return -ENOSPC;
+
+	for (k = at; k < at + n; k++) {
+		p->cf_xlate[k] = *x;
+		p->cf_cookie[k] = cookie;
+		set_bit(k, p->cf_used);
+	}
+	return 0;
 }
 
 /*
  * Lay out VLAN rule @x of @cookie, a copy and not one of p->cf_xlate[]: give
  * it one entry, or one per priority when it is written so
- * (rtl9602c_cf_xlate_split()), and record it in each. The lowest of the
- * entries it has are kept, more are taken from the bottom of the usable range,
- * and the priorities go to the entries in index order. Each stream entry is
- * the highest entry free when it is taken, so every free entry lies below the
- * stream entries, and so does every entry taken here. The entries the rule no
- * longer needs are given up and added to @stale, and an entry taken here is
- * taken out of it. When the classifier has no room for the entries per
- * priority, a new rule is refused and a rule with entries keeps one, which
- * gives the flow of priority 0 (rtl9602c_cf_xlate_flow()), with a warning.
+ * (rtl9602c_cf_xlate_split()), and record it in each. The entries it has are
+ * kept, from the lowest; more are taken above them, or for a new rule where
+ * its tc priority puts it (rtl9602c_cf_take()); and the priorities go to its
+ * entries in index order, so that a layout again moves nothing. With @t->hw
+ * its entries are then written, the topmost first, so that the lowest, which
+ * a rule that takes more entries keeps, still takes every priority until the
+ * others are in place; and then the entries it no longer needs are retired,
+ * the topmost first, once its lowest takes every priority again. When its
+ * pattern has no room for the entries per priority, a new rule is refused
+ * and a rule with entries keeps one, which gives the flow of priority 0
+ * (rtl9602c_cf_xlate_flow()), with a warning.
  *
  * Return: the number of entries the rule has now, or -ENOSPC.
  */
 static int rtl9602c_cf_xlate_layout(struct rtl9602c_priv *p,
 				    const struct rtl9602c_cf_xlate *x,
-				    unsigned long cookie, unsigned long *stale)
+				    unsigned long cookie,
+				    struct rtl9602c_cf_txn *t)
 {
-	unsigned int idx, have = 0, need, spare, n = 0;
+	const bool p1 = rtl9602c_cf_xlate_p1(x);
+	const unsigned int lo = rtl9602c_cf_lo(p, p1);
+	const unsigned int top = rtl9602c_cf_top(p, p1);
+	unsigned int idx, have = 0, need, spare = 0, n = 0;
+	DECLARE_BITMAP(stale, RTL9602C_CLS_ENTRIES);
 
-	for_each_set_bit(idx, p->cf_used, p->cf_entries)
-		if (rtl9602c_cf_xlate_of(p, idx, cookie, x->port))
+	for (idx = lo; idx < top; idx++) {
+		if (!test_bit(idx, p->cf_used))
+			spare++;
+		else if (rtl9602c_cf_xlate_of(p, idx, cookie, x->port))
 			have++;
+	}
 
 	need = rtl9602c_cf_xlate_split(p, x) ? 8 : 1;
-	spare = p->cf_entries - bitmap_weight(p->cf_used, p->cf_entries);
 	if (need > have && need - have > spare) {
 		if (!have)
 			return -ENOSPC;
@@ -484,51 +676,52 @@ static int rtl9602c_cf_xlate_layout(struct rtl9602c_priv *p,
 			x->out_vid);
 		need = 1;
 	}
+	if (need > have && rtl9602c_cf_take(p, x, cookie, need - have, t))
+		return -ENOSPC;
 
-	/* The lowest entries the rule has are kept, and the rest given up. */
-	for_each_set_bit(idx, p->cf_used, p->cf_entries) {
+	/*
+	 * The priorities in index order, so that a layout again moves none;
+	 * the entries beyond the rule's need given up.
+	 */
+	bitmap_zero(stale, RTL9602C_CLS_ENTRIES);
+	for (idx = lo; idx < top; idx++) {
 		if (!rtl9602c_cf_xlate_of(p, idx, cookie, x->port))
 			continue;
 		if (n < need) {
-			n++;
-			continue;
+			p->cf_xlate[idx] = *x;
+			p->cf_xlate[idx].pcp = need > 1 ? (int)n : -1;
+		} else {
+			set_bit(idx, stale);
 		}
-		clear_bit(idx, p->cf_used);
-		set_bit(idx, stale);
-	}
-	for (; n < need; n++) {
-		idx = find_first_zero_bit(p->cf_used, p->cf_entries);
-		set_bit(idx, p->cf_used);
-		clear_bit(idx, stale);
-		rtl9602c_cf_xlate_set(p, idx, x, cookie, -1);
-	}
-
-	/* The priorities in index order, so that a layout again moves none. */
-	n = 0;
-	for_each_set_bit(idx, p->cf_used, p->cf_entries) {
-		if (!rtl9602c_cf_xlate_of(p, idx, cookie, x->port))
-			continue;
-		rtl9602c_cf_xlate_set(p, idx, x, cookie, need > 1 ? (int)n : -1);
 		n++;
 	}
+
+	for (idx = top; idx-- > lo;) {
+		if (!t->hw || test_bit(idx, stale) ||
+		    !rtl9602c_cf_xlate_of(p, idx, cookie, x->port))
+			continue;
+		rtl9602c_cf_txn_err(t, rtl9602c_cf_write_xlate(p, idx));
+	}
+	for (idx = top; idx-- > lo;)
+		if (test_bit(idx, stale))
+			rtl9602c_cf_txn_retire(p, idx, t);
 	return need;
 }
 
 /*
- * Give up every entry of the VLAN rule of @cookie on @port, adding them to
- * @stale. Return how many there were.
+ * Retire every entry of the VLAN rule of @cookie on @port. Return how many
+ * there were.
  */
 static unsigned int rtl9602c_cf_xlate_forget(struct rtl9602c_priv *p,
 					     unsigned long cookie, int port,
-					     unsigned long *stale)
+					     struct rtl9602c_cf_txn *t)
 {
 	unsigned int idx, n = 0;
 
-	for_each_set_bit(idx, p->cf_used, p->cf_entries) {
+	for (idx = RTL9602C_CLS_ENTRIES; idx-- > 0;) {
 		if (!rtl9602c_cf_xlate_of(p, idx, cookie, port))
 			continue;
-		clear_bit(idx, p->cf_used);
-		set_bit(idx, stale);
+		rtl9602c_cf_txn_retire(p, idx, t);
 		n++;
 	}
 	return n;
@@ -536,68 +729,34 @@ static unsigned int rtl9602c_cf_xlate_forget(struct rtl9602c_priv *p,
 
 /*
  * Lay out every upstream VLAN rule again (rtl9602c_cf_xlate_layout()) for the
- * claims gem_vid_flow holds now: a rule into a VLAN whose priorities have come
- * to be divided takes an entry per priority, and one into a VLAN no longer
- * divided gives up all but one. The rules are taken in the order of their
- * lowest entries, and the entries given up are added to @stale.
+ * claims gem_vid_flow holds now and the streams the ports' stream entries
+ * give, and with @t->hw write it: a rule into a VLAN whose priorities have
+ * come to be divided takes an entry per priority, one into a VLAN no longer
+ * divided gives up all but one, and every rule is written with the streams of
+ * now. The rules are taken from the bottom of the table up, each once, after
+ * the highest entry of the one before, which stays below those not yet taken
+ * as they move.
  */
 static void rtl9602c_cf_xlate_relayout(struct rtl9602c_priv *p,
-				       unsigned long *stale)
+				       struct rtl9602c_cf_txn *t)
 {
-	DECLARE_BITMAP(heads, RTL9602C_CLS_ENTRIES);
 	struct rtl9602c_cf_xlate x;
-	unsigned int idx, h;
+	unsigned long cookie;
+	unsigned int idx, k;
 
-	bitmap_zero(heads, RTL9602C_CLS_ENTRIES);
-	for_each_set_bit(idx, p->cf_used, p->cf_entries) {
-		if (!p->cf_cookie[idx] ||
+	for (idx = 0; idx < RTL9602C_CLS_ENTRIES; idx++) {
+		if (!test_bit(idx, p->cf_used) ||
+		    test_bit(idx, p->cf_sid_owned) ||
 		    rtl9602c_port_is_downstream(p->cf_xlate[idx].port))
 			continue;
-		for_each_set_bit(h, heads, idx)
-			if (rtl9602c_cf_xlate_of(p, h, p->cf_cookie[idx],
-						 p->cf_xlate[idx].port))
-				break;
-		if (h >= idx)
-			set_bit(idx, heads);
-	}
-
-	for_each_set_bit(idx, heads, RTL9602C_CLS_ENTRIES) {
 		x = p->cf_xlate[idx];
 		x.pcp = -1;
-		rtl9602c_cf_xlate_layout(p, &x, p->cf_cookie[idx], stale);
+		cookie = p->cf_cookie[idx];
+		rtl9602c_cf_xlate_layout(p, &x, cookie, t);
+		for (k = 0; k < RTL9602C_CLS_ENTRIES; k++)
+			if (rtl9602c_cf_xlate_of(p, k, cookie, x.port))
+				idx = k;
 	}
-}
-
-/* Write every entry of the VLAN rule of @cookie on @port. */
-static int rtl9602c_cf_write_rule(struct rtl9602c_priv *p,
-				  unsigned long cookie, int port)
-{
-	unsigned int idx;
-	int err = 0, ret;
-
-	for_each_set_bit(idx, p->cf_used, p->cf_entries) {
-		if (!rtl9602c_cf_xlate_of(p, idx, cookie, port))
-			continue;
-		ret = rtl9602c_cf_write_xlate(p, idx);
-		if (ret && !err)
-			err = ret;
-	}
-	return err;
-}
-
-/* Retire the entries of @stale. */
-static int rtl9602c_cf_retire(struct rtl9602c_priv *p,
-			      const unsigned long *stale)
-{
-	unsigned int idx;
-	int err = 0, ret;
-
-	for_each_set_bit(idx, stale, RTL9602C_CLS_ENTRIES) {
-		ret = rtl9602c_cf_invalidate(p, idx);
-		if (ret && !err)
-			err = ret;
-	}
-	return err;
 }
 
 /*
@@ -607,12 +766,11 @@ static int rtl9602c_cf_retire(struct rtl9602c_priv *p,
 static int rtl9602c_cf_xlate_del(struct rtl9602c_priv *p, unsigned long cookie,
 				 int port)
 {
-	DECLARE_BITMAP(stale, RTL9602C_CLS_ENTRIES);
+	struct rtl9602c_cf_txn t = { .hw = true };
 
-	bitmap_zero(stale, RTL9602C_CLS_ENTRIES);
-	if (!rtl9602c_cf_xlate_forget(p, cookie, port, stale))
+	if (!rtl9602c_cf_xlate_forget(p, cookie, port, &t))
 		return -ENOENT;
-	return rtl9602c_cf_retire(p, stale);
+	return t.err;
 }
 
 /*
@@ -661,18 +819,21 @@ static int rtl9602c_cf_write_sid_vlan(struct rtl9602c_priv *p, unsigned int idx,
 }
 
 /*
- * Stream entries are taken from the top of the usable range downwards and
- * translations from the bottom: the lowest matching entry applies, so a
- * translation overrides its port's stream entry.
+ * Stream entries are taken from the top of pattern 1 downwards, and the VLAN
+ * rules of pattern 1 sit below them, those of pattern 0 below the pattern: the
+ * lowest matching entry applies, so a VLAN rule overrides its port's stream
+ * entry. The rules of pattern 1 are gathered at its bottom before the stream
+ * entries are taken (rtl9602c_cf_sid_refresh()), so that the highest free
+ * entry lies above them.
  */
 static int rtl9602c_cf_sid_alloc(struct rtl9602c_priv *p)
 {
 	int idx;
 
-	for (idx = p->cf_entries - 1; idx >= 0; idx--)
+	for (idx = RTL9602C_CLS_ENTRIES - 1; idx >= (int)p->cf_p1; idx--)
 		if (!test_bit(idx, p->cf_used))
 			break;
-	if (idx < 0)
+	if (idx < (int)p->cf_p1)
 		return -ENOSPC;
 
 	set_bit(idx, p->cf_used);
@@ -685,7 +846,7 @@ static void rtl9602c_cf_sid_release(struct rtl9602c_priv *p)
 {
 	unsigned int idx;
 
-	for_each_set_bit(idx, p->cf_sid_owned, p->cf_entries) {
+	for_each_set_bit(idx, p->cf_sid_owned, RTL9602C_CLS_ENTRIES) {
 		rtl9602c_cf_invalidate(p, idx);
 		clear_bit(idx, p->cf_used);
 	}
@@ -751,19 +912,26 @@ static int rtl9602c_cf_sid_vlan(struct rtl9602c_priv *p, int port, u16 vid,
  * stream, and a frame without one is lost (rtl9602c_cf_xlate_entry()). While
  * no VLAN claims a GEM flow, the bridge's own entry keys on the port as well
  * and the routed frames take the bridge's flow. A port the classifier has no
- * room for is left without a stream, with a warning. The upstream VLAN rules
- * are then laid out and written again (rtl9602c_cf_xlate_relayout()).
+ * room for is left without a stream, with a warning. The VLAN rules of pattern
+ * 1 are first gathered at its bottom, so that the stream entries take its
+ * top, and the upstream VLAN rules are then laid out and written again
+ * (rtl9602c_cf_xlate_relayout()).
  *
  * Called at setup, on each bridge membership change, on each VLAN or priority
  * change of an upstream GEM interface and on each change of the routed flow.
  */
 void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 {
-	DECLARE_BITMAP(stale, RTL9602C_CLS_ENTRIES);
+	struct rtl9602c_cf_txn t = { .hw = true };
 	unsigned int claimed = 0;
 	struct dsa_port *dp;
-	unsigned int vid, idx;
+	unsigned int vid;
 
+	/*
+	 * The rules of pattern 1 down to its bottom, while the streams are
+	 * those they were written with, so that a move changes none.
+	 */
+	rtl9602c_cf_compact(p, p->cf_p1, rtl9602c_cf_top(p, true), &t);
 	rtl9602c_cf_sid_release(p);
 
 	for (vid = 0; vid < VLAN_N_VID; vid++)
@@ -863,21 +1031,11 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 	 * (rtl9602c_cf_xlate_split()): the claims and the streams just computed
 	 * may have changed either. Each rule is laid out again, after the
 	 * stream entries, so that a rule rather than a VLAN goes short when the
-	 * classifier is full, and written again; the entries given up are
-	 * retired last, as each lies above an entry of its rule that matches
-	 * what it matched.
+	 * classifier is full, and written again.
 	 */
-	bitmap_zero(stale, RTL9602C_CLS_ENTRIES);
-	rtl9602c_cf_xlate_relayout(p, stale);
-	for_each_set_bit(idx, p->cf_used, p->cf_entries) {
-		if (!p->cf_cookie[idx] ||
-		    rtl9602c_port_is_downstream(p->cf_xlate[idx].port))
-			continue;
-		if (rtl9602c_cf_write_xlate(p, idx))
-			pr_warn("classifier entry %u was not written\n", idx);
-	}
-	if (rtl9602c_cf_retire(p, stale))
-		pr_warn("classifier entries a VLAN rule gave up were not all retired\n");
+	rtl9602c_cf_xlate_relayout(p, &t);
+	if (t.err)
+		pr_warn("classifier entries of VLAN rules were not all written\n");
 }
 
 /*
@@ -3574,7 +3732,9 @@ refuse:
  * A VLAN rule of tc flower as a classifier entry, on the ingress of the SFP
  * port for upstream frames, of its own port only, or of the PON port for
  * downstream ones. The match is that of rtl9602c_flower_vlan_match(), the
- * actions those of rtl9602c_flower_vlan_act().
+ * actions those of rtl9602c_flower_vlan_act(). The entry goes in pattern 0
+ * for a rule that compares an S-tag and in pattern 1 for the others, in the
+ * order of the rules' tc priorities (rtl9602c_cf_xlate_layout()).
  *
  * An upstream rule into a VLAN whose priorities GEM interfaces divide, that
  * keeps a priority it neither matches nor writes, becomes one entry per
@@ -3587,8 +3747,9 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 	struct flow_rule *rule = flow_cls_offload_flow_rule(cls);
 	struct rtl9602c_cf_xlate x = {
 		.out_vid = VLAN_N_VID, .port = port, .pcp = -1,
+		.prio = cls->common.prio,
 	};
-	DECLARE_BITMAP(stale, RTL9602C_CLS_ENTRIES);
+	struct rtl9602c_cf_txn t = { .hw = true };
 	u16 outer;
 	int err;
 
@@ -3604,12 +3765,8 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 	if (err)
 		return err;
 
-	/*
-	 * From the bottom of the usable range, below the stream entries: one
-	 * entry, or one per priority (rtl9602c_cf_xlate_layout()).
-	 */
-	bitmap_zero(stale, RTL9602C_CLS_ENTRIES);
-	err = rtl9602c_cf_xlate_layout(p, &x, cls->cookie, stale);
+	/* One entry, or one per priority, written in place. */
+	err = rtl9602c_cf_xlate_layout(p, &x, cls->cookie, &t);
 	if (err < 0) {
 		if (rtl9602c_cf_xlate_split(p, &x))
 			NL_SET_ERR_MSG_MOD(extack,
@@ -3618,14 +3775,10 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 			NL_SET_ERR_MSG_MOD(extack, "the classifier is full");
 		return err;
 	}
-
-	err = rtl9602c_cf_write_rule(p, cls->cookie, port);
-	if (!err)
-		err = rtl9602c_cf_retire(p, stale);
-	if (err) {
+	if (t.err) {
 		rtl9602c_cf_xlate_del(p, cls->cookie, port);
 		NL_SET_ERR_MSG_MOD(extack, "the classifier did not answer");
-		return err;
+		return t.err;
 	}
 	return 0;
 }
@@ -7116,14 +7269,15 @@ static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 DEFINE_SHOW_ATTRIBUTE(rtl9602c_qos);
 
 /*
- * cf: the usable entry count and the layout boundary; the classifier's control
- * word, with its bits 1:0, which decide the fate of a frame no entry matches (2
- * drops it, the other values let it through); the two templates' sources of
- * VID and priority (RTL9602C_CLS_TMPL_CFG); then every entry whose ones plane
- * is valid or has a non-zero word 0: the ones plane, the zeros plane, the three
- * action words, the action classes, "+sid" when stream assignment is among
- * them, the template bit and VALID. Each read goes through the table engine,
- * which takes table_lock itself.
+ * cf: the number of entries of pattern 1, as RTL9602C_CLS_CTRL_PATTERN1_NUM
+ * holds it, and the first of them; the classifier's control word, with its
+ * bits 1:0, which decide the fate of a frame no entry matches (2 drops it, the
+ * other values let it through); the two templates' sources of VID and
+ * priority (RTL9602C_CLS_TMPL_CFG); then every entry whose ones plane is valid
+ * or has a non-zero word 0: the ones plane, the zeros plane, the three action
+ * words, the action classes, "+sid" when stream assignment is among them, the
+ * template bit and VALID. Each read goes through the table engine, which takes
+ * table_lock itself.
  */
 static void rtl9602c_cf_one(struct rtl9602c_priv *p, struct seq_file *s,
 			    unsigned int idx)
@@ -7154,10 +7308,10 @@ static int rtl9602c_cf_show(struct seq_file *s, void *unused)
 	struct rtl9602c_priv *p = s->private;
 	unsigned int idx, shown = 0;
 
-	seq_printf(s, "%u classifier entries, pattern-1 boundary %lu\n",
-		   p->cf_entries,
-		   FIELD_GET(RTL9602C_CLS_CTRL_LAYOUT1_START,
-			     rtl9602c_r(p, RTL9602C_CLS_CTRL)));
+	seq_printf(s, "pattern-1 entries %lu, from %u\n",
+		   FIELD_GET(RTL9602C_CLS_CTRL_PATTERN1_NUM,
+			     rtl9602c_r(p, RTL9602C_CLS_CTRL)),
+		   p->cf_p1);
 	seq_printf(s, "cls cfg %08x  upstream permit %lu\n",
 		   rtl9602c_r(p, RTL9602C_CLS_CTRL),
 		   rtl9602c_r(p, RTL9602C_CLS_CTRL) & GENMASK(1, 0));

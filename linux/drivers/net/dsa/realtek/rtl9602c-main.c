@@ -1581,17 +1581,24 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	p->apptrust_port = -1;
 
 	/*
-	 * Classifier entries from RTL9602C_CLS_CTRL_LAYOUT1_START up are
-	 * matched with another rule layout, taken to differ from the one the
-	 * driver writes (not verified), so only the entries below it are
-	 * used; all of them if the field reads 0. It reads 128 on this chip.
+	 * The classifier's entries follow pattern 1 from the top down, as many
+	 * as RTL9602C_CLS_PATTERN1_NUM, whatever the field held, written before
+	 * every entry is retired (rtl9602c_filter_qos_reset()): the VLAN rules
+	 * that compare an S-tag take the entries of pattern 0 below, whose
+	 * templates choose the tag, and the others and the stream entries
+	 * those of pattern 1.
 	 */
-	p->cf_entries = FIELD_GET(RTL9602C_CLS_CTRL_LAYOUT1_START,
-				  rtl9602c_r(p, RTL9602C_CLS_CTRL));
-	if (!p->cf_entries || p->cf_entries > RTL9602C_CLS_ENTRIES)
-		p->cf_entries = RTL9602C_CLS_ENTRIES;
-	pr_info("classifier: %u entries usable of %u\n", p->cf_entries,
-		RTL9602C_CLS_ENTRIES);
+	rtl9602c_rmw(p, RTL9602C_CLS_CTRL, RTL9602C_CLS_CTRL_PATTERN1_NUM,
+		     FIELD_PREP(RTL9602C_CLS_CTRL_PATTERN1_NUM,
+				RTL9602C_CLS_PATTERN1_NUM));
+	i = FIELD_GET(RTL9602C_CLS_CTRL_PATTERN1_NUM,
+		      rtl9602c_r(p, RTL9602C_CLS_CTRL));
+	if (i != RTL9602C_CLS_PATTERN1_NUM)
+		pr_warn("classifier: %u entries of pattern 1 written, %u read\n",
+			RTL9602C_CLS_PATTERN1_NUM, i);
+	p->cf_p1 = RTL9602C_CLS_ENTRIES - i;
+	pr_info("classifier: entries 0 to %d of pattern 0, %u to %u of pattern 1\n",
+		(int)p->cf_p1 - 1, p->cf_p1, RTL9602C_CLS_ENTRIES - 1);
 
 	/*
 	 * The verdict of the self-test the chip runs over its internal
