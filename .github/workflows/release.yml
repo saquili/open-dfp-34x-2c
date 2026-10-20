@@ -223,8 +223,25 @@ jobs:
           ${GITHUB_RUN_ID}), and tested on one stick and one line before
           they were published.
 
+          > [!WARNING]
+          > **Take great care, and keep a backup first.** The install is not
+          > expected to remove your data or settings: it writes this system
+          > into the bank the shipped firmware does not run from, and leaves
+          > the shipped firmware's bank and its settings as they were; this
+          > system keeps its own settings beside them. But these are test
+          > builds, tried on few sticks, so be careful. Before the install,
+          > write down what the shipped firmware's pages show and you would
+          > need again: the line's identity (the GPON serial number, and the
+          > PLOAM password or LOID if your line uses one), the MAC address and
+          > any setting you changed. After it, copy the whole flash from the
+          > panel before anything else (install guide, step 6).
+
+          Start with the install guide, docs/handbook/install-guide.rst: the
+          install, the first sign-in, an update and each way back, step by
+          step.
+
           - \`web-install.tar\`: installs this system through the shipped
-            firmware's web page (docs/handbook/updating.rst).
+            firmware's web page (docs/handbook/install-guide.rst).
           - \`update.bin\`: updates a stick that runs this system, from its
             panel or with \`onu-update write\`.
           - \`k0.uImage\`, \`r0.squashfs\`: the two images, for the bench

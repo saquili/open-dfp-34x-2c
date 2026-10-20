@@ -143,6 +143,14 @@ them from the shipped firmware's files:
   page another address, the panel is at that one, and the router needs an
   address of its network in the steps below.
 
+The install is not expected to remove anything the shipped firmware keeps:
+its bank stays as it was (step 3), and this system keeps its own settings
+beside the shipped firmware's, which it does not write. These are test builds,
+though, tried on few sticks: while its page is open, write down what it shows
+and you would need again, the line's identity (the GPON serial number, and the
+PLOAM password or LOID if your line uses one), the MAC address and any setting
+you changed. Step 6 then keeps a copy of the whole flash.
+
 Step 3: Install the package
 ===========================
 

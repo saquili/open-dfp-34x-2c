@@ -315,6 +315,14 @@ Before you install
   <docs/handbook/install-guide.rst>`__ takes a stick through the install, the
   first sign-in, an update and the ways back, step by step, with what to do
   when a step fails.
+* **Take great care, and keep a backup.** The install is not expected to
+  remove data or settings: the shipped firmware stays in its bank with its
+  settings ("Two ways in", below). But these are test builds, tried on few
+  sticks. Before the install, write down what the shipped firmware's pages
+  show and you would need again: the line's identity (the GPON serial number,
+  and the PLOAM password or LOID if your line uses one), the MAC address and
+  any setting you changed. After it, copy the whole flash before anything
+  else (below).
 * **Take the files from a release** (`Releases`_), and check them against
   its ``SHA256SUMS`` before you install them.
 * **The sticks tested here do not carry the host's identity page as
