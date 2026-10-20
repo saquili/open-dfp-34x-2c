@@ -4,10 +4,12 @@
 /*
  * pon: show the PON devices of the kernel and their ONU through the "pon"
  * generic netlink family: the activation state, the identifiers the OLT
- * assigned, the alarms, the counters and the T-CONTs. "pon monitor" prints
+ * assigned, the Port-IDs it encrypts, the alarms, the counters and the
+ * T-CONTs. "pon monitor" prints
  * every change the kernel announces, with the time it came; "pon gem" lists
  * the GEM interfaces, from the kernel's links, with the upstream priorities,
- * queue, weight and rates of those that carry traffic upstream.
+ * queue, weight and rates of those that carry traffic upstream, and whether
+ * the OLT encrypts each, from the PON devices' reports.
  *
  * An ONU that the OLT disabled with Disable_Serial_Number stays disabled, in
  * O7 with its laser off, even across a power-off, until the OLT enables it
@@ -321,27 +323,61 @@ static int enable_by_hand(void)
 	return rc;
 }
 
+/* A GEM interface, marked encrypted when a PON device of @data says so. */
 static int gem_cb(const struct nlmsghdr *nlh, void *data)
 {
+	const struct dump *d = data;
 	struct gem_link g;
 	int rc = gem_link_parse(nlh, &g);
 
-	(void)data;
 	if (rc < 0)
 		return MNL_CB_ERROR;
-	if (rc)
-		gem_link_print(stdout, &g);
+	if (!rc)
+		return MNL_CB_OK;
+	for (size_t i = 0; i < d->ndev; i++)
+		if (pon_dev_encrypted(&d->dev[i], g.port_id))
+			g.encrypted = true;
+	gem_link_print(stdout, &g);
 	return MNL_CB_OK;
 }
 
-/* Every GEM interface, one line each, from a dump of the links. */
-static int show_gems(void)
+/*
+ * The PON devices, for the Port-IDs the OLT encrypts; none when the kernel
+ * has no "pon" family or does not answer, and the GEM interfaces are then
+ * listed without them.
+ */
+static void gem_encryption(struct dump *d)
 {
 	char buf[MNL_SOCKET_BUFFER_SIZE];
-	struct mnl_socket *nl = mnl_socket_open(NETLINK_ROUTE);
+	struct mnl_socket *nl = mnl_socket_open(NETLINK_GENERIC);
+	struct family fam;
+
+	memset(&fam, 0, sizeof(fam));
+	if (nl && mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) == 0 &&
+	    genl_resolve(nl, PON_FAMILY_NAME, PON_MCGRP_MONITOR, &fam.id,
+			 &fam.monitor) == 0)
+		(void)genl_talk(nl, genl_request(buf, fam.id, PON_CMD_DEV_GET,
+						 NLM_F_DUMP, 2),
+				dev_cb, d);
+	if (nl)
+		mnl_socket_close(nl);
+}
+
+/*
+ * Every GEM interface, one line each, from a dump of the links, with whether
+ * the OLT encrypts it.
+ */
+static int show_gems(void)
+{
+	static struct dump d;
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct mnl_socket *nl;
 	struct nlmsghdr *nlh;
 	struct ifinfomsg *ifm;
 	int err;
+
+	gem_encryption(&d);
+	nl = mnl_socket_open(NETLINK_ROUTE);
 
 	if (!nl || mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) < 0) {
 		fprintf(stderr, "pon: no route netlink: %s\n", strerror(errno));
@@ -356,7 +392,7 @@ static int show_gems(void)
 	ifm = mnl_nlmsg_put_extra_header(nlh, sizeof(*ifm));
 	ifm->ifi_family = AF_UNSPEC;
 
-	err = genl_talk(nl, nlh, gem_cb, NULL);
+	err = genl_talk(nl, nlh, gem_cb, &d);
 	mnl_socket_close(nl);
 	if (err) {
 		fprintf(stderr, "pon: the kernel did not list its links: %s\n",
@@ -376,8 +412,9 @@ static int print_usage(void)
 		"                      a restart, in the configuration store\n"
 		"       pon enable     forget the OLT's disable, by hand\n"
 		"       pon gem        the GEM interfaces: Port-ID, direction,\n"
-		"                      T-CONT, multicast, and upstream the\n"
-		"                      priorities, queue, weight and rates\n");
+		"                      T-CONT, multicast, upstream the\n"
+		"                      priorities, queue, weight and rates,\n"
+		"                      and whether the OLT encrypts them\n");
 	return 2;
 }
 

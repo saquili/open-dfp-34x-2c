@@ -20,6 +20,9 @@
 
 #define PON_SERIAL_LEN 8
 
+/* The Port-IDs a GEM header carries: twelve bits. */
+#define PON_PORT_IDS 4096
+
 /**
  * struct pon_dev - A PON device as one message reports it.
  * @have: bit N set when attribute N of the message was there
@@ -40,6 +43,10 @@
  * @serial: the serial number
  * @stats_have: bit N set when counter N was there
  * @stats: the counters, by attribute number
+ * @encrypted: the Port-IDs whose downstream the OLT encrypts, bit p % 32 of
+ *	word p / 32 for Port-ID p; beside a state, a Port-ID not marked is
+ *	carried in the clear
+ * @n_encrypted: how many are marked
  */
 struct pon_dev {
 	uint32_t have;
@@ -49,6 +56,8 @@ struct pon_dev {
 	uint8_t serial[PON_SERIAL_LEN];
 	uint32_t stats_have;
 	uint64_t stats[PON_A_DEV_STATS_MAX + 1];
+	uint32_t encrypted[PON_PORT_IDS / 32];
+	unsigned int n_encrypted;
 };
 
 /**
@@ -67,6 +76,9 @@ struct pon_tcont {
 int pon_dev_parse(const struct nlmsghdr *nlh, struct pon_dev *d);
 /* Read a T-CONT message; -EINVAL when it is malformed. */
 int pon_tcont_parse(const struct nlmsghdr *nlh, struct pon_tcont *t);
+
+/* Whether the report @d marks Port-ID @port encrypted. */
+bool pon_dev_encrypted(const struct pon_dev *d, uint32_t port);
 
 /* The name of an ONU state, "O5 operation"; "unknown" for another value. */
 const char *pon_state_name(uint32_t state);

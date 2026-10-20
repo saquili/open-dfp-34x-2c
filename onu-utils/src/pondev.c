@@ -53,6 +53,26 @@ static int parse_stats(const struct nlattr *nest, struct pon_dev *d)
 	return 0;
 }
 
+bool pon_dev_encrypted(const struct pon_dev *d, uint32_t port)
+{
+	return port < PON_PORT_IDS &&
+	       (d->encrypted[port / 32] >> (port % 32) & 1u);
+}
+
+/* One encrypted-port-id: a Port-ID the OLT encrypts, each once. */
+static int parse_encrypted(const struct nlattr *a, struct pon_dev *d)
+{
+	uint32_t port;
+
+	if (get_u32(a, &port))
+		return -EINVAL;
+	if (port < PON_PORT_IDS && !pon_dev_encrypted(d, port)) {
+		d->encrypted[port / 32] |= 1u << (port % 32);
+		d->n_encrypted++;
+	}
+	return 0;
+}
+
 int pon_dev_parse(const struct nlmsghdr *nlh, struct pon_dev *d)
 {
 	uint32_t *const field[PON_A_DEV_MAX + 1] = {
@@ -92,6 +112,9 @@ int pon_dev_parse(const struct nlmsghdr *nlh, struct pon_dev *d)
 				return -EINVAL;
 			memcpy(d->serial, mnl_attr_get_payload(a),
 			       PON_SERIAL_LEN);
+		} else if (type == PON_A_DEV_ENCRYPTED_PORT_ID) {
+			if (parse_encrypted(a, d))
+				return -EINVAL;
 		} else {
 			continue;
 		}
@@ -251,6 +274,21 @@ static void print_stats(FILE *f, const struct pon_dev *d)
 				(unsigned long long)d->stats[counter[i].attr]);
 }
 
+/*
+ * The Port-IDs the OLT encrypts, in ascending order. Beside a state none
+ * means that nothing is encrypted; without one nothing is known.
+ */
+static void print_encrypted(FILE *f, const struct pon_dev *d)
+{
+	fputs("     encrypted Port-IDs", f);
+	if (!d->n_encrypted)
+		fputs(" none", f);
+	for (uint32_t port = 0; port < PON_PORT_IDS; port++)
+		if (pon_dev_encrypted(d, port))
+			fprintf(f, " %u", port);
+	fputc('\n', f);
+}
+
 void pon_dev_print(FILE *f, const struct pon_dev *d, const char *ifname,
 		   bool serial)
 {
@@ -292,6 +330,8 @@ void pon_dev_print(FILE *f, const struct pon_dev *d, const char *ifname,
 			fprintf(f, "%02X", d->serial[i]);
 	}
 	fputc('\n', f);
+	if (has(d, PON_A_DEV_ONU_STATE))
+		print_encrypted(f, d);
 	print_stats(f, d);
 }
 

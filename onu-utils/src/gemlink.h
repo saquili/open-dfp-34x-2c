@@ -31,6 +31,9 @@
  * @weight: the queue's weight, 0 for strict priority
  * @cir: the committed rate of its upstream traffic, bytes per second
  * @pir: the peak rate, bytes per second; 0 for no limit
+ * @encrypted: the OLT encrypts the port's downstream, as the PON device
+ *	reports it (encrypted-port-id of the "pon" family): not a link
+ *	attribute, so the parse leaves it false and the caller sets it
  */
 struct gem_link {
 	char name[IF_NAMESIZE];
@@ -45,6 +48,7 @@ struct gem_link {
 	uint8_t weight;
 	uint64_t cir;
 	uint64_t pir;
+	bool encrypted;
 };
 
 /* Read a link message: 1 for a GEM interface, 0 for another, -EINVAL when malformed. */
@@ -52,7 +56,8 @@ int gem_link_parse(const struct nlmsghdr *nlh, struct gem_link *g);
 
 /*
  * One line: "gem4095 port 4095 down multicast", "gem256 port 256 both tcont 0
- * queue 0 strict"; the priorities when not all eight, the rates when set.
+ * queue 0 strict encrypted"; the priorities when not all eight, the rates
+ * when set, and "encrypted" when the OLT encrypts the port.
  */
 void gem_link_print(FILE *f, const struct gem_link *g);
 

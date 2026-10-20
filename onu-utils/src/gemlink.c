@@ -162,5 +162,7 @@ void gem_link_print(FILE *f, const struct gem_link *g)
 		if (g->pir)
 			fprintf(f, " pir %llu", (unsigned long long)g->pir);
 	}
+	if (g->encrypted)
+		fputs(" encrypted", f);
 	fputc('\n', f);
 }

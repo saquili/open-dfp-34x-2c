@@ -429,6 +429,56 @@ static void test_the_disable_is_read_from_the_state(void)
 	CHECK(pon_keep_of(&d) == PON_KEEP_UNKNOWN);
 }
 
+/*
+ * The Port-IDs the OLT encrypts: each once, beyond twelve bits ignored,
+ * printed in order beside a state, "none" there when none is, and nothing
+ * without a state; a GEM interface of one is printed encrypted.
+ */
+static void test_the_encrypted_port_ids_are_read(void)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct nlmsghdr *nlh = full_dev(buf);
+	struct gem_link g;
+	struct pon_dev d;
+	char *text;
+
+	mnl_attr_put_u32(nlh, PON_A_DEV_ENCRYPTED_PORT_ID, 1024);
+	mnl_attr_put_u32(nlh, PON_A_DEV_ENCRYPTED_PORT_ID, 3);
+	mnl_attr_put_u32(nlh, PON_A_DEV_ENCRYPTED_PORT_ID, 3);
+	mnl_attr_put_u32(nlh, PON_A_DEV_ENCRYPTED_PORT_ID, 5000);
+	CHECK(pon_dev_parse(nlh, &d) == 0);
+	CHECK(d.n_encrypted == 2);
+	CHECK(pon_dev_encrypted(&d, 3) && pon_dev_encrypted(&d, 1024));
+	CHECK(!pon_dev_encrypted(&d, 4) && !pon_dev_encrypted(&d, 5000));
+	text = printed(&d, false);
+	CHECK(strstr(text, "\n     encrypted Port-IDs 3 1024\n"));
+	free(text);
+
+	CHECK(pon_dev_parse(full_dev(buf), &d) == 0);
+	text = printed(&d, false);
+	CHECK(strstr(text, "\n     encrypted Port-IDs none\n"));
+	free(text);
+
+	nlh = message(buf, PON_CMD_DEV_CHANGE_NTF);
+	mnl_attr_put_u32(nlh, PON_A_DEV_TYPE, PON_TYPE_GPON);
+	CHECK(pon_dev_parse(nlh, &d) == 0);
+	text = printed(&d, false);
+	CHECK(!strstr(text, "encrypted"));
+	free(text);
+
+	nlh = message(buf, PON_CMD_DEV_GET);
+	mnl_attr_put_u16(nlh, PON_A_DEV_ENCRYPTED_PORT_ID, 3);
+	CHECK(pon_dev_parse(nlh, &d) != 0);
+
+	nlh = link_message(buf, "gem0", "gem");
+	CHECK(gem_link_parse(nlh, &g) == 1);
+	CHECK(!g.encrypted);
+	g.encrypted = true;
+	text = gem_printed(&g);
+	CHECK(!strcmp(text, "gem0 port 0 both encrypted\n"));
+	free(text);
+}
+
 int main(void)
 {
 	test_a_full_device_is_read();
@@ -440,6 +490,7 @@ int main(void)
 	test_an_idle_tcont_prints_as_idle();
 	test_gem_links_are_read();
 	test_the_disable_is_read_from_the_state();
+	test_the_encrypted_port_ids_are_read();
 
 	printf("test_pondev: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
