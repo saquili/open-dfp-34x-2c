@@ -67,7 +67,7 @@ and needs nothing else. A dynamic program needs the dynamic loader and the C
 library there. The image of the board has both: its programs share one C
 library, which the build cuts to the functions those programs import
 (``tools/lib-trim``, ``building.rst``,
-``docs/adr/0011-target-executables-share-one-cut-c-library.rst``). A dynamic
+``docs/adr/0008-target-executables-share-one-cut-c-library.rst``). A dynamic
 program built apart from the image runs on the board only if that library holds
 every function it imports; otherwise the loader names the first one it misses.
 For a program copied onto a running board, link statically.

@@ -126,7 +126,7 @@ The password is lost
 ====================
 
 There is one account, root, for the console, ssh and the panel
-(``docs/adr/0012-one-account-root.rst``). A password that is lost is replaced
+(``docs/adr/0009-one-account-root.rst``). A password that is lost is replaced
 from a root shell that does not ask for one:
 
 1. Build a RAM image whose ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``
