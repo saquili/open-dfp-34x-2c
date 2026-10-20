@@ -14,9 +14,10 @@ host, with checkpatch over their sources and full line coverage of
 ``omcid/src``; and, on a change to ``linux/``, a warnings-clean build of
 ``tinyconfig`` and of the board's configuration, checkpatch over every commit
 of the kernel series, the device-tree binding checks with ``dtbs_check`` of
-the board, and the kernel documentation. The cross toolchain and the flash
-images, each built twice and compared for reproducibility, are built when
-started by hand, and so are their releases. A change to the panel on main
+the board, and the kernel documentation. The flash images, built twice and
+compared for reproducibility, and the cross toolchain, built once and compared
+with a second build on request, are built when started by hand, and so are
+their releases. A change to the panel on main
 builds its demo, in which a mock stick answers it in the browser, and puts it
 on the repository's GitHub Pages site (``demo.yml``). The merge rule is a
 green suite, full line coverage where it is measured, and a device run
@@ -137,11 +138,13 @@ push. Its input "release", on by default, says whether it makes a release.
     instruction-set gate; the test programs built with the toolchain, passed
     through the gate and run under ``qemu-mips``; the gate over every target
     object of the toolchain; with "release" on, the files of the release,
-    kept as the artifact ``toolchain``; a second build in another directory;
-    and the comparison of the two, which have to be identical but for the
-    name of the directory and two values computed from the contents
-    (``br2-external/README.rst`` says which). The second build and the
-    comparison run whatever the result of the steps before them. With the
+    kept as the artifact ``toolchain``; and, with "compare" on, a second
+    build in another directory and the comparison of the two, which have to
+    be identical but for the name of the directory and two values computed
+    from the contents (``br2-external/README.rst`` says which). The second
+    build and the comparison run whatever the result of the steps before
+    them. A release is made of one build, as toolchains are released
+    elsewhere; the comparison is for a change of the build's inputs. With the
     toolchain as the defconfig builds it, the gate reports findings in one
     function of libgcc (``br2-external/README.rst`` says which), and the
     step holds them to a list: it passes when the findings are exactly the

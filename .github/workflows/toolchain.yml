@@ -5,9 +5,11 @@
 # toolchain defconfig of br2-external, and checked: a negative control for the
 # instruction-set gate, the test programs built with the toolchain and run under
 # qemu-mips, the gate over every target object the toolchain holds (held to the
-# list of the findings that are known), and a second build in another directory
-# that has to be the same as the first. Two builds take the better part of an
-# hour on a runner, so the workflow runs only when it is started by hand.
+# list of the findings that are known), and, when started with "compare" on, a
+# second build in another directory that has to be the same as the first. A
+# build takes some 40 minutes on a runner, so the workflow runs only when it is
+# started by hand; a release is made of one build, as toolchains are released
+# elsewhere, and the comparison is run when the build's inputs change.
 #
 # Started with "release" on (the default), it also makes a release of the
 # first build, tagged toolchain-<the time of the commit in UTC>: the tarball,
@@ -26,6 +28,10 @@ on:
         description: Make a release of the toolchain
         type: boolean
         default: true
+      compare:
+        description: Build it a second time in another directory and compare
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -173,10 +179,10 @@ jobs:
           path: dist/
           if-no-files-found: error
       - name: Make room for the second build
-        if: always()
+        if: always() && inputs.compare
         run: rm -rf build/toolchain-a/build build/toolchain-a/legal-info build/unpacked-a dist
       - name: Build the toolchain again, in another directory
-        if: always()
+        if: always() && inputs.compare
         run: |
           start=$(date +%s)
           make sdk TOOLCHAIN_OUT="$PWD/build/toolchain-b"
@@ -186,7 +192,7 @@ jobs:
         # same length: the files record the directory they were built in, and
         # have to be identical once the one name is replaced by the other and
         # the values computed from the contents are set aside (compare-trees).
-        if: always()
+        if: always() && inputs.compare
         run: |
           # The comparison can fail: a file that differs in more than the name.
           mkdir -p build/compare-control/a build/compare-control/b
@@ -203,7 +209,7 @@ jobs:
           br2-external/tests/toolchain/compare-trees build/toolchain-a/host \
             build/toolchain-b/host toolchain-a toolchain-b
       - name: The toolchain tarballs
-        if: always()
+        if: always() && inputs.compare
         run: |
           ls -l build/toolchain-a/images build/toolchain-b/images
           sha256sum build/toolchain-a/images/*.tar.gz build/toolchain-b/images/*.tar.gz
@@ -231,8 +237,8 @@ jobs:
           tarball=open-dfp-34x-2c-toolchain.tar.gz
           sources="open-dfp-34x-2c-toolchain-$VERSION-sources.tar"
           {
-            echo "The cross toolchain of commit ${GITHUB_SHA}, built and compared twice by"
-            echo "this repository's toolchain workflow (run ${GITHUB_RUN_ID})."
+            echo "The cross toolchain of commit ${GITHUB_SHA}, built by this repository's"
+            echo "toolchain workflow (run ${GITHUB_RUN_ID})."
             echo
             echo "The lines of \`br2-external/toolchain/PIN\` that build the images with it:"
             echo
