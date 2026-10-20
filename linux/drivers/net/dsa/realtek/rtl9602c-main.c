@@ -422,26 +422,31 @@ static int rtl9602c_devlink_info_get(struct dsa_switch *ds,
 /*
  * The lane settings and their sfp_lane names: first those "auto" tries, in the
  * order it tries them, then 2500BaseX with in-band negotiation, which the lane
- * runs only when it is named, for a host that negotiates at 2500BaseX.
+ * runs only when it is named, for a host that negotiates at 2500BaseX. @checks
+ * is how many checks of the search a setting is given to synchronise before
+ * the next is tried: one, but twelve for 1000BaseX without negotiation, which
+ * synchronised with such a host 8.1 to 8.7 s after it was set (measured on
+ * this board).
  */
 static const struct {
 	u32 mode;
 	bool an;
+	u8 checks;
 	const char *name;
 	const char *param;
 } rtl9602c_sds_tries[] = {
-	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, false, "2500BaseX", "2500basex" },
-	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, true,
+	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, false, 1, "2500BaseX", "2500basex" },
+	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, true, 1,
 	  "1000BaseX with in-band negotiation", "1000basex-an" },
-	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, false, "1000BaseX", "1000basex" },
-	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, true,
+	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, false, 12, "1000BaseX", "1000basex" },
+	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, true, 1,
 	  "2500BaseX with in-band negotiation", "2500basex-an" },
 };
 
 /* The settings "auto" tries: all but the last. */
 #define RTL9602C_SDS_AUTO	GENMASK(ARRAY_SIZE(rtl9602c_sds_tries) - 2, 0)
 
-/* How long one setting is given to synchronise, and how often it is checked. */
+/* How often the search checks the lane. */
 #define RTL9602C_SDS_TRY_MS	1000
 
 /**
@@ -582,6 +587,7 @@ static void rtl9602c_sds_set(struct rtl9602c_priv *p, unsigned int try)
 	rtl9602c_serdes_resync(p);
 	p->sds_an = rtl9602c_sds_tries[try].an;
 	p->sds_try = try;
+	p->sds_waited = 0;
 }
 
 /* What one check of the lane does (rtl9602c_sds_step()). */
@@ -589,21 +595,24 @@ enum rtl9602c_sds_act {
 	RTL9602C_SDS_KEEP,
 	RTL9602C_SDS_FOUND,
 	RTL9602C_SDS_LOST,
+	RTL9602C_SDS_WAIT,
 	RTL9602C_SDS_NEXT,
 };
 
 /*
  * One check of the search, from the settings @tries allows, the setting @cur
- * the lane runs in, whether its receiver has synchronised (@up) and whether
- * it had at the last check (@found): FOUND when it has just synchronised;
+ * the lane runs in, whether its receiver has synchronised (@up), whether it
+ * had at the last check (@found) and how many checks have found it not
+ * synchronised in @cur so far (@waited): FOUND when it has just synchronised;
  * LOST when it has just lost the host, so that the lane waits one more check
- * in its setting, as the host may be restarting its end; NEXT, with the next
- * setting after @cur that @tries allows in *@next, in the order of
- * rtl9602c_sds_tries[], when it has not synchronised and another setting may
- * be tried; KEEP otherwise.
+ * in its setting, as the host may be restarting its end; WAIT while @cur has
+ * not had its checks; NEXT, with the next setting after @cur that @tries
+ * allows in *@next, in the order of rtl9602c_sds_tries[], when it has not
+ * synchronised and another setting may be tried; KEEP otherwise.
  */
 static enum rtl9602c_sds_act rtl9602c_sds_step(u8 tries, unsigned int cur,
 					       bool up, bool found,
+					       unsigned int waited,
 					       unsigned int *next)
 {
 	unsigned int try = cur;
@@ -612,6 +621,8 @@ static enum rtl9602c_sds_act rtl9602c_sds_step(u8 tries, unsigned int cur,
 		return found ? RTL9602C_SDS_KEEP : RTL9602C_SDS_FOUND;
 	if (found)
 		return RTL9602C_SDS_LOST;
+	if (waited + 1 < rtl9602c_sds_tries[cur].checks)
+		return RTL9602C_SDS_WAIT;
 	do {
 		try = (try + 1) % ARRAY_SIZE(rtl9602c_sds_tries);
 	} while (try != cur && !(tries & BIT(try)));
@@ -632,14 +643,18 @@ static void rtl9602c_sds_work(struct work_struct *w)
 	mutex_lock(&p->sds_lock);
 	up = rtl9602c_r(p, RTL9602C_SERDES_CTRL) & RTL9602C_SERDES_CTRL_LINK_UP;
 	switch (rtl9602c_sds_step(p->sds_tries, p->sds_try, up, p->sds_found,
-				  &try)) {
+				  p->sds_waited, &try)) {
 	case RTL9602C_SDS_FOUND:
 		p->sds_found = true;
 		pr_info("SFP lane up in %s\n", rtl9602c_sds_tries[p->sds_try].name);
 		break;
 	case RTL9602C_SDS_LOST:
 		p->sds_found = false;
+		p->sds_waited = 0;
 		pr_info("SFP lane lost the host\n");
+		break;
+	case RTL9602C_SDS_WAIT:
+		p->sds_waited++;
 		break;
 	case RTL9602C_SDS_NEXT:
 		rtl9602c_sds_set(p, try);

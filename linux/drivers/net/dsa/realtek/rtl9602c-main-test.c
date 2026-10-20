@@ -42,7 +42,9 @@ static void rtl9602c_test_sds_auto(struct kunit *test)
 	for (i = 1; i < ARRAY_SIZE(order); i++) {
 		next = ~0u;
 		KUNIT_ASSERT_EQ(test, rtl9602c_sds_step(RTL9602C_SDS_AUTO, cur,
-							false, false, &next),
+							false, false,
+							rtl9602c_sds_tries[cur].checks - 1,
+							&next),
 				RTL9602C_SDS_NEXT);
 		KUNIT_ASSERT_LT(test, next, ARRAY_SIZE(rtl9602c_sds_tries));
 		KUNIT_EXPECT_STREQ(test, rtl9602c_sds_tries[next].param, order[i]);
@@ -56,7 +58,8 @@ static void rtl9602c_test_sds_auto(struct kunit *test)
 
 /*
  * A lane whose receiver synchronises is found once and then kept; one that
- * loses the host waits a check in its setting, and only at the next goes on.
+ * loses the host waits a check in its setting, and goes on once that setting
+ * has had its checks.
  */
 static void rtl9602c_test_sds_found_lost(struct kunit *test)
 {
@@ -64,18 +67,20 @@ static void rtl9602c_test_sds_found_lost(struct kunit *test)
 	unsigned int next = ~0u;
 
 	KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(RTL9602C_SDS_AUTO, cur, true,
-						false, &next),
+						false, 0, &next),
 			RTL9602C_SDS_FOUND);
 	KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(RTL9602C_SDS_AUTO, cur, true,
-						true, &next),
+						true, 0, &next),
 			RTL9602C_SDS_KEEP);
 	KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(RTL9602C_SDS_AUTO, cur, false,
-						true, &next),
+						true, 0, &next),
 			RTL9602C_SDS_LOST);
 	KUNIT_EXPECT_EQ(test, next, ~0u);
 
 	KUNIT_ASSERT_EQ(test, rtl9602c_sds_step(RTL9602C_SDS_AUTO, cur, false,
-						false, &next),
+						false,
+						rtl9602c_sds_tries[cur].checks - 1,
+						&next),
 			RTL9602C_SDS_NEXT);
 	KUNIT_ASSERT_LT(test, next, ARRAY_SIZE(rtl9602c_sds_tries));
 	KUNIT_EXPECT_STREQ(test, rtl9602c_sds_tries[next].param, "2500basex");
@@ -93,22 +98,51 @@ static void rtl9602c_test_sds_one(struct kunit *test)
 	for (i = 0; i < ARRAY_SIZE(rtl9602c_sds_tries); i++) {
 		next = ~0u;
 		KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(BIT(i), i, false, false,
+							rtl9602c_sds_tries[i].checks - 1,
 							&next),
 				RTL9602C_SDS_KEEP);
-		KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(BIT(i), i, true, true,
+		KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(BIT(i), i, true, true, 0,
 							&next),
 				RTL9602C_SDS_KEEP);
 		KUNIT_EXPECT_EQ(test, next, ~0u);
 	}
 
-	KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(0, 0, false, false, &next),
+	KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(0, 0, false, false, 0, &next),
 			RTL9602C_SDS_KEEP);
+}
+
+/*
+ * 1000BaseX without negotiation is given twelve checks, longer than the 8.7 s
+ * it took to synchronise with a host that does not negotiate, before the
+ * search goes on; every other setting is given one.
+ */
+static void rtl9602c_test_sds_wait(struct kunit *test)
+{
+	unsigned int slow = rtl9602c_test_sds(test, "1000basex");
+	unsigned int i, w, next;
+
+	KUNIT_EXPECT_GE(test, rtl9602c_sds_tries[slow].checks * RTL9602C_SDS_TRY_MS,
+			9000);
+	for (w = 0; w + 1 < rtl9602c_sds_tries[slow].checks; w++)
+		KUNIT_EXPECT_EQ(test, rtl9602c_sds_step(RTL9602C_SDS_AUTO, slow,
+							false, false, w, &next),
+				RTL9602C_SDS_WAIT);
+	next = ~0u;
+	KUNIT_ASSERT_EQ(test, rtl9602c_sds_step(RTL9602C_SDS_AUTO, slow, false,
+						false, w, &next),
+			RTL9602C_SDS_NEXT);
+	KUNIT_EXPECT_STREQ(test, rtl9602c_sds_tries[next].param, "2500basex");
+
+	for (i = 0; i < ARRAY_SIZE(rtl9602c_sds_tries); i++)
+		if (i != slow)
+			KUNIT_EXPECT_EQ(test, rtl9602c_sds_tries[i].checks, 1);
 }
 
 static struct kunit_case rtl9602c_main_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_sds_auto),
 	KUNIT_CASE(rtl9602c_test_sds_found_lost),
 	KUNIT_CASE(rtl9602c_test_sds_one),
+	KUNIT_CASE(rtl9602c_test_sds_wait),
 	{ }
 };
 

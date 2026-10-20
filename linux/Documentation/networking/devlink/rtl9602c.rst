@@ -823,8 +823,10 @@ To keep the lane in 1000BaseX with negotiation, and to let it look again::
        which had not been seen to link before. With a driver that re-latched
        only the settings with negotiation, ``1000basex`` set straight after
        ``1000basex-an`` went on negotiating until the host's change dropped
-       the link (*dsa* page, "In-band auto-negotiation"); that it is in force
-       at once with the re-latch after every setting is not yet measured.
+       the link (*dsa* page, "In-band auto-negotiation"). With the re-latch
+       after every setting, ``1000basex`` set from ``2500basex`` against a
+       host at 1000BaseX without negotiation linked 8.1 to 8.7 s after it was
+       set (*dsa* page, "phylink and the lane").
      - M, I
      - M: on the bench, the host's port set to each setting in turn and
        ``sfp_lane`` to the same: the host's link up, 200 of 200 pings from

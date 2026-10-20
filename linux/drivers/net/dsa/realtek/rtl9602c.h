@@ -2132,6 +2132,8 @@ struct rtl9602c_priv {
 	bool sds_found;
 	/** @sds_try: the entry of the lane settings in force */
 	u8 sds_try;
+	/** @sds_waited: checks that found the lane not synchronised in @sds_try */
+	u8 sds_waited;
 	/** @sds_tries: the lane settings that may be tried, one bit each */
 	u8 sds_tries;
 	/** @sds_lock: serialises the bring-ups and re-latches of the lane */
