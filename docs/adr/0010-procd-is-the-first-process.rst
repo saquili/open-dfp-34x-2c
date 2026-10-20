@@ -6,7 +6,7 @@ ADR 0010: Run procd as the first process and the supervisor
 ===========================================================
 
 :Status: Accepted
-:Date: 2026-10-10
+:Date: 2026-10-20
 :Deciders: the maintainer
 
 Summary
@@ -55,12 +55,14 @@ procd is process 1.
   this tree that hands procd a service over ubus. procd starts each again
   2 s after it ends and never gives up; a patch makes it report how often
   (``onu-svc list``).
-* procd is OpenWrt's at its commit of 2026-10-07, with patches: udebug,
-  whose ring buffer needs atomic operations, is left out; the kernel's
-  devtmpfs is kept; a program of inittab without a terminal is started again
-  too, which procd does not do by itself because OpenWrt's inittab holds
-  only console entries; and an instance reports how often procd started it
-  again. libubox and ubus are taken at OpenWrt's commits that match it.
+* procd is OpenWrt's at its commit of 2026-10-07, with patches: udebug is
+  left out, as the image carries neither OpenWrt's udebug library nor the
+  daemon that collects its buffers; the kernel's devtmpfs is kept; a program
+  of inittab without a terminal is started again too, which procd does not
+  do by itself because OpenWrt's inittab holds only console entries; and an
+  instance reports how often procd started it again. libubox and ubus are
+  taken at OpenWrt's commits that match it; libubox is built whole, with the
+  udebug code of its own, whose atomic operations the core runs (ADR 0021).
 * A bench may give the console root's shell without a password
   (``CONSOLE_AUTOLOGIN=root`` in ``/etc/board.conf``), so that it can reach
   a stick whose network is down. An image without that file asks for the
