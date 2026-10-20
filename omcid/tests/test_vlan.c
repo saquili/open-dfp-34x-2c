@@ -234,11 +234,21 @@ int main(void)
 	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE);
 	CHECK_EQ(r.filter_ethertype, 3u);
 
+	/* A translation that gives the tag priority 0, of one priority or any. */
 	pack(row, 0xf8000000u, (6u << 28) | (410u << 15), 0x400f0000u,
 	     (0u << 16) | (1410u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
-	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
-	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_PCP_REMARK);
+	CHECK_EQ(r.op, OMCI_VLAN_OP_CVID_XLATE);
+	CHECK_EQ(r.assign_cvid, 1410u);
+	CHECK_EQ(r.assign_pri, 0u);
+	CHECK(r.match_has_pri);
+	CHECK_EQ(r.match_pri, 6u);
+	pack(row, 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
+	     (0u << 16) | (1410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_CVID_XLATE);
+	CHECK_EQ(r.assign_pri, 0u);
+	CHECK(!r.match_has_pri);
 
 	pack(row, 0xf8000000u, (6u << 28) | (410u << 15), 0x400f0000u,
 	     (6u << 16) | (1410u << 3));

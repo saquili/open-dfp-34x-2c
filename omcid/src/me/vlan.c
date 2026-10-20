@@ -26,6 +26,13 @@
  * priority 14 marks a default rule; priority 8 in a filter matches any
  * priority and in a treatment copies the inner tag's. Removing three tags
  * discards the frame.
+ *
+ * A treatment priority of 10, derived from the frame's DSCP by the map the ME
+ * holds, is not carried: the switch has one DSCP map, by which a port that
+ * trusts the DSCP gives every frame its priority (dcb), and the ME's map
+ * would replace it; a classifier action that takes its priority from it is
+ * not measured. A tag added with that priority is refused; a translation with
+ * it keeps the frame's priority, as one that copies the priority does.
  */
 enum {
 	VLAN_VID_WILDCARD = 4096,
@@ -230,16 +237,12 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 
 	/*
 	 * One tag in, one tag out with a new VID: a C-VID translation, which
-	 * may give the tag a new priority, though not 0: the offload cannot
-	 * tell a priority of 0 from none and keeps the frame's own.
+	 * may give the tag a new priority, 0 included.
 	 */
 	if (out->tags_to_remove == VLAN_TAGS_REMOVE_1 &&
 	    !filter_names_a_tag(w0) && filter_names_a_tag(w1) &&
 	    out->treat_outer_pri == VLAN_PRI_NO_TAG &&
 	    out->treat_inner_pri != VLAN_PRI_NO_TAG) {
-		if (inner_remarks && out->treat_inner_pri == 0u)
-			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
-
 		if (out->treat_inner_vid == VLAN_VID_WILDCARD)
 			return true;
 

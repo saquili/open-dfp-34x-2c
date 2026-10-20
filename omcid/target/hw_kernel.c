@@ -2864,12 +2864,25 @@ static int tc_filter_del(int ifindex, unsigned int prio)
 }
 
 /*
+ * A vlan action: TCA_VLAN_ACT_MODIFY or PUSH writes a tag of protocol @proto
+ * (802.1Q for 0) and VID @vid with priority @pri, or for a modify keeps the
+ * frame's priority with OMCI_HW_VLAN_PRI_KEEP; POP takes the outer tag off.
+ */
+struct tc_vlan_act {
+	int v_action;
+	uint16_t proto;
+	uint16_t vid;
+	uint8_t pri;
+};
+
+/* The most vlan actions a filter takes. */
+#define TC_VLAN_ACTS 3u
+
+/*
  * A VLAN filter: the frames it takes, untagged ones or those whose outer tag,
  * of protocol @match_proto (802.1Q for 0), has VID @match_vid and, with
- * @match_has_pri, priority @match_pri; and what its vlan action does to them:
- * TCA_VLAN_ACT_MODIFY or PUSH writes a tag of protocol @push_proto (802.1Q
- * for 0) and VID @vid with priority @pri, or keeps the frame's priority for
- * OMCI_HW_VLAN_PRI_KEEP; POP takes the outer tag off.
+ * @match_has_pri, priority @match_pri; and its vlan actions, @n_act of them,
+ * which act on the frame in their order.
  */
 struct tc_vlan_filter {
 	bool untagged;
@@ -2877,10 +2890,8 @@ struct tc_vlan_filter {
 	uint16_t match_vid;
 	bool match_has_pri;
 	uint8_t match_pri;
-	int v_action;
-	uint16_t push_proto;
-	uint16_t vid;
-	uint8_t pri;
+	size_t n_act;
+	struct tc_vlan_act act[TC_VLAN_ACTS];
 };
 
 /* Add an ingress filter, in the switch only (skip_sw). */
@@ -2897,12 +2908,8 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 		.tcm_info =
 			tc_info(prio, f->untagged ? ETH_P_ALL : match_proto),
 	};
-	struct tc_vlan parms = {
-		.action = TC_ACT_PIPE,
-		.v_action = f->v_action,
-	};
 	uint32_t flags = OMCID_TC_FLAGS;
-	size_t off, opts, acts, act1, aopts;
+	size_t off, opts, acts;
 
 	memset(req, 0, sizeof(req));
 	*(uint16_t *)&req[4] = RTM_NEWTFILTER;
@@ -2937,29 +2944,41 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 
 	acts = off;
 	off += NLA_HDRLEN_;
-	act1 = off;
-	off += NLA_HDRLEN_;
-	off = nla_put(req, off, TCA_ACT_KIND, "vlan", sizeof("vlan"));
-	aopts = off;
-	off += NLA_HDRLEN_;
-	off = nla_put(req, off, TCA_VLAN_PARMS, &parms, sizeof(parms));
-	if (f->v_action != TCA_VLAN_ACT_POP) {
-		off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_ID, &f->vid,
-			      sizeof(f->vid));
-		if (f->push_proto) {
-			uint16_t proto = htons(f->push_proto);
+	for (size_t k = 0; k < f->n_act && k < TC_VLAN_ACTS; k++) {
+		const struct tc_vlan_act *a = &f->act[k];
+		struct tc_vlan parms = {
+			.action = TC_ACT_PIPE,
+			.v_action = a->v_action,
+		};
+		const size_t act1 = off;
+		size_t aopts;
 
-			off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_PROTOCOL,
-				      &proto, sizeof(proto));
+		off += NLA_HDRLEN_;
+		off = nla_put(req, off, TCA_ACT_KIND, "vlan", sizeof("vlan"));
+		aopts = off;
+		off += NLA_HDRLEN_;
+		off = nla_put(req, off, TCA_VLAN_PARMS, &parms, sizeof(parms));
+		if (a->v_action != TCA_VLAN_ACT_POP) {
+			off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_ID, &a->vid,
+				      sizeof(a->vid));
+			if (a->proto) {
+				uint16_t proto = htons(a->proto);
+
+				off = nla_put(req, off,
+					      TCA_VLAN_PUSH_VLAN_PROTOCOL,
+					      &proto, sizeof(proto));
+			}
+			if (a->pri != OMCI_HW_VLAN_PRI_KEEP)
+				off = nla_put(req, off,
+					      TCA_VLAN_PUSH_VLAN_PRIORITY,
+					      &a->pri, sizeof(a->pri));
 		}
-		if (f->pri != OMCI_HW_VLAN_PRI_KEEP)
-			off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_PRIORITY,
-				      &f->pri, sizeof(f->pri));
+		*(uint16_t *)(req + aopts) = (uint16_t)(off - aopts);
+		*(uint16_t *)(req + aopts + 2) = TCA_ACT_OPTIONS | NLA_F_NESTED;
+		*(uint16_t *)(req + act1) = (uint16_t)(off - act1);
+		*(uint16_t *)(req + act1 + 2) = (uint16_t)(k + 1u) |
+						NLA_F_NESTED;
 	}
-	*(uint16_t *)(req + aopts) = (uint16_t)(off - aopts);
-	*(uint16_t *)(req + aopts + 2) = TCA_ACT_OPTIONS | NLA_F_NESTED;
-	*(uint16_t *)(req + act1) = (uint16_t)(off - act1);
-	*(uint16_t *)(req + act1 + 2) = 1 | NLA_F_NESTED;
 	*(uint16_t *)(req + acts) = (uint16_t)(off - acts);
 	*(uint16_t *)(req + acts + 2) = TCA_FLOWER_ACT | NLA_F_NESTED;
 
@@ -2968,6 +2987,31 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 
 	*(uint32_t *)&req[0] = (uint32_t)off;
 	return rtnl_talk(req, off, NULL, 0, NULL);
+}
+
+/*
+ * The actions that give the outer C-tag VID @vid and priority @pri into @a,
+ * returning their number: a modify, which keeps the frame's priority for
+ * OMCI_HW_VLAN_PRI_KEEP; for priority 0, which a modify cannot give, as the
+ * switch's driver takes a modify's 0 for no priority, a pop and a push.
+ */
+static size_t ctag_rewrite(struct tc_vlan_act *a, uint16_t vid, uint8_t pri)
+{
+	if (pri != 0u) {
+		a[0] = (struct tc_vlan_act){
+			.v_action = TCA_VLAN_ACT_MODIFY,
+			.vid = vid,
+			.pri = pri,
+		};
+		return 1;
+	}
+	a[0] = (struct tc_vlan_act){ .v_action = TCA_VLAN_ACT_POP };
+	a[1] = (struct tc_vlan_act){
+		.v_action = TCA_VLAN_ACT_PUSH,
+		.vid = vid,
+		.pri = 0,
+	};
+	return 2;
 }
 
 /* The most upstream filters a rule takes: one per priority. */
@@ -2994,33 +3038,36 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 		const bool apart = r->per_pri && !r->match_has_pri;
 		const size_t n = apart ? VLAN_UP_MAX : 1u;
 
-		for (size_t i = 0; i < n; i++)
+		for (size_t i = 0; i < n; i++) {
 			up[i] = (struct tc_vlan_filter){
 				.match_vid = r->match_cvid,
 				.match_has_pri = apart || r->match_has_pri,
 				.match_pri = apart ? (uint8_t)i : r->match_pri,
-				.v_action = TCA_VLAN_ACT_MODIFY,
-				.vid = r->assign_cvid,
-				.pri = r->assign_pri,
 			};
+			up[i].n_act = ctag_rewrite(up[i].act, r->assign_cvid,
+						   r->assign_pri);
+		}
 		*down = (struct tc_vlan_filter){
 			.match_vid = r->assign_cvid,
-			.v_action = TCA_VLAN_ACT_MODIFY,
-			.vid = r->match_cvid,
-			.pri = OMCI_HW_VLAN_PRI_KEEP,
+			.n_act = 1,
+			.act = { { .v_action = TCA_VLAN_ACT_MODIFY,
+				   .vid = r->match_cvid,
+				   .pri = OMCI_HW_VLAN_PRI_KEEP } },
 		};
 		return n;
 	}
 	case OMCI_HW_VLAN_CVID_PUSH:
 		up[0] = (struct tc_vlan_filter){
 			.untagged = true,
-			.v_action = TCA_VLAN_ACT_PUSH,
-			.vid = r->assign_cvid,
-			.pri = r->assign_pri,
+			.n_act = 1,
+			.act = { { .v_action = TCA_VLAN_ACT_PUSH,
+				   .vid = r->assign_cvid,
+				   .pri = r->assign_pri } },
 		};
 		*down = (struct tc_vlan_filter){
 			.match_vid = r->assign_cvid,
-			.v_action = TCA_VLAN_ACT_POP,
+			.n_act = 1,
+			.act = { { .v_action = TCA_VLAN_ACT_POP } },
 		};
 		return 1;
 	case OMCI_HW_VLAN_SVID_PUSH: {
@@ -3035,16 +3082,19 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 				.match_vid = r->match_cvid,
 				.match_has_pri = copy || r->match_has_pri,
 				.match_pri = pri,
-				.v_action = TCA_VLAN_ACT_PUSH,
-				.push_proto = ETH_P_8021AD,
-				.vid = r->assign_svid,
-				.pri = copy ? pri : r->assign_pri,
+				.n_act = 1,
+				.act = { { .v_action = TCA_VLAN_ACT_PUSH,
+					   .proto = ETH_P_8021AD,
+					   .vid = r->assign_svid,
+					   .pri = copy ? pri :
+							 r->assign_pri } },
 			};
 		}
 		*down = (struct tc_vlan_filter){
 			.match_proto = ETH_P_8021AD,
 			.match_vid = r->assign_svid,
-			.v_action = TCA_VLAN_ACT_POP,
+			.n_act = 1,
+			.act = { { .v_action = TCA_VLAN_ACT_POP } },
 		};
 		return n;
 	}
@@ -3654,24 +3704,25 @@ static enum omci_status kernel_mcast_ds(const struct omci_hw_mcast_ds *rules,
 	for (size_t i = 0; i < n && !err; i++) {
 		struct tc_vlan_filter f = {
 			.match_vid = rules[i].vid,
-			.vid = rules[i].tci & 0x0fffu,
-			.pri = (uint8_t)(rules[i].tci >> 13),
+			.n_act = 1,
+			.act = { { .vid = rules[i].tci & 0x0fffu,
+				   .pri = (uint8_t)(rules[i].tci >> 13) } },
 		};
 
 		switch (rules[i].action) {
 		case OMCI_HW_MCAST_DS_STRIP:
-			f.v_action = TCA_VLAN_ACT_POP;
+			f.act[0].v_action = TCA_VLAN_ACT_POP;
 			break;
 		case OMCI_HW_MCAST_DS_ADD:
-			f.v_action = TCA_VLAN_ACT_PUSH;
-			f.push_proto = ETH_P_8021AD;
+			f.act[0].v_action = TCA_VLAN_ACT_PUSH;
+			f.act[0].proto = ETH_P_8021AD;
 			break;
 		case OMCI_HW_MCAST_DS_REPLACE_VID:
-			f.pri = OMCI_HW_VLAN_PRI_KEEP;
-			f.v_action = TCA_VLAN_ACT_MODIFY;
+			f.act[0].pri = OMCI_HW_VLAN_PRI_KEEP;
+			f.act[0].v_action = TCA_VLAN_ACT_MODIFY;
 			break;
 		default:
-			f.v_action = TCA_VLAN_ACT_MODIFY;
+			f.act[0].v_action = TCA_VLAN_ACT_MODIFY;
 			break;
 		}
 		err = tc_filter_add(pon, DS_PRIO + (unsigned int)i, &f);

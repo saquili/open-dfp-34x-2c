@@ -55,8 +55,9 @@ enum omci_vlan_op {
  * enum omci_vlan_reject - Why a rule cannot be programmed.
  * @OMCI_VLAN_REJECT_NONE: it can
  * @OMCI_VLAN_REJECT_ETHERTYPE: it filters on an Ethertype
- * @OMCI_VLAN_REJECT_PCP_REMARK: it sets a priority the hardware cannot set:
- *	0 in place of another, or one taken from a tag the frame does not have
+ * @OMCI_VLAN_REJECT_PCP_REMARK: it sets a priority that is not carried: one
+ *	taken from a tag the frame does not have, or from its DSCP, or a new
+ *	priority of the C-tag behind an added S-tag
  * @OMCI_VLAN_REJECT_SHAPE: its combination of filter and treatment has no
  *	counterpart in the hardware
  * @OMCI_VLAN_REJECT_VID_RANGE: a VID outside 1 to 4094

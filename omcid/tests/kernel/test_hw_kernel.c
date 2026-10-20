@@ -156,6 +156,24 @@ static void vlan_rules(void)
 	CHECK(!at("pon", TC_PRIO_VLAN, "vlan_prio"));
 	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
 	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
+
+	const struct omci_hw_vlan_xlate zero = {
+		.kind = OMCI_HW_VLAN_CVID_XLATE,
+		.match_cvid = 410,
+		.assign_cvid = 1410,
+		.assign_pri = 0,
+	};
+
+	puts("a translation that gives priority 0: a pop and a push up, a modify down");
+	CHECK(omci_hw_kernel_ops.vlan_apply(&zero, 1, &rejected) == OMCI_OK);
+	CHECK(rejected.n == 0);
+	CHECK(at("sfp", TC_PRIO_VLAN, "pop"));
+	CHECK(at("sfp", TC_PRIO_VLAN, "push id 1410"));
+	CHECK(at("sfp", TC_PRIO_VLAN, "priority 0"));
+	CHECK(!at("sfp", TC_PRIO_VLAN, "modify"));
+	CHECK(at("pon", TC_PRIO_VLAN, "modify id 410"));
+	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
+	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
 }
 
 /*
