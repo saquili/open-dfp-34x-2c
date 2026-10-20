@@ -59,6 +59,36 @@ class Repo:
         self.git("rm", "-q", name)
         self.git("commit", "-q", "-m", subject)
 
+    def release(self, files, version, previous=None):
+        """The squash commit of "git subtree add/merge --squash -P linux": the
+        release's files at the top, on a line of its own after @previous."""
+        env = dict(self.env, GIT_INDEX_FILE=os.path.join(self.path, ".git", "release-index"))
+        if os.path.exists(env["GIT_INDEX_FILE"]):
+            os.remove(env["GIT_INDEX_FILE"])
+        for name, text in files.items():
+            blob = subprocess.run(["git", "-C", self.path, "hash-object", "-w", "--stdin"],
+                                  input=text, capture_output=True, text=True, env=env,
+                                  check=True).stdout.strip()
+            subprocess.run(["git", "-C", self.path, "update-index", "--add", "--cacheinfo",
+                            "100644,%s,%s" % (blob, name)], env=env, check=True)
+        tree = subprocess.run(["git", "-C", self.path, "write-tree"], capture_output=True,
+                              text=True, env=env, check=True).stdout.strip()
+        message = ("Squashed 'linux/' content from commit %s\n\n"
+                   "git-subtree-dir: linux\ngit-subtree-split: %s\n" % (version[:7], version))
+        args = ["commit-tree", tree, "-m", message] + (["-p", previous] if previous else [])
+        return self.git(*args)
+
+    def merge_release(self, squash, files):
+        """The merge that brings @squash in, with linux/ as it ends up."""
+        for name, text in files.items():
+            self.write("linux/" + name, text)
+        self.git("add", "-A")
+        tree = self.git("write-tree")
+        merge = self.git("commit-tree", tree, "-p", "HEAD", "-p", squash,
+                         "-m", "Merge commit '%s' as 'linux'" % squash)
+        self.git("reset", "-q", "--hard", merge)
+        return merge
+
 
 def run(repo, *args):
     return subprocess.run([SCRIPT, *args], cwd=repo.path, capture_output=True, text=True,
@@ -168,6 +198,42 @@ class KernelSeries(unittest.TestCase):
         done = run(self.repo, "export", "-o", os.path.join(self.tmp, "out"))
         self.assertEqual(done.returncode, 1)
         self.assertIn("networking core", done.stderr)
+
+    def test_a_later_release_by_subtree_merge_is_not_the_series(self):
+        # The series on the import, then a release that a subtree merge brings
+        # in, as the repository's update from 6.18.48 to 6.18.57 did: what the
+        # release changed is upstream's, what the series changed stays.
+        self.series()
+        newer = {"net/dsa/user.c": "user\n", "drivers/ptp/ptp_clock.c": "ptp\n",
+                 "arch/mips/Kconfig": "mips\n", "Makefile": "VERSION = 7\n",
+                 "net/core/dev.c": "dev\n"}
+        squash = self.repo.release(newer, "1" * 40)
+        self.repo.merge_release(squash, {"Makefile": "VERSION = 7\n", "net/core/dev.c": "dev\n"})
+        done = run(self.repo, "list")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split(), ["arch/mips/Kconfig", "net/dsa/user.c"])
+        out = os.path.join(self.tmp, "out")
+        done = run(self.repo, "export", "-o", out)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(sorted(os.listdir(out)), ["0001-net-dsa-offer-flow-blocks-first.patch",
+                                                   "0002-net-dsa-tag-driver.patch"])
+
+    def test_the_newest_of_two_subtree_releases_is_the_base(self):
+        other = Repo(os.path.join(self.tmp, "other"))
+        other.commit("docs: start", {"README": "hello\n"})
+        first = {"net/dsa/user.c": "user\n", "Makefile": "VERSION = 6\n"}
+        squash = other.release(first, "1" * 40)
+        other.merge_release(squash, first)
+        other.commit("net: dsa: offer flow blocks first", {"linux/net/dsa/user.c": "user 2\n"})
+        second = other.release({"net/dsa/user.c": "user\n", "Makefile": "VERSION = 7\n"},
+                               "2" * 40, previous=squash)
+        other.merge_release(second, {"Makefile": "VERSION = 7\n"})
+        done = run(other, "list")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split(), ["net/dsa/user.c"])
+        # Below the second release's merge, the first release is the base.
+        done = run(other, "list", "HEAD^")
+        self.assertEqual(done.stdout.split(), ["net/dsa/user.c"])
 
     def test_a_repository_without_the_import_is_refused(self):
         other = Repo(os.path.join(self.tmp, "other"))

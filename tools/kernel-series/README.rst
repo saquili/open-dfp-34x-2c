@@ -20,8 +20,14 @@ Usage
     tools/kernel-series/kernel-series export [-o DIR] [REV]
 
 Run inside the repository. REV is the commit to look at (default ``HEAD``). The
-series is every commit from the one that imported the kernel (subject
-``linux: import Linux ...``) to REV.
+series is what ``linux/`` of REV holds over the kernel release it is based on:
+the newest squash commit below REV of ``git subtree add`` or ``git subtree
+merge`` with ``--squash -P linux``, whose tree is the release as it is, or, in
+a repository without one, ``linux/`` of the commit that imported the kernel
+(subject ``linux: import Linux ...``). What a later release brings in by a
+subtree merge is the release's, not the series'. The series' commits are the
+ones below REV that are not merges, after that import. ``list`` and ``check``
+read the whole history, which a shallow clone does not have.
 
 ``list``
     The files of ``linux/`` that the series modifies or deletes, one path a

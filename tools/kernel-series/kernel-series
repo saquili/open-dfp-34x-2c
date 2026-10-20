@@ -10,8 +10,13 @@
 #        kernel-series export [-o DIR] [REV]
 #
 # Run inside the repository. REV is the commit to look at (default HEAD). The
-# series is every commit from the one that imported the kernel
-# ("linux: import Linux ...") to REV.
+# series is what linux/ of REV holds over the kernel release it is based on:
+# the newest squash commit below REV of "git subtree add" or "git subtree
+# merge" with --squash -P linux (CONTRIBUTING.rst), whose tree is the release
+# as it is, or, in a repository without one, linux/ of the commit that
+# imported the kernel ("linux: import Linux ..."). A later release that a
+# subtree merge brings in is the release's, not the series'. The series'
+# commits are the ones below REV that are not merges, after that import.
 #
 #   list    The files of linux/ that the series modifies or deletes, one path
 #           a line, relative to linux/. Files it adds are the series' own and
@@ -68,13 +73,23 @@ command -v git >/dev/null 2>&1 || die "git is not installed"
 top=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
 git rev-parse --verify --quiet "$rev^{commit}" >/dev/null || die "$rev is not a commit"
 
-# The import is the first commit, oldest first, whose subject says so.
-base=$(git log --reverse --format='%H %s' "$rev" | awk '/^[0-9a-f]+ linux: import Linux / { print $1; exit }')
-[ -n "$base" ] || die "no commit \"linux: import Linux ...\" below $rev"
+# The release, as a tree to compare with linux/ of REV: the newest subtree
+# squash, else linux/ of the import, the first commit, oldest first, whose
+# subject says so.
+import=$(git log --reverse --format='%H %s' "$rev" | awk '/^[0-9a-f]+ linux: import Linux / { print $1; exit }')
+squash=$(git log -1 --format=%H --all-match --grep='^git-subtree-dir: linux/*$' \
+	--grep="^Squashed 'linux/' " "$rev")
+if [ -n "$squash" ]; then
+	release=$squash
+elif [ -n "$import" ]; then
+	release=$import:linux
+else
+	die "no import of linux/ below $rev: no subtree squash and no commit \"linux: import Linux ...\""
+fi
 
 modified() {
-	git diff --name-status --no-renames "$base" "$rev" -- linux |
-		awk -F'\t' '$1 == "M" || $1 == "D" { sub(/^linux\//, "", $2); print $2 }'
+	git diff --name-status --no-renames "$release" "$rev:linux" |
+		awk -F'\t' '$1 == "M" || $1 == "D" { print $2 }'
 }
 
 case $cmd in
@@ -105,13 +120,15 @@ export)
 	[ -n "$out" ] || out=$top/build/kernel-series
 	mkdir -p "$out"
 	n=1
+	# The merges that bring a release in are not the series', and the
+	# squash commits hold the release at the top, not under linux/.
 	# CORE is split on purpose: it is a list of paths.
 	# shellcheck disable=SC2086
-	for commit in $(git log --reverse --format=%H "$base..$rev" -- $CORE); do
+	for commit in $(git log --reverse --no-merges --format=%H "${import:+$import..}$rev" -- $CORE); do
 		git format-patch --no-signature --start-number "$n" -1 -o "$out" "$commit"
 		n=$((n + 1))
 	done
-	[ "$n" -gt 1 ] || die "no commit in $base..$rev touches the networking core"
+	[ "$n" -gt 1 ] || die "no commit below $rev touches the networking core"
 	;;
 *)
 	usage
