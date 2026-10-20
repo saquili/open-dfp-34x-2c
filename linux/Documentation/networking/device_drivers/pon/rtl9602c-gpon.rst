@@ -3220,8 +3220,7 @@ The MAC holds two keys, the active one and the next one. A key is written a
    first in bits 15:8, into ``RTL9602C_GPON_AES_KEY_DATA``; write i into
    ``RTL9602C_GPON_AES_KEY_WORD``, then i with
    ``RTL9602C_GPON_AES_KEY_WORD_REQ``; poll
-   ``RTL9602C_GPON_AES_KEY_WORD_DONE`` up to 100 times, 1 us apart. (M for the
-   completion, I for the octet order)
+   ``RTL9602C_GPON_AES_KEY_WORD_DONE`` up to 100 times, 1 us apart. (M)
 
 The MAC makes the next key the active one when the superframe counter equals
 ``RTL9602C_GPON_AES_SWITCH_TIME``. Before a new key is written,
@@ -3368,18 +3367,21 @@ into the next key, then into the active key.
        it in the clear: 0 of 243,287 downstream frames arrived, against
        242,150 of 242,150 before; unmarked again, 243,266 of 243,264 (the
        ``aes`` line counted 1 Port-ID, then 0).
-   * - That the MAC decrypts what an OLT encrypts with the key the driver sent:
-       the octet order of the key words and the counter's start are the
-       MAC's and the OLT's, and no OLT that encrypts has been tried. Frames
-       that a Port-ID marked encrypted carries in the clear cannot be read on
-       the board: the decryption leaves their FCS wrong, and the switch drops
-       them.
-     - I
-     - An OLT that encrypts a Port-ID. With Port-ID 4095 marked encrypted
-       while the OLT sent it in the clear, 20 of 20 test frames were counted
-       in ``rx_crc_errors`` of the ``pon`` port, with
-       ``RTL9602C_GEM_DS_MC_FILTER_FCS_CHECK`` set and, in a test build,
-       clear; none reached the CPU.
+   * - The MAC decrypts what an OLT encrypts with the key the driver sent: the
+       octet order in which the driver writes the key, the earlier octet of
+       each pair in bits 15:8, is the one the MAC and the OLT share, and so is
+       the counter's start. Frames that a Port-ID marked encrypted carries in
+       the clear cannot be read on the board: the decryption leaves their FCS
+       wrong, and the switch drops them.
+     - M
+     - On an operator's OLT that encrypts the OMCC and every data Port-ID and
+       asks for a new key once a day, the traffic was decrypted throughout:
+       for 34 hours the ``aes`` line of the ``gpon`` view, read without
+       sending anything, counted the encrypted Port-IDs while the traffic
+       flowed. With Port-ID 4095 marked encrypted while the OLT sent it in the
+       clear, 20 of 20 test frames were counted in ``rx_crc_errors`` of the
+       ``pon`` port, with ``RTL9602C_GEM_DS_MC_FILTER_FCS_CHECK`` set and, in
+       a test build, clear; none reached the CPU.
 
 Reporting: the PON class and devlink
 ====================================
@@ -3589,11 +3591,6 @@ Known limitations
   POPUP, has not been exercised on the board, since it needs the ONU in O6. The test OLT sends no Physical_Equipment_Error and no
   PST, so the PEE alarm and the PST answer have been exercised only with
   injected messages.
-- Decryption has been tried only against an OLT that encrypts nothing: the key
-  exchange and the marking of a flow work as far as the driver's side goes,
-  but whether the MAC decrypts what an OLT encrypts with the key sent depends
-  on the key's octet order in the MAC, which is an assumption (see "FEC and
-  encryption").
 - Upstream FEC is left to the MAC, which is taken to answer the OLT's Use FEC
   flag by itself: no setting that switches it has been found yet, and no OLT
   tried has been seen to set the flag, so only the state with FEC off has been
@@ -3782,8 +3779,6 @@ Assumptions the driver depends on
        "Known limitations").
      - An OLT that sets Use FEC: the ``us`` line of the ``gpon`` view, the
        kernel log, and the OLT's view of the ONU's bursts.
-   * - That no encryption is needed ("FEC and encryption", "Known limitations").
-     - An OLT that encrypts a Port-ID.
    * - That the serial-number requests the MAC counts in O3 are those it
        answered ("Transmit power level").
      - The ``ploam-auto`` count of the ``uscntr`` view rising by as many as
