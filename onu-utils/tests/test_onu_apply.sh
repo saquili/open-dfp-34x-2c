@@ -39,14 +39,39 @@ has() {
 	part "$1" | grep -qxF -- "$2"
 }
 
+# Whether the test $1 passes, which it waits for, 20 s at most.
+soon() {
+	i=0
+	until eval "$1"; do
+		[ $i -lt 400 ] || return 1
+		"$REAL_SLEEP" 0.05
+		i=$((i + 1))
+	done
+}
+
+# Whether netifd's stand-in has told onu-apply of the coming up of every
+# session it runs (netifd-standin.sh), which it waits for, 20 s at most.
+told() {
+	soon '! ls "$STANDIN"/pending.* >/dev/null 2>&1'
+}
+
+# Session $1 ends, as a concentrator may end it, and comes up again; back
+# once netifd's stand-in has told onu-apply of both.
+drop() {
+	told
+	: >"$STANDIN/drop$1"
+	soon "[ ! -e \"\$STANDIN/drop$1\" ]"
+	told
+}
+
 setup() {
 	T=$(mktemp -d)
 	LOG=$T/log
-	export ONU_ROOT=$T/root LOG APPLY=$MODE_SCRIPT
+	export ONU_ROOT=$T/root LOG APPLY=$MODE_SCRIPT STANDIN=$T/netifd
 	mkdir -p "$ONU_ROOT/run" "$ONU_ROOT/etc" "$ONU_ROOT/proc/sys/net/ipv4" \
 		"$ONU_ROOT/sys/class/net/sfp" "$ONU_ROOT/sys/class/net/pon" \
 		"$ONU_ROOT/sys/class/net/gem4095" "$ONU_ROOT/sys/class/net/gem1024" \
-		"$ONU_ROOT/sys/class/net/gem256" "$T/bin"
+		"$ONU_ROOT/sys/class/net/gem256" "$T/bin" "$STANDIN"
 	echo 00:00:5e:00:53:01 >"$ONU_ROOT/sys/class/net/sfp/address"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
 	mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/all"
@@ -130,11 +155,26 @@ setup() {
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
 	printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf"\n[ "$1" = guard ] && cp "$2" "%s/guard.conf"\n[ "$1" = acl ] && cp "$2" "%s/acl.conf"\nexit 0\n' \
 		"$T" "$T" "$T" >"$T/bin/onu-fw"
-	# pppoed opens IPv4, or IPv6 alone when told -6, and keeps it two seconds.
-	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\ncase " $* " in\n%s\n%s\nesac\n%s 2\n' \
+	# hold keeps the session of pppoed's stand-ins while netifd's stand-in
+	# runs the interface (TOKEN), and ends it once when the test drops it
+	# (DROP), its end not told yet (PENDING, netifd-standin.sh).
+	cat >"$T/hold" <<-EOF
+	#!/bin/sh
+	while [ -e "\$TOKEN" ]; do
+	 	if [ -e "\$DROP" ]; then
+	 		: >"\$PENDING"
+	 		rm -f "\$DROP"
+	 		exit 0
+	 	fi
+	 	"$REAL_SLEEP" 0.05
+	done
+	EOF
+	chmod +x "$T/hold"
+	# pppoed opens IPv4, or IPv6 alone when told -6, and holds it.
+	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\ncase " $* " in\n%s\n%s\nesac\nexec "%s"\n' \
 		'*" -6 "*) echo "up6 ppp1 local fe80::2 peer fe80::1 session 18" ;;' \
 		'*) echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns 198.51.100.53 -" ;;' \
-		"$REAL_SLEEP" >"$T/bin/pppoed"
+		"$T/hold" >"$T/bin/pppoed"
 	# A wait of a fraction of a second, as for onu-apply's lock, is real.
 	printf '#!/bin/sh\ncase $1 in 0.*) exec %s "$1" ;; esac\nexit 0\n' "$REAL_SLEEP" >"$T/bin/sleep"
 	printf '#!/bin/sh\necho "onu-apply $*" >>"$LOG"\n' >"$T/bin/onu-apply"
@@ -147,6 +187,23 @@ setup() {
 
 teardown() {
 	"$MODE_SCRIPT" stop 2>/dev/null
+	# Every interface of netifd's stand-in ends, and each of its loops is
+	# waited for before the root it works in goes: one still there after
+	# five seconds is killed, and fails the test.
+	rm -f "$STANDIN"/ses*
+	if [ -r "$STANDIN/loops" ]; then
+		while read -r pid name; do
+			i=0
+			while [ ! -e "$STANDIN/ended.$name" ] && [ $i -lt 100 ]; do
+				"$REAL_SLEEP" 0.05
+				i=$((i + 1))
+			done
+			[ -e "$STANDIN/ended.$name" ] && continue
+			kill "$pid" 2>/dev/null
+			failures=$((failures + 1))
+			echo "  FAIL: netifd's stand-in did not end $name"
+		done <"$STANDIN/loops"
+	fi
 	rm -rf "$T"
 }
 
@@ -214,10 +271,7 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "IPv4 up on ppp0" && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'has nets "device: type=8021q ifname=sfp vid=100 name=net1 rpfilter=strict ipv6=0"'
 check 'has nets "interface net1: device=net1 proto=static ipaddr=192.168.1.1/24"'
 check 'has nets "rule: src=192.168.1.0/24 lookup=101"'
@@ -304,10 +358,7 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "IPv4 up on ppp0" && break
-	"$REAL_SLEEP" 0.2
-done
+told
 # Before the session has its address there is nothing to come in to.
 check 'grep -qx "lan net1 192.168.1.0/24" "$T/fw.all" &&
 	[ "$(sed -n "1,/^--$/p" "$T/fw.all" | grep -c "^fwd\|^dmz")" -eq 0 ]'
@@ -322,17 +373,16 @@ check 'grep -qx "fwd ppp0 192.0.2.2 tcp 7000-7010 192.168.1.10 9000" "$F"'
 check '! grep -q 3074 "$F"'
 check 'grep -qx "dmz ppp0 192.0.2.2 192.168.1.20" "$F"'
 check '[ "$(grep -n "^dmz" "$F" | cut -d: -f1)" -gt "$(grep -n "^fwd" "$F" | tail -n 1 | cut -d: -f1)" ]'
-# The session ends after two seconds and comes up again (pppoed's stand-in):
-# its forwards go with it, and come back with it.
+# The session ends, as a concentrator may end it, and comes up again: its
+# forwards go with it, and come back with it. cycled LINE FILE: of the tables
+# FILE kept, one after another, one had a line that starts with LINE, a later
+# one none, and a later one again.
 cycled() {
-	awk '/^--$/ { s = s (f ? 1 : 0); f = 0; next } /^fwd ppp0/ { f = 1 } END { print s }' \
-		"$T/fw.all" | grep -q 101
+	awk -v l="$1" '/^--$/ { s = s (f ? 1 : 0); f = 0; next } index($0, l) == 1 { f = 1 }
+		END { print s }' "$2" | grep -q 101
 }
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-	cycled && break
-	"$REAL_SLEEP" 0.2
-done
-check 'cycled'
+drop 1
+check 'cycled "fwd ppp0" "$T/fw.all"'
 # The firewall's rules in the ACL name the session's address, which the
 # rules came with once it was up, and went without while it was down.
 A=$T/acl.conf
@@ -341,8 +391,7 @@ check 'grep -qx "fwd ppp0 192.0.2.2 tcp 8080 192.168.1.10 80" "$A" &&
 	grep -qx "dmz ppp0 192.0.2.2 192.168.1.20" "$A"'
 check 'grep -qx "dev 1 00:00:5e:00:53:a1 192.168.1.10" "$A" && [ "$(grep -c "^dev" "$A")" -eq 1 ]'
 check 'grep -qx "rule 1_block_internet:198.51.100.0/24_dev:1:00:00:5e:00:53:a1_tcp_80_any_on" "$A"'
-check 'awk "/^--\$/ { s = s (f ? 1 : 0); f = 0; next } /^wan pppoe:1/ { f = 1 } END { print s }" \
-	"$T/acl.all" | grep -q 101'
+check 'cycled "wan pppoe:1" "$T/acl.all"'
 check 'logged "^onu-fw acl $ONU_ROOT/run/onu-fw-acl.conf $ONU_ROOT/run/onu-fw.acl$"'
 # Without the DMZ and with the forwards off, only the network's NAT is left.
 sed -i.bak -e "s|/on$|/off|" -e "/^DMZ1=/d" "$ONU_ROOT/run/onu.conf"
@@ -441,18 +490,15 @@ teardown
 
 echo "a PPPoE session without name servers"
 setup
-printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
+printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\nexec "%s"\n' \
 	'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns - -"' \
-	"$REAL_SLEEP" >"$T/bin/pppoed"
+	"$T/hold" >"$T/bin/pppoed"
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "IPv4 up on ppp0" && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'logged "IPv4 up on ppp0"'
 check '[ ! -e "$ONU_ROOT/run/onu-dns" ]'
 check '"$MODE_SCRIPT" status >/dev/null'
@@ -467,6 +513,7 @@ echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
 check '[ "$(grep -c "^onu-nl link add vlan gem256 wan410 410" "$LOG")" = 1 ]'
+told
 # A sync with the interface there changes nothing.
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
@@ -484,9 +531,9 @@ teardown
 
 echo "a session's packets to the host side's networks are dropped on its interface"
 setup
-printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
+printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\nexec "%s"\n' \
 	'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns - -"' \
-	"$REAL_SLEEP" >"$T/bin/pppoed"
+	"$T/hold" >"$T/bin/pppoed"
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
 printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nDATA_ADDRESS=203.0.113.2/30\n' \
 	>"$ONU_ROOT/run/onu-mgmt"
@@ -494,10 +541,7 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "IPv4 up on ppp0" && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'logged "^onu-nl clsact add ppp0$"'
 check 'logged "^onu-nl filter del ppp0 pref 1$" && ! logged "^onu-nl filter del ppp0 pref 1000$"'
 check 'logged "^onu-nl filter add ppp0 pref 1 dst 198.51.100.2/30 drop$"'
@@ -519,6 +563,8 @@ echo 1492 >"$ONU_ROOT/sys/class/net/ppp0/mtu"
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_HOST_VLAN=36 \
 	SESSION1_MAC=00:00:5e:00:53:01
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+# The concentrator does not answer yet.
+: >"$STANDIN/held"
 "$MODE_SCRIPT" start 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 # Passthrough without networks has the guard too: the DHCP server's requests
@@ -537,6 +583,8 @@ check 'has links "interface lan36: device=lan36 proto=static ipaddr=169.254.0.1/
 check 'logged "^onu-nl param l3_ttl_decrement false"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
 check '! logged "^udhcpd"'
+# It answers.
+rm "$STANDIN/held"
 "$MODE_SCRIPT" sync 2>/dev/null
 check 'logged "^onu-nl link add vlan gem256 wan410 410"'
 check 'logged "^onu-nl link set wan410 address 00:00:5e:00:53:01"'
@@ -544,10 +592,7 @@ check '[ "$(grep -n "onu-nl link set wan410 address" "$LOG" | cut -d: -f1)" -lt 
 check 'logged "^onu-nl link set wan410 mtu 1508"'
 # The links are onu-nl's: ip is not run.
 check '! logged "^ip "'
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/onu-pass" ] && logged "^udhcpd" && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/lan")" = lan36 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/hands")" = ipv4 ]'
@@ -579,12 +624,9 @@ check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 check 'logged "^udhcpd -f $ONU_ROOT/run/udhcpd-lan36.conf"'
 check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan36 from session 1"'
 check '"$MODE_SCRIPT" status | grep -q "^session 1 on wan410 (ipv4), up on ppp0, 192.0.2.2"'
-# The stand-in session ends after two seconds: the address goes with it,
+# The session ends, as a concentrator may end it: the address goes with it,
 # its route and the proxy ARP entry with netifd's part.
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	logged "^onu-net del pass-1$" && break
-	"$REAL_SLEEP" 0.2
-done
+drop 1
 check 'logged "^onu-net del pass-1$"'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ ! -e "$ONU_ROOT/run/session/1" ]'
@@ -602,20 +644,13 @@ echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
 # Both start at once: pppoed under netifd keeps their authentications apart
 # (-w, pppoed's tests).
 check '[ -s "$ONU_ROOT/run/network.d/ses1" ] && [ -s "$ONU_ROOT/run/network.d/ses2" ]'
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/session/2/ipv6" ] && [ -s "$ONU_ROOT/run/onu-pass" ] && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check '[ "$(grep -c "^onu-nl link add vlan gem256 wan410" "$LOG")" = 1 ]'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -6 -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/ipv6")" = fe80::2 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/2/ppp")" = ppp1 ]'
 # The IPv6 session hands its delegated prefix on, through dhcp6d.
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "^dhcp6d" && break
-	"$REAL_SLEEP" 0.2
-done
 check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/dhcp6d/pd2 -x $ONU_ROOT/usr/lib/onu/onu-call -n ses2$"'
 # The guard takes the requests to udhcpd and to dhcp6d's server on the link,
 # and the answers to dhcp6d's client on the sessions'.
@@ -699,6 +734,7 @@ conf SESSION1_GEM=1024 SESSION1_FAMILY=both
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
+told
 check 'logged "^pppoed up -i gem1024 -f $ONU_ROOT/run/onu-pppoe1 -D -P"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/hands")" = "ipv4 ipv6" ]'
 check '! logged "type vlan id"'
@@ -725,6 +761,7 @@ conf SESSION1_FAMILY=ipv4
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
+told
 check 'logged "^pppoed up -i gem256 "'
 check '! logged "pppoed up -i gem100" && ! logged "pppoed up -i gem200"'
 "$MODE_SCRIPT" stop 2>/dev/null
@@ -738,6 +775,7 @@ printf '#!/bin/sh\necho x >>"%s/pon-asked"\n[ "$1" = gem ] || exit 1\n[ "$(wc -l
 conf SESSION1_FAMILY=ipv4
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
+told
 check 'logged "^pppoed up -i gem256 "'
 check '! grep -q "GEM port is gone" "$LOG"'
 "$MODE_SCRIPT" stop 2>/dev/null
@@ -805,7 +843,7 @@ check '! logged "matchall"'
 # The same ports again: their filters stay as they are.
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
-check '! logged "^onu-nl filter add"'
+check '! logged "^onu-nl filter add gem"'
 # The OLT provisions its GEM ports again: the interfaces come back under the
 # same names, with new indexes and without filters, and get them again.
 for dev in gem4095 gem256 gem1024; do echo 9 >"$ONU_ROOT/sys/class/net/$dev/ifindex"; done
@@ -838,6 +876,7 @@ check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 : >"$LOG"
 printf '410 1410\n420 1430\n' >"$ONU_ROOT/run/omcid/xlate"
 "$MODE_SCRIPT" sync 2>/dev/null
+told
 # With them, omcid leaves 1410 out, and the session moves into it.
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
 check 'logged "^killall -USR2 omcid"'
@@ -868,6 +907,7 @@ check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem1024 ]'
 printf '410 1600\n' >"$ONU_ROOT/run/omcid/xlate"
 printf '1600 256\n' >"$ONU_ROOT/run/omcid/gem-vlans"
 "$MODE_SCRIPT" sync 2>/dev/null
+told
 check 'logged "^onu-nl link del wan1410"'
 check 'logged "^onu-nl link add vlan gem256 wan1600 1600"'
 check 'logged "^pppoed up -i wan1600 "'
@@ -901,10 +941,7 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/session/1/ipv4" ] && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -4 -M$"'
 check '[ ! -e "$ONU_ROOT/run/network.d/links" ]'
 check '[ ! -e "$ONU_ROOT/run/session/1/lan" ]'
@@ -942,6 +979,7 @@ echo "user2 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
+told
 check '[ "$(part links | grep -c "name=lan410")" = 1 ]'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -4 -M$"'
@@ -963,10 +1001,7 @@ check 'has links "device: type=8021q ifname=sfp vid=410 name=lan410 rpfilter=str
 check 'has links "device: type=8021q ifname=sfp vid=37 name=lan37 rpfilter=strict ipv6=0"'
 "$MODE_SCRIPT" sync 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/session/2/pass" ] && [ -s "$ONU_ROOT/run/session/1/pass" ] && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -4 -P -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/lan")" = lan37 ]'
@@ -1035,10 +1070,7 @@ echo "user2/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ "$(grep -c "^dhcp6d" "$LOG")" = 2 ] && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1 -b $ONU_ROOT/run/dhcp6d/pd1 -x $ONU_ROOT/usr/lib/onu/onu-call -n ses1$"'
 check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/dhcp6d/pd2 -x $ONU_ROOT/usr/lib/onu/onu-call -n ses2 -t 102$"'
 check 'has links "device: type=8021q ifname=sfp vid=37 name=lan37 rpfilter=strict ipv6=1"'
@@ -1170,9 +1202,6 @@ teardown
 echo "each session an interface of netifd, of the protocol pppoed, in its role"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
-# The sessions last a while here, so that none ends and starts again while
-# the events below are told.
-sed "s/ 2\$/ 6/" "$T/bin/pppoed" >"$T/pppoed" && cat "$T/pppoed" >"$T/bin/pppoed"
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv4 \
 	SESSION2_HOST_VLAN=37 SESSION3_VLAN=410 SESSION3_FAMILY=ipv6 SESSION3_PASS=off
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
@@ -1191,11 +1220,8 @@ check '[ "$(net 3)" = "option device wan410 option proto pppoed option session 3
 check '[ "$(cat "$ONU_ROOT/run/session/1/role")" = "pass none" ] && [ "$(cat "$ONU_ROOT/run/session/2/role")" = "routed none" ] && [ "$(cat "$ONU_ROOT/run/session/3/role")" = "none none" ]'
 # Both sessions that hand their addresses on have, and every event of
 # their coming up is told.
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	[ -s "$ONU_ROOT/run/session/1/pass" ] && [ -s "$ONU_ROOT/run/session/2/pass" ] && break
-	"$REAL_SLEEP" 0.2
-done
-"$REAL_SLEEP" 0.5
+told
+check '[ -s "$ONU_ROOT/run/session/1/pass" ] && [ -s "$ONU_ROOT/run/session/2/pass" ]'
 # Another event of the same session hands on nothing again; another
 # interface's is no business of onu-apply.
 : >"$LOG"
@@ -1224,10 +1250,7 @@ ln -s "$holder" "$lock"
 mkdir -p "$ONU_ROOT/sys/class/net/gem999"
 "$MODE_SCRIPT" sync 2>/dev/null &
 waiting=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -L "$ONU_ROOT/run/onu-apply.again" ] && break
-	"$REAL_SLEEP" 0.1
-done
+soon '[ -L "$ONU_ROOT/run/onu-apply.again" ]'
 check '[ "$(readlink "$ONU_ROOT/run/onu-apply.again")" = "$waiting" ]'
 "$MODE_SCRIPT" omcid 2>/dev/null
 rc=$?
@@ -1235,28 +1258,32 @@ check '[ $rc -eq 0 ] && kill -0 "$waiting" 2>/dev/null'
 check '[ ! -e "$ONU_ROOT/run/network.d/ses1" ]'
 kill "$holder"
 wait "$holder" 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	kill -0 "$waiting" 2>/dev/null || break
-	"$REAL_SLEEP" 0.2
-done
+soon '! kill -0 "$waiting" 2>/dev/null'
 check '! kill -0 "$waiting" 2>/dev/null'
 check '[ -e "$ONU_ROOT/run/network.d/ses1" ]'
 # The session comes up behind it: netifd's event runs an onu-apply of its
 # own, which holds the lock while it lasts.
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	logged "session 1: IPv4 up" && [ ! -L "$lock" ] && break
-	"$REAL_SLEEP" 0.2
-done
+told
 check 'logged "session 1: IPv4 up"'
-check '[ ! -L "$ONU_ROOT/run/onu-apply.again" ] && [ ! -L "$lock" ]'
-# A lock whose holder is gone is taken over; dhcp6d's change is a sync too.
+# The sync that waited left neither the lock nor another wait behind.
+check '[ ! -L "$ONU_ROOT/run/onu-apply.again" ] && [ "$(readlink "$lock" 2>/dev/null)" != "$waiting" ]'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
+echo "a lock whose holder is gone is taken over"
+setup
+conf MODE=bridge
+"$MODE_SCRIPT" start 2>/dev/null
+lock=$ONU_ROOT/run/onu-apply.lock
 "$REAL_SLEEP" 0 &
 dead=$!
 wait "$dead"
 ln -s "$dead" "$lock"
+check '[ "$(readlink "$lock")" = "$dead" ]'
+# dhcp6d's change is a sync too, which takes the lock in bridge mode as well.
 "$MODE_SCRIPT" dhcp6d 2>/dev/null
-check '[ $? -eq 0 ] && [ ! -L "$lock" ]'
-"$MODE_SCRIPT" stop 2>/dev/null
+rc=$?
+check '[ $rc -eq 0 ] && [ ! -L "$lock" ] && [ ! -L "$ONU_ROOT/run/onu-apply.again" ]'
 teardown
 
 echo "in bridge mode a sync leaves omcid alone with the OLT"
@@ -1264,7 +1291,8 @@ setup
 "$MODE_SCRIPT" start 2>/dev/null
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
-check '[ $? -eq 0 ] && ! logged "^ip " && ! logged "^procd start" && ! logged "^onu-net"'
+rc=$?
+check '[ $rc -eq 0 ] && ! logged "^ip " && ! logged "^procd start" && ! logged "^onu-net"'
 teardown
 
 # A change on trial, as the status daemon makes it: the new settings and
