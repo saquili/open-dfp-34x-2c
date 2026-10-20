@@ -106,7 +106,7 @@ EOF2
 
 case "${1:-}" in
 omcid-kernel)
-	kernel "$K/omcid" omcid
+	kernel "$K/omcid" omcid pon
 	kmake /tmp/h headers_install INSTALL_HDR_PATH=/tmp/uapi >/dev/null 2>&1
 	mkdir /tmp/o
 	cp -r "$R/omcid/." /tmp/o

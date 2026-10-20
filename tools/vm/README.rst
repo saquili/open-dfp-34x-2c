@@ -30,8 +30,10 @@ What each one is for:
     daemon's netlink and ``tc`` calls against a real kernel, and needs the tc
     actions the daemon installs, the vlan action among them, which the kernel
     of a developer's laptop or of a container host often leaves out. The kernel
-    here has them (``omcid.config``). The test is built from the working tree
-    for the guest, and its status is the run's.
+    here has them (``omcid.config``), and the PON class with its stand-in MAC
+    (``pon.config``), over which the test reads the encrypted Port-IDs from the
+    ``pon`` family and follows its announcements. The test is built from the
+    working tree for the guest, and its status is the run's.
 
 ``pon-selftest``
     ``linux/tools/testing/selftests/drivers/net/pon/pon.py`` drives the PON
