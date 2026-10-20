@@ -20,8 +20,9 @@ is three files of one name:
 
 A record leaves out what names one unit or one bench: MAC addresses, GPON
 serial numbers, the status daemon's token, the bench's own addresses, and the
-names of the bench host and of the stick. ``tests/device/README.rst`` says how
-to make one.
+names of the bench host and of the stick. The VLANs of the lab's provisioning
+are given by neutral numbers: 410, 420 and 421 on the host side, and 1410,
+1420 and 1430 on the OLT's. ``tests/device/README.rst`` says how to make one.
 
 A record names the commit its image was built from. Records made before
 2026-10-20 name commits that are not in the published history, which was
@@ -211,14 +212,15 @@ The runs, the oldest first:
     towards the PON, omcid takes the versions a bench names and reports an
     unmapped T-CONT with the Alloc-ID 0x00FF of G.988 9.2.2, gives the bridge
     ports the VLANs a translation and a port without a filter need, and
-    discards the tagged frames that no VLAN rule takes. The lab OLT sets no VLAN filter, so the
-    last two had nothing to do. 43 of 45 passed, and both failures lay with
-    the bench: its ssh client shared the connection of the earlier cases with
-    the probe that offers no key, which so got in; and since the bench host's
-    restart its sender reaches about 420 Mb/s, under the 900 Mb/s the shaper
-    case wants of the stream without a shaper, while every frame passed and
-    the shaper held 200 Mb/s at 205. The reset case passed after the loader's
-    countdown was stopped at the console and the image was RAM-booted by hand.
+    discards the tagged frames that no VLAN rule takes. The lab OLT sets no
+    VLAN filter, so the last two had nothing to do. 43 of 45 passed, and both
+    failures lay with the bench: its ssh client shared the connection of the
+    earlier cases with the probe that offers no key, which so got in; and
+    since the bench host's restart its sender reaches about 420 Mb/s, under
+    the 900 Mb/s the shaper case wants of the stream without a shaper, while
+    every frame passed and the shaper held 200 Mb/s at 205. The reset case
+    passed after the loader's countdown was stopped at the console and the
+    image was RAM-booted by hand.
 
 ``2026-10-07-run22``
     Every case but those of router mode on the RAM image built from
@@ -239,12 +241,13 @@ The runs, the oldest first:
 ``2026-10-07-run23``
     The same cases on the image built from ``run23``, the first run
     on a stick that starts from its flash rather than from RAM. The image
-    went into both banks by its own update path (``docs/handbook/updating.rst``):
-    into bank 1 through the panel's upload route, started on trial and
-    committed by ``onu-trial``, then into bank 0 over ssh. The stick ran bank
-    1, committed. Its accounts were held aside as in the run before, and the
-    reset case brought it back from bank 1 with its two sessions up. 37 of
-    46 passed, with the same four failures and the same five skipped.
+    went into both banks by its own update path
+    (``docs/handbook/updating.rst``): into bank 1 through the panel's upload
+    route, started on trial and committed by ``onu-trial``, then into bank 0
+    over ssh. The stick ran bank 1, committed. Its accounts were held aside
+    as in the run before, and the reset case brought it back from bank 1 with
+    its two sessions up. 37 of 46 passed, with the same four failures and the
+    same five skipped.
 
 ``2026-10-12-fbf6474956e2``
     The first run on the image as it is now, built from ``fbf6474956e2``,
