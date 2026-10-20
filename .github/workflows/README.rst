@@ -28,11 +28,14 @@ Debian 13 container named by digest, and installs its tools from that Debian
 release -- except the REUSE tool, pinned to a version, and the device-tree
 schema checker, which is the latest release of dtschema (pin it if a release
 disagrees with the kernel's bindings). The jobs that only compare or release
-files that another job built run on the runner itself.
+files that another job built, or look up the runs of another workflow, run on
+the runner itself.
 
 A release of the firmware is made by ``release.yml`` alone, and a release of
 the toolchain by ``toolchain.yml`` alone, each from the commit it is started
-on: nothing built elsewhere goes into one.
+on: nothing built elsewhere goes into one. The firmware's is made only of a
+commit that ``gates.yml`` passed on, and is the repository's latest release
+once it is published; the toolchain's never is.
 
 The jobs run on GitHub's hosted runners (``ubuntu-24.04``), which start each
 job's container on a machine of their own and discard it afterwards. No job
@@ -192,23 +195,32 @@ part of an hour, so the workflow does not run on a push.
 ``release.yml`` -- when started by hand
 =======================================
 
-A release of the commit it is started on, in three jobs.
+A release of the commit it is started on, in four jobs.
 
+``gates``
+    The runs of ``gates.yml`` on exactly that commit (``gh run list
+    --commit``): one of them, of a push or started by hand, has to be
+    completed with success. The run of a pull request does not count, as it
+    tests the pull request merged into its base, and neither does a
+    cancelled one, which a push to the same branch makes of the run before
+    it. Otherwise the job fails and says so: run ``gates.yml`` by hand on the
+    branch while that commit is its head, and start the release again once it
+    has passed. The result is looked up, not made again: the commit has it.
 ``build``
-    Two builds at once, ``a`` and ``b``, each on a runner of its own, in the
-    same pinned container as ``image.yml`` and in an output directory of its
-    own. Each makes room on the runner, builds the images with the pinned
-    toolchain, takes the version the image names itself by (``VERSION_ID``
-    of its ``/etc/os-release``, the time of the commit in UTC, as
-    ``2026.10.19-2130``) and refuses one of uncommitted sources, checks that
-    no bench's files (``/etc/board.conf``, the token of scripts, ssh keys)
-    are in the image, runs the gate's negative control and the programs under
-    ``qemu-mips``, and keeps the images, the update file, the package of the
-    shipped firmware's page, their digests and the listing of the root
-    filesystem tree as the artifact ``build-a`` or ``build-b``. Build ``a``
-    also gathers the licences and sources of everything in the images, the
-    toolchain's among them (``make legal-info``), and keeps the files of the
-    release and their SHA-256 digests as the artifact ``release``.
+    Once ``gates`` passed: two builds at once, ``a`` and ``b``, each on a
+    runner of its own, in the same pinned container as ``image.yml`` and in an
+    output directory of its own. Each makes room on the runner, builds the
+    images with the pinned toolchain, takes the version the image names itself
+    by (``VERSION_ID`` of its ``/etc/os-release``, the time of the commit in
+    UTC, as ``2026.10.19-2130``) and refuses one of uncommitted sources,
+    checks that no bench's files (``/etc/board.conf``, the token of scripts,
+    ssh keys) are in the image, runs the gate's negative control and the
+    programs under ``qemu-mips``, and keeps the images, the update file, the
+    package of the shipped firmware's page, their digests and the listing of
+    the root filesystem tree as the artifact ``build-a`` or ``build-b``. Build
+    ``a`` also gathers the licences and sources of everything in the images,
+    the toolchain's among them (``make legal-info``), and keeps the files of
+    the release and their SHA-256 digests as the artifact ``release``.
 ``compare``
     Once both builds passed: it takes their artifacts, and the images, the
     update file and the package have to be identical byte for byte, and
@@ -218,9 +230,11 @@ A release of the commit it is started on, in three jobs.
     Once ``build`` and ``compare`` passed; the only job that may write to the
     repository. It takes the artifact ``release``, checks the digests, and
     makes a draft release of the tag ``v<version>`` on that commit with the
-    files, marked as a pre-release, a test build; it is refused when the tag
-    or its release exists already. A person tests the draft's files on a
-    stick and publishes it, which makes the tag.
+    files; it is refused when the tag or its release exists already. A person
+    tests the draft's files on two sticks against the lab OLT and publishes
+    it, which makes the tag. It is a full release, not a pre-release, and
+    published it is the repository's latest ("Set as the latest release" on
+    GitHub's page, the default).
 
 As the two builds run at once, a release takes about the time of one build.
 

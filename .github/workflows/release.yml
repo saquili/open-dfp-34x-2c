@@ -2,19 +2,21 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # A release, started by hand on the page of this workflow, from the commit it
-# is started on. The flash images of the board are built from source by the
-# pinned Buildroot, as image.yml builds them, with the toolchain of the release
-# that br2-external/toolchain/PIN names (or one built from source when it names
+# is started on, once the gates (gates.yml) have passed on that very commit.
+# The flash images of the board are built from source by the pinned
+# Buildroot, as image.yml builds them, with the toolchain of the release that
+# br2-external/toolchain/PIN names (or one built from source when it names
 # none), with no bench's files; checked; built twice, on two runners at once,
 # and compared byte for byte; and the sources of everything in them are
 # gathered (make legal-info, which adds the toolchain's own). The release is
 # named by the image's own version, the time of the commit in UTC
 # (post-build.sh): its tag is v2026.10.19-2130 for 2026.10.19-2130. The last
 # job, the only one that may write to the repository, makes a draft release of
-# that tag on that commit, marked as a pre-release (a test build), with the
-# files and their SHA-256 digests, for a person to test on a stick and
-# publish; the tag comes into being when it is published. Nothing built
-# elsewhere goes into a release.
+# that tag on that commit, with the files and their SHA-256 digests, for a
+# person to test on two sticks against the lab OLT and publish. It is a full
+# release, not a pre-release: published, it is the repository's latest, which
+# a release of the toolchain never is (toolchain.yml). The tag comes into
+# being when it is published. Nothing built elsewhere goes into a release.
 
 name: release
 
@@ -36,7 +38,46 @@ env:
   DEBIAN_FRONTEND: noninteractive
 
 jobs:
+  gates:
+    # A release is only made of a commit the gates passed on: a run of
+    # gates.yml on exactly this commit, completed with success. The run of a
+    # pull request does not count, as it tests the pull request merged into
+    # its base, and neither does a cancelled one: a push to the same branch
+    # cancels the run before it (gates.yml, concurrency). The result is looked
+    # up rather than made again: the commit has it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: The gates passed on this commit
+        run: |
+          list() {
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow gates.yml \
+              --commit "$GITHUB_SHA" --limit 100 "$@"
+          }
+          echo "the runs of gates.yml on $GITHUB_SHA:"
+          list
+          passed=$(list --json status,conclusion,event --jq '[.[]
+            | select(.event == "push" or .event == "workflow_dispatch")
+            | select(.status == "completed" and .conclusion == "success")] | length')
+          if [ "$passed" -gt 0 ]; then
+            echo "the gates passed on $GITHUB_SHA"
+            exit 0
+          fi
+          running=$(list --json status --jq '[.[] | select(.status != "completed")] | length')
+          if [ "$running" -gt 0 ]; then
+            echo "::error::gates.yml is still running on $GITHUB_SHA. Start the release again once it has passed."
+          else
+            echo "::error::No run of gates.yml passed on $GITHUB_SHA. Run gates on ${GITHUB_REF_NAME} (Actions, gates, Run workflow) while that commit is its head, and start the release again once it has passed."
+          fi
+          exit 1
+
   build:
+    # Only a commit the gates passed on is built.
+    needs: gates
     runs-on: ubuntu-24.04
     # The pinned host build environment: Debian 13, by digest.
     container:
@@ -215,26 +256,30 @@ jobs:
           cd dist && sha256sum -c SHA256SUMS
       - name: The draft release
         # Refused when the tag or a release of it exists already: a version
-        # is released once.
+        # is released once. A full release, not a pre-release: published, it
+        # is the repository's latest.
         run: |
           cat > notes.md <<EOF
-          A test build: the images of commit ${GITHUB_SHA}, built twice
-          and compared by this repository's release workflow (run
-          ${GITHUB_RUN_ID}), and tested on one stick and one line before
-          they were published.
+          A test build: the images of commit ${GITHUB_SHA}, whose gates
+          passed, built twice and compared by this repository's release
+          workflow (run ${GITHUB_RUN_ID}), and tested on two sticks against
+          the lab OLT before they were published.
 
           > [!WARNING]
           > **Take great care, and keep a backup first.** The install is not
           > expected to remove your data or settings: it writes this system
           > into the bank the shipped firmware does not run from, and leaves
           > the shipped firmware's bank and its settings as they were; this
-          > system keeps its own settings beside them. But these are test
-          > builds, tried on few sticks, so be careful. Before the install,
+          > system keeps its own settings beside them. It overwrites what the
+          > other bank held, which on a stick as sold was an earlier build of
+          > the shipped firmware. But these are test builds, tried on few
+          > sticks, so be careful. Before the install,
           > write down what the shipped firmware's pages show and you would
           > need again: the line's identity (the GPON serial number, and the
           > PLOAM password or LOID if your line uses one), the MAC address and
-          > any setting you changed. After it, copy the whole flash from the
-          > panel before anything else (install guide, step 6).
+          > any setting you changed. After it, copy the whole flash over ssh
+          > before anything else (install guide, step 6); the panel's button
+          > for that copy has not been tried on a stick yet.
 
           Start with the install guide, docs/handbook/install-guide.rst: the
           install, the first sign-in, an update and each way back, step by
@@ -255,4 +300,4 @@ jobs:
           EOF
           cd dist
           gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --draft --prerelease --title "open-dfp-34x-2c $VERSION" --notes-file ../notes.md -- *
+            --draft --title "open-dfp-34x-2c $VERSION" --notes-file ../notes.md -- *
