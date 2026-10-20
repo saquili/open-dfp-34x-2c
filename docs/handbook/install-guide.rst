@@ -83,7 +83,12 @@ Linux host picks the mode from the bit rate. By the kernel's SFP code
 (``sfp_parse_support()`` in ``drivers/net/phy/sfp-bus.c``) that is
 2500BASE-X on Linux 5.12 to 6.3 and from 6.8 on, 1000BASE-X before 5.12, and
 no mode it can use on 6.4 to 6.7. Only hosts with Linux 6.12 and 6.18 were
-tried; the rest is read from the kernel's source.
+tried; the rest is read from the kernel's source. Of the lane's modes, this
+system finds 2500BASE-X by itself, and 1000BASE-X with auto-negotiation;
+1000BASE-X without auto-negotiation, and 2500BASE-X with it, it runs when the
+panel's SFP page sets them, and each of the four linked with a host in the
+same mode (2026-10-20). Finding 1000BASE-X without auto-negotiation by itself
+is not measured yet (step 2).
 
 In short: on the sticks this system was tested on, the change of byte 65 is
 what lets a Linux host bring the 2.5 Gb/s link up every time, and keep it up
@@ -121,8 +126,12 @@ The shipped firmware tries the lane's modes after it starts: with the port at
 2500BASE-X its link went down for about a minute at a time, and at 1000BASE-X
 without auto-negotiation it stayed up (``updating.rst``, "From the shipped
 firmware's web page"). If the router lets you set the port's mode, set it to
-1000BASE-X without auto-negotiation; this system finds that mode by itself,
-so the port can stay so. A Linux host of 6.12 or later takes 2500BASE-X from
+1000BASE-X without auto-negotiation for this step. This system finds
+2500BASE-X, and 1000BASE-X with auto-negotiation, by itself; it did not find
+1000BASE-X without auto-negotiation in a test of 2026-10-20, and the fix is
+not measured yet. So once the page has taken the package (step 3), set the
+port back to 2500BASE-X, or to 1000BASE-X with auto-negotiation, before you
+reach the panel (step 4). A Linux host of 6.12 or later takes 2500BASE-X from
 the stick's page ("The host's view of the stick"): there, wait out the
 drops.
 
@@ -412,11 +421,11 @@ When something fails
        (``recovery.rst``).
    * - Nothing answers, five minutes after the restart: neither the panel on
        VLAN 4094 nor the shipped firmware's page without a tag
-     - Check the router's side first: the port's link, ``eth1.4094`` up with
-       its address. Then take the stick out of the cage and put it back: the
-       boot loader starts the bank that starts by default. If still nothing
-       answers, go to the serial console: ``recovery.rst``, "Where the stick
-       is".
+     - Check the router's side first: the port's link and its mode (step 2),
+       ``eth1.4094`` up with its address. Then take the stick out of the cage
+       and put it back: the boot loader starts the bank that starts by
+       default. If still nothing answers, go to the serial console:
+       ``recovery.rst``, "Where the stick is".
    * - "Wrong user or password."
      - The user is ``root``. After the first start the password is the shipped
        firmware's administrator's, if it was not ``admin`` and had at most 128

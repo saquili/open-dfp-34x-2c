@@ -137,13 +137,33 @@ and 1000BASE-X without it. The devlink parameter ``sfp_lane`` narrows the
 choice (``linux/Documentation/networking/devlink/rtl9602c.rst``). The device
 test ``net.host-link-search`` saw the lane follow a host that moved from
 2500BASE-X to 1000BASE-X with negotiation and back (T, record
-``docs/testing/2026-10-07-run23.rst``).
+``docs/testing/2026-10-07-run23.rst``). Set by hand, each of the four modes,
+2500BASE-X and 1000BASE-X with and without in-band negotiation, linked with a
+host in the same mode and carried traffic both ways (M: pings and counted
+frames, by hand, 2026-10-20). The search did not find a host at 1000BASE-X
+without negotiation then: its third setting ran with the negotiation of the
+second. The driver now re-latches the lane after every setting, which is not
+measured yet (``linux/Documentation/networking/dsa/rtl9602c.rst``, "phylink
+and the lane").
+
+Two things on the host's side matter to whoever tests the lane (M, a Linux
+host, 2026-10-20):
+
+* A Linux host's NetworkManager may put the port's saved link settings back
+  about 6 s after the port loses carrier, which undoes a mode set by hand
+  with ``ethtool``. Keep the port out of its hands while the mode is changed
+  (``nmcli device set PORT managed no``, and ``yes`` after).
+* Without in-band negotiation the link can be up on one side only: the host
+  sees carrier from the stick's transmitter alone, whether or not the
+  stick's receiver has synchronised. Read both sides: the host's carrier,
+  and on the stick ``/sys/class/net/sfp/carrier`` or the devlink parameter
+  ``sfp_lane_now``.
 
 For a developer it is the way in and out of the board. The host sends images to
 the boot loader over it, reaches the running board over it, and sends the test
 traffic over it. The boot loader runs the lane at 2500BASE-X only, so the bench
 needs a cage that links at 2500BASE-X; once Linux runs, a cage of 1000BASE-X
-works too.
+works too, one without in-band negotiation once ``sfp_lane`` names that mode.
 
 The boot loader's network interface is the same lane. The boot loader leaves
 the lane switched off, so a transfer at its prompt works only after the lane
