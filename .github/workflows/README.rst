@@ -16,25 +16,48 @@ host, with checkpatch over their sources and full line coverage of
 of the kernel series, the device-tree binding checks with ``dtbs_check`` of
 the board, and the kernel documentation. The cross toolchain and the flash
 images, each built twice and compared for reproducibility, are built when
-started by hand. The merge rule is a green suite, full line coverage where it
-is measured, and a device run (``tests/device``).
+started by hand, and so are their releases. The merge rule is a green suite,
+full line coverage where it is measured, and a device run (``tests/device``).
 
-Every job runs in one pinned host build environment, a Debian 13 container
-named by digest, and installs its tools from that Debian release -- except the
-REUSE tool, pinned to a version, and the device-tree schema checker, which is
-the latest release of dtschema (pin it if a release disagrees with the
-kernel's bindings).
+Every job that builds or tests runs in one pinned host build environment, a
+Debian 13 container named by digest, and installs its tools from that Debian
+release -- except the REUSE tool, pinned to a version, and the device-tree
+schema checker, which is the latest release of dtschema (pin it if a release
+disagrees with the kernel's bindings). The jobs that only compare or release
+files that another job built run on the runner itself.
 
-A release is made by ``release.yml`` alone, from the commit it is started on:
-nothing built elsewhere goes into one.
+A release of the firmware is made by ``release.yml`` alone, and a release of
+the toolchain by ``toolchain.yml`` alone, each from the commit it is started
+on: nothing built elsewhere goes into one.
 
 The jobs run on GitHub's hosted runners (``ubuntu-24.04``), which start each
 job's container on a machine of their own and discard it afterwards. No job
 asks for a self-hosted runner: the workflows run on pull requests, and on a
 public repository a pull request from a fork could otherwise run its code on
-a machine of the project's. The two builds of ``image.yml`` and
-``toolchain.yml`` need some 9 GB of disk each; neither workflow has run on a
-hosted runner yet.
+a machine of the project's.
+
+Room on the runner
+==================
+
+A build of the images or of the toolchain needs some 9 GB of disk. The first run
+of ``release.yml`` on a hosted runner stopped after 43 minutes with "No space
+left on device". The runner's disk holds tools that no build here uses, so every
+job that builds mounts their directories into its container -- .NET
+(``/usr/share/dotnet``), the Android tools (``/usr/local/lib/android``), GHC
+(``/opt/ghc``) and the runner's cache of tools (``/opt/hostedtoolcache``) -- and
+removes what they hold in its first step, "Make room on the runner", which
+prints the free space before and after.
+
+The pinned toolchain
+====================
+
+``image.yml`` and ``release.yml`` build the images with the toolchain of the
+release that ``br2-external/toolchain/PIN`` names, as ``make`` does
+(``docs/handbook/building.rst``). ``br2-external/toolchain/fetch`` takes its
+files through GitHub's API with the job's own token (``GH_TOKEN``, set to
+``github.token``), which reaches the releases of a private repository too,
+and from the repository the workflow runs in (``GITHUB_REPOSITORY``); the
+jobs ask for no permission beyond reading the repository's contents.
 
 ``gates.yml`` -- on every change
 ================================
@@ -63,16 +86,18 @@ hosted runner yet.
     then ``make buildroot``: the pinned Buildroot release is fetched from its
     URL, checked against the pin, and the carried patches are applied to it.
 ``image-budget``
-    The self-tests of ``tools/image-budget``, the size check of the flash images.
+    The self-tests of ``tools/image-budget``, the size check of the flash
+    images.
 ``lib-trim``
     The self-tests of ``tools/lib-trim``, the cut of the image's shared
     libraries, with the end-to-end tests built by Debian's MIPS cross compiler.
 ``image-scripts``
-    ``br2-external/tests/run``: the tests of the post-image script (with the real
-    ``mksquashfs``), of the boot script and the inittab, of the board's
-    defconfig, of the listing that compares two root filesystem trees, and of
+    ``br2-external/tests/run``: the tests of the post-image script (with the
+    real ``mksquashfs``), of the boot script and the inittab, of the board's
+    defconfig, of the listing that compares two root filesystem trees, of
     the comparison of the instruction-set gate's findings with the list of the
-    known ones. A skipped test fails the job.
+    known ones, and of ``br2-external/toolchain/fetch``, which fetches the
+    pinned toolchain. A skipped test fails the job.
 ``licensing``
     ``reuse lint``, with the REUSE tool pinned.
 
@@ -80,66 +105,101 @@ hosted runner yet.
 =========================================
 
 The cross toolchain, built from source by the pinned Buildroot with
-``br2-external/configs/toolchain_defconfig`` and checked; two builds take the
-better part of an hour, so the workflow does not run on a push. One job, in the
-same pinned container, with these steps in order: the pinned Buildroot and the
-kernel archive (``make buildroot`` and ``tools/kernel-archive``); the first
-build (``make sdk``); the toolchain tarball unpacked and relocated; what was
-built (versions and the compiler's defaults); the negative control of the
-instruction-set gate; the test programs built with the toolchain, passed through
-the gate and run under ``qemu-mips``; the gate over every target object of the
-toolchain; a second build in another directory; and the comparison of the two,
-which have to be identical but for the name of the directory and two values
-computed from the contents (``br2-external/README.rst`` says which). The steps
-after the gate over the toolchain's objects run whatever its result. With the
-toolchain as the defconfig builds it, the gate reports findings in two
-functions of the libraries (``br2-external/README.rst`` lists them), and the step
-holds them to a list: it passes when the findings are exactly the list in
-``br2-external/tests/toolchain/known-findings.txt``, fails when one is new, gone
-or different, and shows that its comparison can fail by running it against a
-list without one of the functions. See ``br2-external/README.rst`` for the
-checks.
+``br2-external/configs/toolchain_defconfig``, checked, and released; two
+builds take the better part of an hour, so the workflow does not run on a
+push. Its input "release", on by default, says whether it makes a release.
+
+``toolchain``
+    In the same pinned container, with these steps in order: room made on
+    the runner; the pinned Buildroot and the kernel archive
+    (``make buildroot`` and ``tools/kernel-archive``); the first build
+    (``make sdk``); the toolchain tarball unpacked and relocated; what was
+    built (versions and the compiler's defaults); the negative control of the
+    instruction-set gate; the test programs built with the toolchain, passed
+    through the gate and run under ``qemu-mips``; the gate over every target
+    object of the toolchain; with "release" on, the files of the release,
+    kept as the artifact ``toolchain``; a second build in another directory;
+    and the comparison of the two, which have to be identical but for the
+    name of the directory and two values computed from the contents
+    (``br2-external/README.rst`` says which). The second build and the
+    comparison run whatever the result of the steps before them. With the
+    toolchain as the defconfig builds it, the gate reports findings in two
+    functions of the libraries (``br2-external/README.rst`` lists them), and
+    the step holds them to a list: it passes when the findings are exactly
+    the list in ``br2-external/tests/toolchain/known-findings.txt``, fails
+    when one is new, gone or different, and shows that its comparison can
+    fail by running it against a list without one of the functions. The
+    files of the release are the tarball of the first build,
+    ``open-dfp-34x-2c-toolchain.tar.gz``, the sources and licences of
+    everything in it (``make legal-info`` of that build) as one archive, and
+    their ``SHA256SUMS``.
+``release``
+    With "release" on, once ``toolchain`` passed, the comparison included;
+    the only job that may write to the repository. It takes the artifact,
+    checks the digests and makes the release ``toolchain-<version>`` on that
+    commit, the version being the time of the commit in UTC, refused when the
+    tag exists already. The release is not marked as the repository's
+    latest, which stays the firmware's, and its notes give the lines of
+    ``br2-external/toolchain/PIN`` that name it; a commit that puts them in
+    the file has the images built with it (``br2-external/README.rst``, "The
+    toolchain of a release").
 
 ``image.yml`` -- when started by hand
 =====================================
 
 The flash images of the board, built from source with
 ``br2-external/configs/odi_dfp_34x_2c3_defconfig`` by ``make`` in the top
-directory, and checked. One job, in the same pinned container, with these steps
-in order: the build (``make``, which also judges the result: ``k0`` and ``r0`` have to
-fit their partitions, the instruction-set gate has to pass over the whole root
-filesystem tree, and the digests have to check);
-what was built (the compiler, the image header, the shared objects, and no
-``libgcc_s`` among them); the negative control of the gate; the programs run under
-``qemu-mips`` (``br2-external/tests/image/check-applets``); the bench's dry run
-of the root filesystem image (``make flash ... ARGS=--dry-run``, which names no
-board); the images, the update file and the package of the shipped
-firmware's page kept as the workflow artifact ``images``; and a second build
-in another directory, with the comparison of the two: the images byte for byte
-and the root filesystem trees by mode, size and digest of every file
-(``br2-external/tests/image/tree-digest``). The steps after the first build run
-whatever its result. Two builds take the better part of an hour, so the workflow
-does not run on a push.
+directory, with the pinned toolchain, and checked. One job, in the same pinned
+container, with these steps in order: room made on the runner; the build
+(``make``, which also judges the result: ``k0`` and ``r0`` have to fit their
+partitions, the instruction-set gate has to pass over the whole root
+filesystem tree, and the digests have to check); what was built (the
+compiler, the image header, the shared objects, and no ``libgcc_s`` among
+them); the negative control of the gate; the programs run under ``qemu-mips``
+(``br2-external/tests/image/check-applets``); the bench's dry run of the root
+filesystem image (``make flash ... ARGS=--dry-run``, which names no board);
+the images, the update file and the package of the shipped firmware's page
+kept as the workflow artifact ``images``; and a second build in another
+directory, with the same unpacked toolchain, and the comparison of the two:
+the images byte for byte and the root filesystem trees by mode, size and
+digest of every file (``br2-external/tests/image/tree-digest``). The steps
+after the first build run whatever its result. Two builds take the better
+part of an hour, so the workflow does not run on a push.
 
 ``release.yml`` -- when started by hand
 =======================================
 
-A release of the commit it is started on, in two jobs. ``build`` runs in the
-same pinned container as ``image.yml``: it builds the images, takes the
-version the image names itself by (``VERSION_ID`` of its ``/etc/os-release``,
-the time of the commit in UTC, as ``2026.10.19-2130``) and refuses one of
-uncommitted sources, checks that no bench's files (``/etc/board.conf``, the
-token of scripts, ssh keys) are in the image, runs the gate's negative control
-and the programs under ``qemu-mips``, gathers the licences and sources of
-everything in the images (``make legal-info``), keeps the images, the update
-file, the package of the shipped firmware's page, the sources and their
-SHA-256 digests as the artifact ``release``, then builds again in another
-directory and compares the two, which have to be identical. ``draft``, the only
-job that may write to the repository, runs once ``build`` passed: it takes the
-artifact, checks the digests, and makes a draft release of the tag
-``v<version>`` on that commit with the files, refused when the tag or its
-release exists already. A person tests the draft's files on a stick and
-publishes it, which makes the tag.
+A release of the commit it is started on, in three jobs.
+
+``build``
+    Two builds at once, ``a`` and ``b``, each on a runner of its own, in the
+    same pinned container as ``image.yml`` and in an output directory of its
+    own. Each makes room on the runner, builds the images with the pinned
+    toolchain, takes the version the image names itself by (``VERSION_ID``
+    of its ``/etc/os-release``, the time of the commit in UTC, as
+    ``2026.10.19-2130``) and refuses one of uncommitted sources, checks that
+    no bench's files (``/etc/board.conf``, the token of scripts, ssh keys)
+    are in the image, runs the gate's negative control and the programs under
+    ``qemu-mips``, and keeps the images, the update file, the package of the
+    shipped firmware's page, their digests and the listing of the root
+    filesystem tree as the artifact ``build-a`` or ``build-b``. Build ``a``
+    also gathers the licences and sources of everything in the images, the
+    toolchain's among them (``make legal-info``), and keeps the files of the
+    release and their SHA-256 digests as the artifact ``release``.
+``compare``
+    Once both builds passed: it takes their artifacts, and the images, the
+    update file and the package have to be identical byte for byte, and
+    their digests and the listings of the trees the same. A release is only
+    made of a build that another build repeats.
+``draft``
+    Once ``build`` and ``compare`` passed; the only job that may write to the
+    repository. It takes the artifact ``release``, checks the digests, and
+    makes a draft release of the tag ``v<version>`` on that commit with the
+    files, marked as a pre-release, a test build; it is refused when the tag
+    or its release exists already. A person tests the draft's files on a
+    stick and publishes it, which makes the tag.
+
+As the two builds run at once, a release takes about the time of one build.
 
 ``kernel.yml`` -- on changes to ``linux/``
 ==========================================
