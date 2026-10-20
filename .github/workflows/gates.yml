@@ -51,6 +51,10 @@ jobs:
         # "make check" compares with a local main; a checkout here has none,
         # so the history mode reads every commit instead.
         run: tools/provenance/check all --history
+      - name: The kernel series' page
+        # The series is what linux/ holds over the release of the newest
+        # subtree import, which only the whole history shows.
+        run: tools/kernel-series/kernel-series check
 
   equivalence-tools:
     runs-on: ubuntu-24.04
@@ -181,10 +185,8 @@ jobs:
         run: buildroot/tests/run -v
       - name: Self-tests of the kernel archive tool
         run: tools/kernel-archive/tests/run -v
-      - name: Self-tests of the kernel series tool, and its page
-        run: |
-          tools/kernel-series/tests/run -v
-          tools/kernel-series/kernel-series check
+      - name: Self-tests of the kernel series tool
+        run: tools/kernel-series/tests/run -v
       - name: Self-tests of the flash layout check, and the board's layout
         run: |
           tools/flash-layout/tests/run -v
