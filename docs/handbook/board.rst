@@ -142,9 +142,11 @@ test ``net.host-link-search`` saw the lane follow a host that moved from
 host in the same mode and carried traffic both ways (M: pings and counted
 frames, by hand, 2026-10-20). The search did not find a host at 1000BASE-X
 without negotiation then: its third setting ran with the negotiation of the
-second. The driver now re-latches the lane after every setting, which is not
-measured yet (``linux/Documentation/networking/dsa/rtl9602c.rst``, "phylink
-and the lane").
+second. With the lane re-latched after every setting it still did not, as
+that setting takes 8.1 to 8.7 s to synchronise with such a host and the search
+gave it one second (M, 2026-10-21). The driver now gives it twelve, which is
+not measured yet (``linux/Documentation/networking/dsa/rtl9602c.rst``,
+"phylink and the lane").
 
 Two things on the host's side matter to whoever tests the lane (M, a Linux
 host, 2026-10-20):
