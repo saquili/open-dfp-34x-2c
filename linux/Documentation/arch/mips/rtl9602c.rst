@@ -339,11 +339,13 @@ The kernel log of every boot names the core::
        interrupts disabled, and its emulation of the pair for user space is
        not used. ``__SYNC()`` around them assembles to nothing (see "MIPS I
        limits the kernel respects").
-     - M, I
+     - M, T
      - M: the core's ``ll`` and ``sc`` in kernel mode, with interrupts enabled
-       and disabled (see "Instructions beyond MIPS I"). I: that a kernel built
-       so runs correctly is not yet shown; the board booting it to a shell and
-       the stress run would show it.
+       and disabled (see "Instructions beyond MIPS I"). T: a kernel built so
+       boots the board to a shell, ``Options implemented`` in
+       ``/proc/cpuinfo`` lists ``llsc``, the GPON link, OMCI and two PPPoE
+       sessions come up, 64 MiB copied in over ssh arrive intact, and a user
+       space ``ll``/``sc`` probe run beside that copy gets every value right.
    * - ``MIPS_CPU_3K_CACHE`` selects the R3000 cache code in
        ``cpu_cache_init()``, where the ``CPU_LEXRA_CACHE`` branch comes first
        (see "Caches"), so it selects nothing there on this platform.
@@ -2514,10 +2516,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - A kernel whose atomic operations are ``ll``/``sc`` sequences
-       (``MIPS_CPU_LLSC``) runs correctly on the board ("Identification and
-       CPU class").
-     - The board booting such a kernel to a shell, and the stress run.
    * - An uncached load drains the write buffer, so ``mb()`` and ``iob()`` order
        device writes ("MIPS I limits the kernel respects").
      - A store to a device register, then a read back through an uncached load
