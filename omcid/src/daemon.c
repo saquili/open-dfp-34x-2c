@@ -447,7 +447,7 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 				     -1;
 
 	while (!g_stop) {
-		struct pollfd fds[3 + OMCI_CTL_MAX_FDS];
+		struct pollfd fds[4 + OMCI_CTL_MAX_FDS];
 		nfds_t n = 0;
 
 		if (g_mode != MODE_KEPT)
@@ -472,6 +472,16 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 		if (mcast_fd >= 0) {
 			fds[n].fd = mcast_fd;
+			fds[n].events = POLLIN;
+			fds[n].revents = 0;
+			n++;
+		}
+		/* The PON device's, which tells of a change of its status. */
+		const int pon_fd = omci_engine_pon_fd(eng);
+		const nfds_t pon_at = n;
+
+		if (pon_fd >= 0) {
+			fds[n].fd = pon_fd;
 			fds[n].events = POLLIN;
 			fds[n].revents = 0;
 			n++;
@@ -511,6 +521,8 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 		if (mcast_fd >= 0 && (fds[mcast_at].revents & POLLIN))
 			omci_engine_mcast_service(eng);
+		if (pon_fd >= 0 && (fds[pon_at].revents & POLLIN))
+			omci_engine_pon_service(eng);
 		if (bus_fd >= 0 && (fds[bus_at].revents & (POLLIN | POLLHUP)))
 			g_bus->handle();
 

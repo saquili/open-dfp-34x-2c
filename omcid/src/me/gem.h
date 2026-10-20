@@ -32,7 +32,15 @@ enum {
 	OMCI_GEM_ATTR_DIRECTION = 3,
 	OMCI_GEM_ATTR_TM_US = 4,
 	OMCI_GEM_ATTR_TD_US = 5,
+	OMCI_GEM_ATTR_ENCRYPTION = 8,
 	OMCI_GEM_ATTR_TD_DS = 9,
+
+	/*
+	 * The values of the encryption state: none, and AES-128, the security
+	 * mode of the ONU2-G (G.988 9.1.2) that a G-PON ONU encrypts with.
+	 */
+	OMCI_GEM_ENCRYPTION_NONE = 0,
+	OMCI_GEM_ENCRYPTION_AES128 = 1,
 
 	OMCI_GEM_TCONT_CLASS_ID = 262,
 	OMCI_GEM_TCONT_ATTR_ALLOC = 1,
@@ -146,6 +154,26 @@ __must_check bool omci_gem_instance_rejected(uint16_t instance);
  * refused it.
  */
 __must_check bool omci_tcont_instance_rejected(uint16_t instance);
+
+/**
+ * omci_gem_encryption_keep() - Keep the encryption state of each GEM port
+ *	network CTP in step with the hardware.
+ * @mib: the MIB
+ *
+ * The encryption state is attribute 8 of class 268 (G.988 9.2.3). Its values
+ * are those of the security mode of the ONU2-G, but that "attribute value 0
+ * indicates an unencrypted GEM port" (G.988 9.2.3). An instance whose Port-ID
+ * the OLT has marked encrypted with Encrypted_Port-ID (G.984.3 9.2.3.8) takes
+ * %OMCI_GEM_ENCRYPTION_AES128: G-PON encrypts with AES and a key of 128 bits
+ * (G.984.3 12.2), the security mode 1 of the ONU2-G (G.988 9.1.2), and only
+ * the downstream (G.984.3 12.1), so that the state is the downstream's. Any
+ * other instance takes %OMCI_GEM_ENCRYPTION_NONE. G.988 lists no attribute
+ * value change for class 268, so a change is not announced. A backend that
+ * cannot tell, or a read that fails, leaves every state as it is.
+ *
+ * Return: how many instances changed.
+ */
+unsigned int omci_gem_encryption_keep(struct omci_mib *mib);
 
 /**
  * omci_gem_last() - The ports of the last programming.

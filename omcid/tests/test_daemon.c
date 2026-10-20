@@ -460,6 +460,46 @@ static void test_the_multicast_descriptor_is_served(void)
 	(void)close(g_mcast_pipe[1]);
 }
 
+static int g_pon_pipe[2] = { -1, -1 };
+static unsigned int g_pon_drains;
+
+static int pipe_pon_fd(void)
+{
+	return g_pon_pipe[0];
+}
+
+static void read_pon_pipe(void)
+{
+	char c;
+
+	g_pon_drains++;
+	(void)!read(g_pon_pipe[0], &c, 1);
+}
+
+/* The PON device's descriptor is waited on, and served when readable. */
+static void test_the_pon_descriptor_is_served(void)
+{
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	struct rig g;
+
+	CHECK_EQ(pipe(g_pon_pipe), 0);
+	CHECK_EQ(write(g_pon_pipe[1], "x", 1), 1);
+	ops.pon_fd = pipe_pon_fd;
+	ops.pon_drain = read_pon_pipe;
+	CHECK(rig_up(&g));
+	g_pon_drains = 0;
+	omci_hw_ops_set(&ops);
+	end_input(&g);
+	CHECK_EQ(run(&g, g.in_r, g_sock, 2, g_argv), EXIT_SUCCESS);
+	omci_hw_ops_set(NULL);
+	CHECK_EQ(g_pon_drains, 1u);
+	CHECK(strstr(g_log, "[ERR]") == NULL);
+	rig_down(&g);
+	(void)unlink(g_sock);
+	(void)close(g_pon_pipe[0]);
+	(void)close(g_pon_pipe[1]);
+}
+
 static void test_poll(void)
 {
 	struct rig g;
@@ -1107,6 +1147,7 @@ int main(void)
 	RUN(test_signals_change_the_mode);
 	RUN(test_the_backend_asks_for_programming_again);
 	RUN(test_the_multicast_descriptor_is_served);
+	RUN(test_the_pon_descriptor_is_served);
 	RUN(test_poll);
 	RUN(test_transport_errors);
 	RUN(test_setup_failures);

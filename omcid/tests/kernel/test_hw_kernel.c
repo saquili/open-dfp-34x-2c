@@ -6,7 +6,9 @@
  * in a network namespace of its own, with dummy interfaces named sfp and pon
  * in place of the switch's ports, the filters it adds are read back with tc
  * of iproute2. It is built with OMCID_TC_FLAGS=0, so that the filters, which
- * on the board go to the switch alone, go into software. The parts that
+ * on the board go to the switch alone, go into software. The encrypted
+ * Port-IDs and the announcements of the PON family are read over the PON
+ * class's stand-in MAC, pon_sim, when the kernel has it; the other parts that
  * need the PON family of the stick's driver are left to the board.
  *
  * It needs root, to make the namespace, and tc; without them it says that
@@ -742,12 +744,75 @@ static void mcast_group_gone(void)
 	sh("ip link set sfp nomaster; ip link del omcibr0");
 }
 
+#define PON_SIM "/sys/kernel/debug/pon_sim/"
+
+/* Whether Port-ID @port is marked in @e. */
+static bool marked(const struct omci_hw_encrypted *e, unsigned int port)
+{
+	return (e->map[port / 32u] >> (port % 32u) & 1u) != 0u;
+}
+
+/*
+ * The Port-IDs the OLT encrypts, from the family "pon", and the
+ * announcements of their change on its group "monitor", over the stand-in
+ * MAC pon_sim (CONFIG_PON_SIM), whose debugfs file "encrypt" marks a
+ * Port-ID as Encrypted_Port-ID does. In the initial network namespace,
+ * where the kernel announces.
+ */
+static void pon_encryption(void)
+{
+	struct omci_hw_encrypted e;
+	struct pollfd pfd = { .events = POLLIN };
+
+	puts("the Port-IDs the OLT encrypts, read and followed on the PON family");
+	if (access(PON_SIM "encrypt", W_OK) != 0) {
+		puts("(no stand-in PON MAC: skipped)");
+		return;
+	}
+	CHECK(sh("echo 5 > " PON_SIM "state") == 0);
+	pfd.fd = omci_hw_kernel_ops.pon_fd();
+	CHECK(pfd.fd >= 0);
+	CHECK(omci_hw_kernel_ops.pon_fd() == pfd.fd);
+	omci_hw_kernel_ops.pon_drain();
+	CHECK(omci_hw_kernel_ops.encrypted(&e) == OMCI_OK);
+	CHECK(!marked(&e, 300) && !marked(&e, 4095));
+
+	/* A mark is announced, and read with the OMCC's. */
+	CHECK(sh("echo 300 1 > " PON_SIM "encrypt") == 0);
+	CHECK(sh("echo 4095 1 > " PON_SIM "encrypt") == 0);
+	CHECK(poll(&pfd, 1, 2000) == 1);
+	omci_hw_kernel_ops.pon_drain();
+	CHECK(poll(&pfd, 1, 0) == 0);
+	CHECK(omci_hw_kernel_ops.encrypted(&e) == OMCI_OK);
+	CHECK(marked(&e, 300) && marked(&e, 4095) && !marked(&e, 301));
+
+	/* An unmark, and the marks gone with the ONU-ID. */
+	CHECK(sh("echo 300 0 > " PON_SIM "encrypt") == 0);
+	CHECK(poll(&pfd, 1, 2000) == 1);
+	omci_hw_kernel_ops.pon_drain();
+	CHECK(omci_hw_kernel_ops.encrypted(&e) == OMCI_OK);
+	CHECK(!marked(&e, 300) && marked(&e, 4095));
+	CHECK(sh("echo 3 > " PON_SIM "state") == 0);
+	CHECK(omci_hw_kernel_ops.encrypted(&e) == OMCI_OK);
+	CHECK(!marked(&e, 4095));
+	CHECK(sh("echo 5 > " PON_SIM "state") == 0);
+	omci_hw_kernel_ops.pon_drain();
+}
+
 int main(void)
 {
-	if (geteuid() != 0 || unshare(CLONE_NEWNET) != 0 ||
-	    sh("command -v tc >/dev/null 2>&1") != 0) {
+	if (geteuid() != 0) {
 		puts("test_hw_kernel: SKIPPED: it needs root, network namespaces and tc");
 		return 0;
+	}
+	/* Before the namespace of its own, as the PON family announces outside it. */
+	pon_encryption();
+
+	if (unshare(CLONE_NEWNET) != 0 ||
+	    sh("command -v tc >/dev/null 2>&1") != 0) {
+		printf("test_hw_kernel: %d checks, %d failed; the rest SKIPPED: it needs network namespaces and tc\n",
+		       checks, failures);
+		return failures ? 1 : 0;
 	}
 	if (sh("ip link add sfp type dummy && ip link set sfp up") != 0 ||
 	    sh("ip link add pon type dummy && ip link set pon up") != 0) {

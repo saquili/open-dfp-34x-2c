@@ -149,6 +149,186 @@ static int index_of(const struct omci_hw_gem_port *p, size_t n,
 	return -1;
 }
 
+/*
+ * Send the engine a request of message type @mt for instance @inst of class
+ * @cls, its contents beginning with the @n bytes of @c; the answer's contents,
+ * from the result on, go to @rsp. Return: the frames the engine sent.
+ */
+static size_t ask(struct omci_engine *eng, uint8_t mt, uint16_t cls,
+		  uint16_t inst, const uint8_t *c, size_t n,
+		  uint8_t rsp[OMCI_CONTENTS_LEN])
+{
+	static uint16_t tci = 0x7800u;
+	struct omci_frame f = {
+		.tci = tci++,
+		.msg_type = mt,
+		.ar = true,
+		.device_id = OMCI_DEVICE_ID_BASELINE,
+		.class_id = cls,
+		.instance = inst,
+	};
+	uint8_t wire[OMCI_FRAME_LEN];
+
+	if (n > 0)
+		memcpy(f.contents, c, n);
+	(void)!omci_frame_build(&f, wire);
+	tx_n = 0;
+	(void)!omci_engine_rx(eng, wire);
+	if (tx_n > 0)
+		memcpy(rsp, &tx_frames[tx_n - 1][8], OMCI_CONTENTS_LEN);
+	return tx_n;
+}
+
+/* The encryption state of GEM port network CTP @inst as the MIB holds it. */
+static uint8_t encryption_of(struct omci_mib *mib, uint16_t inst)
+{
+	uint8_t v = 0xeeu;
+
+	(void)!omci_mib_attr_get(mib, OMCI_GEM_CLASS_ID, inst,
+				 OMCI_GEM_ATTR_ENCRYPTION, &v, sizeof(v), NULL);
+	return v;
+}
+
+static unsigned int g_drains;
+
+static void count_drain(void)
+{
+	g_drains++;
+}
+
+static int no_fd(void)
+{
+	return -1;
+}
+
+static int some_fd(void)
+{
+	return 0;
+}
+
+/*
+ * The encryption state of the GEM port network CTPs (G.988 9.2.3, attribute
+ * 8) follows the Port-IDs the OLT encrypts: 1, AES-128, for a marked one and
+ * 0 for any other; brought up to date when the PON device announces a change,
+ * once a second without its descriptor, when the ports are programmed, and
+ * before a Get of it or a MIB upload. No attribute value change is sent.
+ */
+static void test_encryption_state(void)
+{
+	static const uint8_t get_enc[2] = { 0x01u, 0x00u };
+	static const uint8_t get_port[2] = { 0x80u, 0x00u };
+	static const uint8_t set_port[4] = { 0x80u, 0x00u, 0x01u, 0xf8u };
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	uint8_t rsp[OMCI_CONTENTS_LEN];
+	struct omci_engine *eng = NULL;
+	struct omci_mib *mib = NULL;
+	struct omci_hw_caps caps;
+	char log[1024];
+
+	omci_hw_encrypted_reset();
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	CHECK_EQ(omci_engine_init(&eng, mib, &eng_tx_ops, NULL), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+
+	CHECK_EQ(create_gem(eng, 0x0501u, 501u, 0x8000u, 3u), 0u);
+	CHECK_EQ(create_gem(eng, 0x0502u, 502u, 0x8000u, 3u), 0u);
+	CHECK(encryption_of(mib, 0x0501u) == OMCI_GEM_ENCRYPTION_NONE &&
+	      encryption_of(mib, 0x0502u) == OMCI_GEM_ENCRYPTION_NONE);
+	printf("    a GEM port network CTP is created unencrypted\n");
+
+	/* An announcement of the PON device: the state follows, unannounced. */
+	omci_hw_encrypted_force(501u, true);
+	tx_n = 0;
+	omci_log_level_set(OMCI_LOG_INFO);
+	OMCI_T_CAPTURE_LOG(log, { omci_engine_pon_service(eng); });
+	omci_log_level_set(OMCI_LOG_ERR);
+	CHECK_EQ(encryption_of(mib, 0x0501u), OMCI_GEM_ENCRYPTION_AES128);
+	CHECK_EQ(encryption_of(mib, 0x0502u), OMCI_GEM_ENCRYPTION_NONE);
+	CHECK_EQ(tx_n, 0u);
+	CHECK_EQ(omci_t_log_count(
+			 log, "me268: instance 0x0501, Port-ID 501, encrypted"),
+		 1u);
+	omci_engine_pon_service(NULL);
+	printf("    a Port-ID the OLT encrypts makes its CTP's state 1, with no attribute value change\n");
+
+	/* A Get of the state reads it afresh; a Get of others does not. */
+	omci_hw_encrypted_force(502u, true);
+	CHECK_EQ(ask(eng, 9u, OMCI_GEM_CLASS_ID, 0x0502u, get_enc,
+		     sizeof(get_enc), rsp),
+		 1u);
+	CHECK(rsp[0] == 0u && rsp[1] == 0x01u && rsp[2] == 0x00u &&
+	      rsp[3] == OMCI_GEM_ENCRYPTION_AES128);
+	omci_hw_encrypted_force(502u, false);
+	CHECK_EQ(ask(eng, 9u, OMCI_GEM_CLASS_ID, 0x0502u, get_port,
+		     sizeof(get_port), rsp),
+		 1u);
+	CHECK_EQ(encryption_of(mib, 0x0502u), OMCI_GEM_ENCRYPTION_AES128);
+	printf("    a Get of the state reads the hardware first\n");
+
+	/* A MIB upload reads it afresh. */
+	omci_hw_encrypted_force(501u, false);
+	CHECK_EQ(ask(eng, 13u, 2u, 0u, NULL, 0, rsp), 1u);
+	CHECK(encryption_of(mib, 0x0501u) == OMCI_GEM_ENCRYPTION_NONE &&
+	      encryption_of(mib, 0x0502u) == OMCI_GEM_ENCRYPTION_NONE);
+	printf("    a MIB upload reads the hardware first\n");
+
+	/* A port takes its state as it is made, and with a new Port-ID. */
+	omci_hw_encrypted_force(503u, true);
+	CHECK_EQ(create_gem(eng, 0x0503u, 503u, 0x8000u, 3u), 0u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_AES128);
+	CHECK_EQ(ask(eng, 8u, OMCI_GEM_CLASS_ID, 0x0503u, set_port,
+		     sizeof(set_port), rsp),
+		 1u);
+	CHECK_EQ(rsp[0], 0u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_NONE);
+	printf("    a CTP made for a marked Port-ID, or given an unmarked one, takes its state at once\n");
+
+	/* Without the PON device's descriptor, the tick reads once a second. */
+	omci_hw_encrypted_force(504u, true);
+	omci_engine_tick(eng, 100u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_AES128);
+	ops.pon_fd = no_fd;
+	omci_hw_ops_set(&ops);
+	omci_hw_encrypted_force(504u, false);
+	omci_engine_tick(eng, 101u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_NONE);
+	printf("    without a descriptor of the PON device the state is read once a second\n");
+
+	/* With one, the tick leaves it to the announcements, which are taken. */
+	ops.pon_fd = some_fd;
+	ops.pon_drain = count_drain;
+	omci_hw_ops_set(&ops);
+	CHECK_EQ(omci_engine_pon_fd(eng), 0);
+	omci_hw_encrypted_force(504u, true);
+	omci_engine_tick(eng, 102u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_NONE);
+	g_drains = 0;
+	omci_engine_pon_service(eng);
+	CHECK_EQ(g_drains, 1u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_AES128);
+	printf("    with one, the state follows the announcements\n");
+
+	/* A read that fails, or a backend that cannot tell, changes nothing. */
+	omci_hw_encrypted_fail(true);
+	omci_hw_encrypted_force(504u, false);
+	omci_engine_pon_service(eng);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_AES128);
+	omci_hw_encrypted_fail(false);
+	ops.encrypted = NULL;
+	omci_hw_ops_set(&ops);
+	CHECK_EQ(omci_gem_encryption_keep(mib), 0u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_AES128);
+	omci_hw_ops_set(NULL);
+	CHECK_EQ(omci_gem_encryption_keep(mib), 1u);
+	CHECK_EQ(encryption_of(mib, 0x0503u), OMCI_GEM_ENCRYPTION_NONE);
+	printf("    a read that fails, or none, leaves the states as they are\n");
+
+	omci_hw_encrypted_reset();
+	omci_engine_fini(eng);
+	omci_mib_fini(mib);
+}
+
 int main(void)
 {
 	struct omci_mib *mib = NULL;
@@ -704,6 +884,8 @@ int main(void)
 		omci_engine_fini(eng);
 		omci_mib_fini(emib);
 	}
+
+	RUN(test_encryption_state);
 
 	return OMCI_T_REPORT("test_gem");
 }

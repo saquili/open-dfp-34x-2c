@@ -4,9 +4,11 @@
 /*
  * The kernel backend: the hardware of the board through the kernel's own
  * interfaces. The PON device answers on the generic netlink family "pon"
- * (serial number, T-CONTs, GEM ports, alarms). GEM ports are links of kind
- * "gem" stacked on the interface pon, and they join the bridge omcibr0 with
- * the subscriber interface sfp; the switch carries that bridge. VLAN rules
+ * (serial number, T-CONTs, GEM ports, alarms, the Port-IDs the OLT
+ * encrypts), and announces its changes on the family's group "monitor".
+ * GEM ports are links of kind "gem" stacked on the interface pon, and they
+ * join the bridge omcibr0 with the subscriber interface sfp; the switch
+ * carries that bridge. VLAN rules
  * are tc flower filters with a vlan action (modify, push or pop), offloaded
  * to the switch. The
  * counters come from ethtool and the optical readings from hwmon.
@@ -311,10 +313,15 @@ static int pon_family_id(uint16_t *id)
 	return -ENOENT;
 }
 
-/* The attributes of the PON device, pointing into the buffer of the answer. */
+/*
+ * The attributes of the PON device, pointing into the buffer of the answer:
+ * the last of each type, and where they all lie, for a repeated one.
+ */
 struct pon_dev_attrs {
 	const uint8_t *val[PON_A_DEV_MAX + 1];
 	uint16_t len[PON_A_DEV_MAX + 1];
+	const uint8_t *first;
+	const uint8_t *end;
 	bool present;
 };
 
@@ -342,6 +349,8 @@ static int pon_dev_get(struct pon_dev_attrs *out, uint8_t *buf, size_t cap)
 
 	p = buf + NL_HDRLEN + 4;
 	end = buf + rlen;
+	out->first = p;
+	out->end = end;
 	while (p + NLA_HDRLEN_ <= end) {
 		uint16_t alen = *(const uint16_t *)p;
 		uint16_t atype = *(const uint16_t *)(p + 2) & 0x3fff;
@@ -356,6 +365,88 @@ static int pon_dev_get(struct pon_dev_attrs *out, uint8_t *buf, size_t cap)
 	}
 	out->present = true;
 	return 0;
+}
+
+/*
+ * Whether the multicast group that the nest of @len bytes at @g describes is
+ * "monitor": the nest holds the group's name and its number, which goes to
+ * @id.
+ */
+static bool group_is_monitor(const uint8_t *g, uint16_t len, uint32_t *id)
+{
+	const uint8_t *a = g + NLA_HDRLEN_;
+	const uint8_t *end = g + len;
+	const char *name = NULL;
+	bool have_id = false;
+
+	while (a + NLA_HDRLEN_ <= end) {
+		uint16_t alen = *(const uint16_t *)a;
+		uint16_t atype = *(const uint16_t *)(a + 2) & 0x3fff;
+
+		if (alen < NLA_HDRLEN_ || a + alen > end)
+			break;
+		if (atype == CTRL_ATTR_MCAST_GRP_NAME)
+			name = (const char *)(a + NLA_HDRLEN_);
+		if (atype == CTRL_ATTR_MCAST_GRP_ID &&
+		    alen >= NLA_HDRLEN_ + sizeof(*id)) {
+			memcpy(id, a + NLA_HDRLEN_, sizeof(*id));
+			have_id = true;
+		}
+		a += NL_ALIGN(alen);
+	}
+	return name && have_id &&
+	       strncmp(name, PON_MCGRP_MONITOR, sizeof(PON_MCGRP_MONITOR)) == 0;
+}
+
+/*
+ * The number of the multicast group "monitor" of the family "pon", on which
+ * the kernel announces a change of a PON device (dev-change-ntf).
+ */
+static int pon_monitor_group(uint32_t *group)
+{
+	uint8_t attrs[32] __aligned(4);
+	uint8_t rsp[4096] __aligned(4);
+	const size_t nlen = sizeof(PON_FAMILY_NAME);
+	size_t rlen = 0;
+	const uint8_t *p;
+	const uint8_t *end;
+	int err;
+
+	*(uint16_t *)&attrs[0] = (uint16_t)(NLA_HDRLEN_ + nlen);
+	*(uint16_t *)&attrs[2] = CTRL_ATTR_FAMILY_NAME;
+	memcpy(attrs + NLA_HDRLEN_, PON_FAMILY_NAME, nlen);
+
+	err = nl_request(GENL_ID_CTRL, CTRL_CMD_GETFAMILY, attrs,
+			 NL_ALIGN(NLA_HDRLEN_ + nlen), 0, rsp, sizeof(rsp),
+			 &rlen);
+	if (err)
+		return err;
+	if (rlen < NL_HDRLEN + 4)
+		return -EPROTO;
+
+	p = rsp + NL_HDRLEN + 4;
+	end = rsp + rlen;
+	while (p + NLA_HDRLEN_ <= end) {
+		uint16_t alen = *(const uint16_t *)p;
+		uint16_t atype = *(const uint16_t *)(p + 2) & 0x3fff;
+		const uint8_t *g = p + NLA_HDRLEN_;
+
+		if (alen < NLA_HDRLEN_ || p + alen > end)
+			break;
+		/* The groups: a nest of one nest for each group. */
+		while (atype == CTRL_ATTR_MCAST_GROUPS &&
+		       g + NLA_HDRLEN_ <= p + alen) {
+			uint16_t glen = *(const uint16_t *)g;
+
+			if (glen < NLA_HDRLEN_ || g + glen > p + alen)
+				break;
+			if (group_is_monitor(g, glen, group))
+				return 0;
+			g += NL_ALIGN(glen);
+		}
+		p += NL_ALIGN(alen);
+	}
+	return -ENOENT;
 }
 
 /* A 32-bit attribute, or @absent. */
@@ -2410,6 +2501,108 @@ static enum omci_status kernel_pon(struct omci_hw_pon *out)
 	}
 	out->fec_valid = fec_have == (1u << ARRAY_SIZE(fec)) - 1u;
 	return OMCI_OK;
+}
+
+/*
+ * The Port-IDs the OLT encrypts: an encrypted-port-id attribute of the PON
+ * device for each Port-ID it marked with Encrypted_Port-ID (ITU-T G.984.3
+ * clause 9.2.3.8). None says that nothing is encrypted only beside a state,
+ * which the driver reports while the PON is up; without one, as with the PON
+ * down, the read fails, and the states stay as they are.
+ */
+static enum omci_status kernel_encrypted(struct omci_hw_encrypted *out)
+{
+	struct pon_dev_attrs a;
+	uint8_t buf[4096] __aligned(4);
+	const uint8_t *p;
+
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	memset(out, 0, sizeof(*out));
+
+	if (pon_dev_get(&a, buf, sizeof(buf)) != 0 ||
+	    !a.val[PON_A_DEV_ONU_STATE])
+		return OMCI_ERR_HW;
+
+	for (p = a.first; p + NLA_HDRLEN_ <= a.end;) {
+		uint16_t alen = *(const uint16_t *)p;
+		uint16_t atype = *(const uint16_t *)(p + 2) & 0x3fff;
+		uint32_t port;
+
+		if (alen < NLA_HDRLEN_ || p + alen > a.end)
+			break;
+		if (atype == PON_A_DEV_ENCRYPTED_PORT_ID &&
+		    alen >= NLA_HDRLEN_ + sizeof(port)) {
+			memcpy(&port, p + NLA_HDRLEN_, sizeof(port));
+			if (port < OMCI_HW_PORT_IDS)
+				out->map[port / 32u] |= 1u << (port % 32u);
+		}
+		p += NL_ALIGN(alen);
+	}
+	return OMCI_OK;
+}
+
+/* The socket in the family's monitor group, made once; -1 without one. */
+static int g_pon_events = -1;
+static bool g_pon_tried;
+
+/*
+ * A socket in the monitor group of the family "pon", to which the kernel
+ * sends dev-change-ntf when the status of the PON device changes, the
+ * encrypted Port-IDs among it; -1 when it cannot be made, and the daemon
+ * then reads the encryption once a second. Joining the group needs
+ * CAP_NET_ADMIN, and the kernel announces in the initial network namespace
+ * only.
+ */
+static int kernel_pon_fd(void)
+{
+	struct sockaddr_nl sa = { .nl_family = AF_NETLINK };
+	uint32_t group = 0;
+	int fd = -1, err;
+
+	if (g_pon_tried)
+		return g_pon_events;
+	g_pon_tried = true;
+
+	err = pon_monitor_group(&group);
+	if (!err) {
+		fd = socket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC,
+			    NETLINK_GENERIC);
+		if (fd < 0)
+			err = -errno;
+	}
+	if (!err && (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0 ||
+		     setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group,
+				sizeof(group)) < 0))
+		err = -errno;
+	if (err) {
+		if (fd >= 0)
+			close(fd);
+		OMCI_WARN(
+			"pon: no announcements of the PON device to wait on (%s); reading the encryption once a second",
+			strerror(-err));
+		return -1;
+	}
+	g_pon_events = fd;
+	OMCI_INFO("pon: following the announcements of the PON device");
+	return fd;
+}
+
+/* Take every announcement waiting; the daemon reads what changed afresh. */
+static void kernel_pon_drain(void)
+{
+	uint8_t buf[8192] __aligned(4);
+
+	if (g_pon_events < 0)
+		return;
+	for (;;) {
+		ssize_t n = recv(g_pon_events, buf, sizeof(buf), MSG_DONTWAIT);
+
+		/* An overrun lost announcements, which a read afresh covers. */
+		if (n > 0 || (n < 0 && (errno == EINTR || errno == ENOBUFS)))
+			continue;
+		break;
+	}
 }
 
 /* The counters of struct omci_hw_ops, by the names ethtool gives them. */
@@ -4729,6 +4922,9 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.pon = kernel_pon,
 	.port_counters = kernel_port_counters,
 	.gem_counts = kernel_gem_counts,
+	.encrypted = kernel_encrypted,
+	.pon_fd = kernel_pon_fd,
+	.pon_drain = kernel_pon_drain,
 	.optics = kernel_optics,
 	.optics_limits = kernel_optics_limits,
 	.set_router = omci_hw_kernel_router,

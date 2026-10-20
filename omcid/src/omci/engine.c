@@ -405,11 +405,24 @@ static void reprogram_vlan_per_pri(struct omci_engine *eng)
 		(void)reprogram_vlan(eng);
 }
 
+/*
+ * The encryption state of each GEM port network CTP, from the Port-IDs the OLT
+ * encrypts (omci_gem_encryption_keep()): read when the PON device announces a
+ * change, or once a second when it cannot; when the GEM ports are programmed,
+ * so that a port takes its state as it is made or given another Port-ID; and
+ * before the OLT reads it, in a Get or a MIB upload.
+ */
+static void keep_encryption(struct omci_engine *eng)
+{
+	(void)omci_gem_encryption_keep(eng->mib);
+}
+
 static enum omci_status reprogram_gem(struct omci_engine *eng)
 {
 	const enum omci_status rc = omci_gem_program(eng->mib, NULL);
 
 	reprogram_vlan_per_pri(eng);
+	keep_encryption(eng);
 	return rc;
 }
 
@@ -728,6 +741,21 @@ void omci_engine_mcast_service(struct omci_engine *eng)
 		omci_mcast_service(eng->mcast, eng->mib, eng->now_sec);
 }
 
+int omci_engine_pon_fd(const struct omci_engine *eng)
+{
+	(void)eng;
+	return omci_hw()->pon_fd != NULL ? omci_hw()->pon_fd() : -1;
+}
+
+void omci_engine_pon_service(struct omci_engine *eng)
+{
+	if (eng == NULL)
+		return;
+	if (omci_hw()->pon_drain != NULL)
+		omci_hw()->pon_drain();
+	keep_encryption(eng);
+}
+
 /* The order of a MIB upload: by class, then by instance. */
 static bool upload_before(uint16_t class_id, uint16_t instance,
 			  const struct upload_row *row)
@@ -803,6 +831,9 @@ static void handle_mib_upload(struct omci_engine *eng,
 {
 	const unsigned int ch = req->priority ? 1u : 0u;
 	__typeof__(eng->upload) *up = &eng->upload;
+
+	keep_encryption(eng);
+
 	const uint16_t units = upload_snapshot(eng);
 
 	up->units = units;
@@ -1483,6 +1514,10 @@ static void handle_get_inner(struct omci_engine *eng,
 	const uint16_t want =
 		(uint16_t)((req->contents[0] << 8) | req->contents[1]);
 
+	if (req->class_id == ME_GEM_PORT_NET_CTP &&
+	    omci_attr_in_mask(want, OMCI_GEM_ATTR_ENCRYPTION))
+		keep_encryption(eng);
+
 	uint8_t body[OMCI_CONTENTS_LEN];
 	uint16_t got = 0;
 	uint16_t unsupported = 0;
@@ -1828,6 +1863,8 @@ void omci_engine_tick(struct omci_engine *eng, uint64_t now_sec)
 		alarms_tick(eng);
 		keep_veip(eng);
 		omci_mcast_tick(eng->mcast, eng->mib, now_sec);
+		if (omci_engine_pon_fd(eng) < 0)
+			keep_encryption(eng);
 	}
 }
 

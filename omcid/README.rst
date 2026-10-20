@@ -27,8 +27,13 @@ frame; once the kernel took it, omcid tells the time daemon in
 ``/run/omcid/tod``. It reports the
 result of the optical line supervision test, the addresses the switch
 forwards by in the bridge table of each bridge port, and through the VEIP
-whether the stick routes. It has the switch carry out the filters of the
-bridge ports, the groups of addresses and EtherTypes each port filters and
+whether the stick routes. It keeps the encryption state of each GEM port
+network CTP in step with the Port-IDs that the OLT encrypts with the PLOAM
+message Encrypted_Port-ID, which the kernel reports and announces: 1, AES-128,
+for an encrypted one and 0 for another (G.988 9.2.3), read again when the
+kernel announces a change, when the GEM ports are programmed, and before the
+OLT reads the state; G.988 has no attribute value change for it. It has the
+switch carry out the filters of the bridge ports, the groups of addresses and EtherTypes each port filters and
 the addresses it filters or alone admits, and the PPPoE filter of the
 Ethernet UNI; a filter the switch cannot carry out, an admitting one on the
 UNI side, is kept and said in the log. It holds the
@@ -213,14 +218,18 @@ backend with ``OMCID_TC_FLAGS=0``, so that the filters, which on the board go
 to the switch alone, go into software. It needs root
 and tc, and says that it skipped without them; on a kernel without the vlan
 action it skips the VLAN rules and the tags, and without the tbf qdisc the
-UNI's rate. ``tools/vm/vm omcid-kernel`` runs it on a kernel of this
-repository's tree in qemu, which has every action it uses
-(``tools/vm/README.rst``). The parts that need the stick's PON family are
-tried on the board.
+UNI's rate. Before its namespace, where the kernel announces, it reads the
+encrypted Port-IDs from the "pon" family and follows their announcements over
+the PON class's stand-in MAC, ``pon_sim``, when the kernel has it.
+``tools/vm/vm omcid-kernel`` runs it on a kernel of this repository's tree in
+qemu, which has every action it uses and the stand-in
+(``tools/vm/README.rst``). The other parts that need the stick's PON family
+are tried on the board.
 
 ``make board`` builds the daemon for the board, with the backend of the
 board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
-"pon" generic netlink family for the ONU's state, T-CONTs and FEC counts, the
+"pon" generic netlink family for the ONU's state, T-CONTs, FEC counts and
+encrypted Port-IDs, and its group "monitor" for their changes, the
 "gem" link kind for the GEM ports, the ethtool statistics of the switch ports
 and the GEM ports for the performance monitoring, the bridge ``omcibr0`` with
 the host link ``sfp``, tc flower rules for the VLAN rules, the multicast

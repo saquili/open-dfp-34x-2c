@@ -495,6 +495,42 @@ void omci_hw_gem_counts_reset(void)
 	omci_wire_fill(g_gem_counts, 0, sizeof(g_gem_counts));
 }
 
+static struct omci_hw_encrypted g_encrypted;
+static bool g_encrypted_fail;
+
+enum omci_status omci_hw_encrypted(struct omci_hw_encrypted *out)
+{
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	if (g_encrypted_fail) {
+		omci_wire_fill(out, 0, sizeof(*out));
+		return OMCI_ERR_HW;
+	}
+	*out = g_encrypted;
+	return OMCI_OK;
+}
+
+void omci_hw_encrypted_force(uint16_t port_id, bool on)
+{
+	if (port_id >= OMCI_HW_PORT_IDS)
+		return;
+	if (on)
+		g_encrypted.map[port_id / 32u] |= 1u << (port_id % 32u);
+	else
+		g_encrypted.map[port_id / 32u] &= ~(1u << (port_id % 32u));
+}
+
+void omci_hw_encrypted_fail(bool fail)
+{
+	g_encrypted_fail = fail;
+}
+
+void omci_hw_encrypted_reset(void)
+{
+	omci_wire_fill(&g_encrypted, 0, sizeof(g_encrypted));
+	g_encrypted_fail = false;
+}
+
 #define STUB_OPTIC_TEMPERATURE 12405u
 #define STUB_OPTIC_VOLTAGE 32327u
 #define STUB_OPTIC_BIAS 6950u
@@ -999,6 +1035,7 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.pon = omci_hw_pon,
 	.port_counters = omci_hw_port_counters,
 	.gem_counts = omci_hw_gem_counts,
+	.encrypted = omci_hw_encrypted,
 	.routing = omci_hw_routing,
 	.fdb = omci_hw_fdb,
 	.optics = omci_hw_optics,

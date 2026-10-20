@@ -149,11 +149,31 @@ __must_check int omci_engine_mcast_fd(const struct omci_engine *eng);
 void omci_engine_mcast_service(struct omci_engine *eng);
 
 /**
+ * omci_engine_pon_fd() - The descriptor that tells of a change of the PON
+ *	device.
+ * @eng: the engine
+ *
+ * Return: a descriptor that becomes readable when the PON device announces a
+ * change of its status, or -1 for none: the engine then reads the encryption
+ * of the Port-IDs once a second.
+ */
+__must_check int omci_engine_pon_fd(const struct omci_engine *eng);
+
+/**
+ * omci_engine_pon_service() - Take what the PON device announced, and bring
+ *	the encryption state of the GEM port network CTPs up to date.
+ * @eng: the engine, or NULL
+ */
+void omci_engine_pon_service(struct omci_engine *eng);
+
+/**
  * omci_engine_tick() - Let time pass.
  * @eng: the engine
  * @now_sec: monotonic time in seconds
  *
- * The performance monitoring intervals run on this clock.
+ * The performance monitoring intervals run on this clock. Once a second the
+ * alarms are judged, and, when the PON device has no descriptor
+ * (omci_engine_pon_fd()), the encryption of the Port-IDs is read.
  */
 void omci_engine_tick(struct omci_engine *eng, uint64_t now_sec);
 

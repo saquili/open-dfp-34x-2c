@@ -610,6 +610,44 @@ void omci_hw_gem_counts_force(uint16_t port_id,
 void omci_hw_gem_counts_reset(void);
 #endif
 
+/* The Port-IDs a GEM header can carry: twelve bits (G.984.3 8.3.1). */
+#define OMCI_HW_PORT_IDS 4096u
+
+/**
+ * struct omci_hw_encrypted - The Port-IDs whose downstream the OLT encrypts.
+ * @map: bit p % 32 of word p / 32 set for Port-ID p
+ *
+ * The OLT marks a Port-ID encrypted, or no longer, with the PLOAM message
+ * Encrypted_Port-ID (G.984.3 9.2.3.8), and the PON MAC keeps the marks, the
+ * OMCC's Port-ID among them; the daemon only reads them.
+ */
+struct omci_hw_encrypted {
+	uint32_t map[OMCI_HW_PORT_IDS / 32u];
+};
+
+/**
+ * omci_hw_encrypted() - Read the Port-IDs the OLT encrypts (host backend).
+ * @out: the marks; none until a hook sets one
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_INVAL without @out, or %OMCI_ERR_HW when a
+ * failure was asked for.
+ */
+__must_check enum omci_status omci_hw_encrypted(struct omci_hw_encrypted *out);
+
+#if defined(OMCID_HW_STUB)
+
+/*
+ * Test hooks of the host backend for the encryption: mark a Port-ID
+ * encrypted or not, as Encrypted_Port-ID does; make the reads fail, or not;
+ * and clear every mark.
+ */
+void omci_hw_encrypted_force(uint16_t port_id, bool on);
+
+void omci_hw_encrypted_fail(bool fail);
+
+void omci_hw_encrypted_reset(void);
+#endif
+
 /**
  * enum omci_hw_optic - The readings of the transceiver.
  * @OMCI_HW_OPTIC_TEMPERATURE: temperature
@@ -1108,6 +1146,14 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  * @pon: read the state of the PON receiver
  * @port_counters: read every counter of a switch port
  * @gem_counts: read the counts of a GEM port; NULL in a backend without them
+ * @encrypted: read the Port-IDs whose downstream the OLT encrypts; NULL in a
+ *	backend that cannot tell, where the GEM port network CTPs keep the
+ *	encryption state they are created with, none
+ * @pon_fd: a descriptor that becomes readable when the PON device announces
+ *	a change of its status, or -1 for none: the daemon then reads the
+ *	encryption once a second. NULL in a backend without one
+ * @pon_drain: take every announcement that made pon_fd readable; what they
+ *	announce is read afresh
  * @optics: read the transceiver
  * @optics_limits: read the transceiver's thresholds; NULL in a backend
  *	without them
@@ -1181,6 +1227,9 @@ struct omci_hw_ops {
 					  uint64_t out[OMCI_HW_PORT_COUNTERS]);
 	enum omci_status (*gem_counts)(uint16_t port_id,
 				       struct omci_hw_gem_counts *out);
+	enum omci_status (*encrypted)(struct omci_hw_encrypted *out);
+	int (*pon_fd)(void);
+	void (*pon_drain)(void);
 	enum omci_status (*optics)(struct omci_hw_optics *out);
 	enum omci_status (*optics_limits)(struct omci_hw_optics_limits *out);
 	void (*set_router)(bool on);

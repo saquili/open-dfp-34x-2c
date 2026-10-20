@@ -433,6 +433,53 @@ static void test_the_frames_of_a_group_are_counted(void)
 	omci_hw_mcast_reset();
 }
 
+/* Whether Port-ID @port is marked in @e. */
+static bool marked(const struct omci_hw_encrypted *e, unsigned int port)
+{
+	return (e->map[port / 32u] >> (port % 32u) & 1u) != 0u;
+}
+
+/*
+ * The Port-IDs the OLT encrypts: none at first; the marks set and taken back,
+ * Port-ID 0 and 4095 among them, one beyond twelve bits ignored; a failure
+ * asked for lasts until taken back, and a reset ends it with the marks.
+ */
+static void test_the_encrypted_port_ids_are_marked(void)
+{
+	struct omci_hw_encrypted e;
+	unsigned int n = 0;
+
+	CHECK_EQ(omci_hw_encrypted(NULL), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_hw_encrypted(&e), OMCI_OK);
+	for (unsigned int i = 0; i < ARRAY_SIZE(e.map); i++)
+		n += e.map[i] != 0u;
+	CHECK_EQ(n, 0u);
+
+	omci_hw_encrypted_force(0, true);
+	omci_hw_encrypted_force(300, true);
+	omci_hw_encrypted_force(4095, true);
+	omci_hw_encrypted_force(4096, true);
+	CHECK_EQ(omci_hw_encrypted(&e), OMCI_OK);
+	CHECK(marked(&e, 0) && marked(&e, 300) && marked(&e, 4095));
+	CHECK(!marked(&e, 1) && !marked(&e, 301));
+	omci_hw_encrypted_force(300, false);
+	CHECK_EQ(omci_hw_encrypted(&e), OMCI_OK);
+	CHECK(!marked(&e, 300) && marked(&e, 0));
+
+	omci_hw_encrypted_fail(true);
+	CHECK_EQ(omci_hw_encrypted(&e), OMCI_ERR_HW);
+	CHECK(!marked(&e, 0));
+	CHECK_EQ(omci_hw_encrypted(&e), OMCI_ERR_HW);
+	omci_hw_encrypted_fail(false);
+	CHECK_EQ(omci_hw_encrypted(&e), OMCI_OK);
+	CHECK(marked(&e, 0));
+
+	omci_hw_encrypted_fail(true);
+	omci_hw_encrypted_reset();
+	CHECK_EQ(omci_hw_encrypted(&e), OMCI_OK);
+	CHECK(!marked(&e, 0) && !marked(&e, 4095));
+}
+
 int main(void)
 {
 	test_a_forced_reading_before_any_read_starts_from_the_recorded_stick();
@@ -445,5 +492,6 @@ int main(void)
 	RUN(test_a_list_of_refusals_keeps_each_id_once_and_stops_when_full);
 	RUN(test_the_multicast_bridge_keeps_its_groups);
 	RUN(test_the_frames_of_a_group_are_counted);
+	RUN(test_the_encrypted_port_ids_are_marked);
 	return OMCI_T_REPORT("test_hw_host");
 }

@@ -611,6 +611,45 @@ bool omci_gem_instance_rejected(uint16_t instance)
 	return false;
 }
 
+unsigned int omci_gem_encryption_keep(struct omci_mib *mib)
+{
+	struct omci_hw_encrypted enc;
+	struct omci_mib_cursor cur;
+	unsigned int changed = 0;
+
+	if (omci_hw()->encrypted == NULL)
+		return 0;
+	if (omci_hw()->encrypted(&enc) != OMCI_OK) {
+		OMCI_DEBUG(
+			"me268: the encrypted Port-IDs could not be read; the encryption states stay");
+		return 0;
+	}
+
+	for (enum omci_status rc = omci_mib_walk_first(mib, &cur);
+	     rc == OMCI_OK; rc = omci_mib_walk_next(mib, &cur)) {
+		if (cur.class_id != OMCI_GEM_CLASS_ID)
+			continue;
+
+		const uint16_t port =
+			attr_u16(mib, cur.instance, OMCI_GEM_ATTR_PORT_ID);
+		const bool marked = port < OMCI_HW_PORT_IDS &&
+				    (enc.map[port / 32u] >> (port % 32u) & 1u);
+		const uint8_t state = marked ? OMCI_GEM_ENCRYPTION_AES128 :
+					       OMCI_GEM_ENCRYPTION_NONE;
+
+		if (attr_u8(mib, cur.instance, OMCI_GEM_ATTR_ENCRYPTION) ==
+		    state)
+			continue;
+		(void)!omci_mib_attr_set(mib, OMCI_GEM_CLASS_ID, cur.instance,
+					 OMCI_GEM_ATTR_ENCRYPTION, &state,
+					 sizeof(state));
+		OMCI_INFO("me268: instance %#06x, Port-ID %u, %s", cur.instance,
+			  port, state ? "encrypted" : "not encrypted");
+		changed++;
+	}
+	return changed;
+}
+
 size_t omci_gem_last(const struct omci_hw_gem_port **out)
 {
 	if (out != NULL)
