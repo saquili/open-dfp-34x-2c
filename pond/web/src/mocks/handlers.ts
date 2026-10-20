@@ -22,7 +22,7 @@ import { MAX_MOVED, moved } from "../lib/ports";
 import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
 import { conversation } from "./conversation";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
-import { delay, HttpResponse, http } from "./http";
+import { delay, type Handler, HttpResponse, http } from "./http";
 import { OMCI, withServices } from "./omci";
 
 let rootSecret = "admin";
@@ -593,11 +593,60 @@ const wrongPassword = () =>
 
 const away = () => (offline ? HttpResponse.error() : null);
 
-export const handlers = [
+/* The paths the stick refuses, with the status it refuses them with, and how long it takes over each answer. */
+const failing = new Map<string, number>();
+let slow = 0;
+
+/*
+ * A handler of the stick's, which the switches below make slow or refuse,
+ * before it answers: so that a read's first load, its failure and a retry
+ * are seen on any page. The switches' own paths answer as they are.
+ */
+function faulty(h: Handler): Handler {
+  if (h.path.startsWith("/api/__mock/")) return h;
+  return {
+    ...h,
+    resolve: async (info) => {
+      if (slow) await delay(slow);
+      const status = failing.get(h.path);
+      if (status)
+        return HttpResponse.json(
+          { error: "refused", detail: `the mock stick refuses ${h.path} (/api/__mock/fail)` },
+          { status },
+        );
+      return h.resolve(info);
+    },
+  };
+}
+
+const stick = [
   /* POST /api/__mock/offline?on=1 makes the stick vanish; on=0 brings it back. */
   http.post("*/api/__mock/offline", ({ request }) => {
     offline = new URL(request.url).searchParams.get("on") === "1";
     return HttpResponse.json({ offline });
+  }),
+
+  /*
+   * POST /api/__mock/fail?path=/api/get/omci&status=500 makes the stick
+   * refuse that path, a read or a change, with that status (500 without
+   * one; 502 to 504 are taken for a stick that does not answer, 401 for a
+   * session that ended); status=0 answers it again, and no path answers
+   * every one again.
+   */
+  http.post("*/api/__mock/fail", ({ request }) => {
+    const q = new URL(request.url).searchParams;
+    const path = q.get("path");
+    const status = Number(q.get("status") ?? 500) || 0;
+    if (!path) failing.clear();
+    else if (status) failing.set(path, status);
+    else failing.delete(path);
+    return HttpResponse.json({ failing: Object.fromEntries(failing) });
+  }),
+
+  /* POST /api/__mock/slow?ms=3000 holds every answer of the stick's that long; ms=0 lets them go. */
+  http.post("*/api/__mock/slow", ({ request }) => {
+    slow = Math.min(60_000, Number(new URL(request.url).searchParams.get("ms")) || 0);
+    return HttpResponse.json({ slow });
   }),
 
   /* POST /api/__mock/fibre?on=0 takes the light away, and with it the OLT's services; on=1 brings them back. */
@@ -1327,3 +1376,5 @@ export const handlers = [
     return signedIn ? HttpResponse.json({ ok: true }) : unauthorized();
   }),
 ];
+
+export const handlers = stick.map(faulty);
