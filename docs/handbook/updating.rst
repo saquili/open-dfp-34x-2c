@@ -362,10 +362,13 @@ and asks before it writes over it. ``onu-update write`` on the command line
 does not ask. The first update writes this system there, and the shipped
 firmware is gone; the way back with it.
 
-Keep a copy of the whole flash before the first update: the panel's System
-page makes one with "Copy the whole flash" (``backup.rst``). The copy holds
-the unit's registration identity and this system's secrets: keep it private.
-``backup.rst``, "Writing it back", says how to write it back.
+Keep a copy of the whole flash before the first update, at the latest right
+after the install: over ssh, the way that was tried on a stick, or with "Copy
+the whole flash" on the panel's System page, which has not been tried on a
+stick yet (``backup.rst``). The copy holds the unit's registration identity
+and this system's secrets: keep it private. ``backup.rst``, "Writing it back",
+says how to write it back, which needs the serial console, a host port at
+2500BASE-X and a RAM image built from the sources.
 
 While the other bank holds the shipped firmware, the same page has "Go back to
 the shipped firmware (system A)", or B, which needs root's password, commits

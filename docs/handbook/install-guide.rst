@@ -24,7 +24,7 @@ What you need
 
 * The stick, a DFP-34X-2C2 or DFP-34X-2C3 that runs its shipped firmware, in
   the SFP cage of a router or a computer whose port you can set up. One image
-  is for both.
+  is for both, but only a 2C3 has run it: on a 2C2 it has not been tried yet.
 * The address of the shipped firmware's page, ``192.168.1.1`` as the stick is
   sold, and the password of its administrator.
 * From a release, on the repository's Releases page: ``web-install.tar``,
@@ -154,13 +154,14 @@ them from the shipped firmware's files:
   page another address, the panel is at that one, and the router needs an
   address of its network in the steps below.
 
-The install is not expected to remove anything the shipped firmware keeps:
-its bank stays as it was (step 3), and this system keeps its own settings
-beside the shipped firmware's, which it does not write. These are test builds,
-though, tried on few sticks: while its page is open, write down what it shows
-and you would need again, the line's identity (the GPON serial number, and the
-PLOAM password or LOID if your line uses one), the MAC address and any setting
-you changed. Step 6 then keeps a copy of the whole flash.
+The install is not expected to remove anything the shipped firmware runs or
+keeps: its bank stays as it was (step 3), and this system keeps its own
+settings beside the shipped firmware's, which it does not write. It does write
+over the other bank, and what that bank held is gone (step 6). These are test
+builds, though, tried on few sticks: while its page is open, write down what it
+shows and you would need again, the line's identity (the GPON serial number,
+and the PLOAM password or LOID if your line uses one), the MAC address and any
+setting you changed. Step 6 then keeps a copy of the whole flash.
 
 Step 3: Install the package
 ===========================
@@ -174,7 +175,7 @@ than 3932160 bytes that holds ``md5.txt``, which the release's package is.
 What follows comes by itself:
 
 1. The page takes the file and runs the package's script, which writes this
-   system into the bank the shipped firmware does not run, reads it back, and
+   system over the bank the shipped firmware does not run, reads it back, and
    has the boot loader start that bank once, at the next start. The shipped
    firmware stays in its own bank, which still starts by default.
 2. The page says that the update failed. That is expected: the script reports
@@ -242,19 +243,48 @@ not ended: reload the page a few seconds later. A session ends after
 Step 6: Copy the whole flash
 ============================
 
-Before anything writes over the shipped firmware, keep a copy of the whole
-flash: after the first update it is the only way back to the shipped firmware
-("After the first update", below).
+Keep a copy of the whole flash at the latest right after the install, before
+the first ``update.bin``: once the first update has written over the shipped
+firmware, the copy is the only way back to it ("After the first update",
+below).
 
-Under System, tab Software, type root's password into "Root password" and
-press "Copy the whole flash". The panel says "Reading the flash, about a
-minute…" and then "The copy of the flash is saved.", and the browser saves
-``buchos-gpon-flash-<version>.bin``. Check that it holds 8388608 bytes.
+The install has written this system over the bank the shipped firmware does
+not run (step 3), so no copy taken now holds what that bank held before, which
+on one stick as sold was an earlier build of the shipped firmware
+(``updating.rst``, "From the shipped firmware's web page"). These pages give
+no way to copy the flash before the install.
+
+The way that was tried on a stick is ssh, from the router, as root with the
+password of step 5 (``backup.rst``, "Taking the copy")::
+
+    ssh root@192.168.1.1 'n=0; for c in 64 2 2 60 464 496 464 496; do
+        dd if=/dev/mtd${n}ro bs=4096 count=$c 2>/dev/null; n=$((n + 1))
+    done' >flash.bin
+
+The copy is one file of 8388608 bytes. Check it against the stick: the same
+loop on the stick, into ``sha256sum``, has to give the digest of the file::
+
+    ssh root@192.168.1.1 'n=0; for c in 64 2 2 60 464 496 464 496; do
+        dd if=/dev/mtd${n}ro bs=4096 count=$c 2>/dev/null; n=$((n + 1))
+    done | sha256sum'
+    sha256sum flash.bin
+
+Keep the digest with the copy.
+
+The panel has a button for the same copy, which has not been tried on a stick
+yet: under System, tab Software, type root's password into "Root password" and
+press "Copy the whole flash". It is made to say "Reading the flash, about a
+minute…" and then "The copy of the flash is saved.", and to have the browser
+save ``buchos-gpon-flash-<version>.bin`` of 8388608 bytes. Check the size, and
+the digest against the stick's as above, before you rely on such a copy.
 
 The copy holds the unit's registration identity, its MAC address and this
 system's secrets: keep it private, off shared storage and out of any report.
-``backup.rst`` says how to check it against the stick and how to write it
-back.
+
+Writing the copy back is work for a bench, not for the panel: it needs the
+serial console, a host port that links at 2500BASE-X and a RAM image built
+from this repository's sources, which is not among a release's files ("After
+the first update", below; ``backup.rst``, "Writing it back").
 
 Updating to a newer release
 ===========================
@@ -385,9 +415,20 @@ The first update wrote this system over the shipped firmware. The panel then
 offers no way back to it, and ``onu-update return`` refuses with "bank 1
 holds no shipped firmware" (or bank 0). The one way back is the copy of the
 whole flash taken before it (step 6), written back from a system started from
-RAM over the serial console (``backup.rst``, "Writing it back";
-``flashing.rst``). Without such a copy, nothing in this repository brings the
-shipped firmware back.
+RAM. Besides the copy, that needs:
+
+* the serial console, to stop the boot loader at its prompt
+  (``recovery.rst``);
+* a host port that links at 2500BASE-X, the only mode the boot loader runs
+  the lane in (``board.rst``, "The host side");
+* a RAM image built from this repository's sources with ``make ram-image``,
+  which is not among a release's files (``building.rst``, "Putting the images
+  on the board"; ``recovery.rst``, "Start a bank, or RAM, from the prompt";
+  ``flashing.rst``).
+
+``backup.rst``, "Writing it back", gives the steps. A copy was written back so
+once, on 2026-10-12, and the banks it put back were not started then. Without
+such a copy, nothing in this repository brings the shipped firmware back.
 
 When something fails
 ====================

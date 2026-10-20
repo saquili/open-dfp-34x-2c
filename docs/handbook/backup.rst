@@ -5,10 +5,16 @@
 A copy of the flash
 =======================
 
-Take a copy of the whole flash before the first update. Until then, the bank
-this system does not run holds the shipped firmware, and the first update
-writes over it (``updating.rst``, "The first update"). The copy is the only
-record of what was there.
+Take a copy of the whole flash at the latest right after the install, before
+the first update. Until then, the bank this system does not run holds the
+shipped firmware, and the first update writes over it (``updating.rst``, "The
+first update"). The copy is the only record of what was there.
+
+The install itself wrote this system over the other bank, the one the shipped
+firmware did not run, so no copy taken after it holds what that bank held
+before, which on one stick as sold was an earlier build of the shipped
+firmware (``updating.rst``, "From the shipped firmware's web page"). These
+pages give no way to copy the flash before the install.
 
 What the copy holds
 ===================
@@ -69,16 +75,8 @@ repository and out of any report or issue.
 Taking the copy
 ===============
 
-From the panel: the System page's Software tab has "Copy the whole flash",
-which needs root's password in "Root password" and downloads the eight
-partitions in order as one file,
-``buchos-gpon-flash-<version>.bin`` of 8388608 bytes
-(``GET /api/firmware/backup``, ``onu-update backup`` on the stick;
-``pond/README.rst``). Keep it private: it holds the unit's registration
-identity and this system's secrets.
-
-From a host that reaches the stick by ssh as root, while no change of the
-settings is being saved::
+Over ssh, the way that was tried on a stick: from a host that reaches the
+stick by ssh as root, while no change of the settings is being saved::
 
     ssh root@STICK 'n=0; for c in 64 2 2 60 464 496 464 496; do
         dd if=/dev/mtd${n}ro bs=4096 count=$c 2>/dev/null; n=$((n + 1))
@@ -92,11 +90,35 @@ the chip from its first byte to its last. The read takes about 6 s on the
 stick (M: 2026-10-11).
 
 Check the copy against the stick: run the same loop on the stick into
-``sha256sum`` and compare with ``sha256sum flash.bin`` on the host. Keep the
-digest with the copy.
+``sha256sum`` and compare with ``sha256sum flash.bin`` on the host::
+
+    ssh root@STICK 'n=0; for c in 64 2 2 60 464 496 464 496; do
+        dd if=/dev/mtd${n}ro bs=4096 count=$c 2>/dev/null; n=$((n + 1))
+    done | sha256sum'
+    sha256sum flash.bin
+
+The two digests have to be the same. Keep the digest with the copy.
+
+From the panel, which has not been tried on a stick yet: the System page's
+Software tab has "Copy the whole flash", which needs root's password in "Root
+password" and is made to download the eight partitions in order as one file,
+``buchos-gpon-flash-<version>.bin`` of 8388608 bytes
+(``GET /api/firmware/backup``, ``onu-update backup`` on the stick;
+``pond/README.rst``). It is tested on the build machine only
+(``onu-utils/tests/test_onu_update.sh``): check the size of what it saved,
+and its digest against the stick's as above, before you rely on it. Keep it
+private: it holds the unit's registration identity and this system's secrets.
 
 Writing it back
 ===============
+
+Writing a copy back is work for a bench; the panel has no way to do it. It
+needs the serial console, to stop the boot loader and start a system from RAM
+(``recovery.rst``, "Start a bank, or RAM, from the prompt"); a host port that
+links at 2500BASE-X, the only mode the boot loader runs the lane in
+(``board.rst``, "The host side"); and a RAM image built from this repository's
+sources, which is not among a release's files. Going back to the shipped
+firmware after the first update takes all three, and the copy.
 
 Write a copy back from a RAM boot, never from the flash: a system that runs
 from the flash cannot write the bank it runs from, and it keeps ``config``
