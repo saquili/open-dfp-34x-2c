@@ -503,6 +503,42 @@ for bad in NTP_SERVER=-d "NTP_SERVER=192.0.2.1 -d" 'NTP_SERVER=$(reboot)' NTP_SE
 done
 printf 'NTP_SERVER=\n' | "$STORE_SCRIPT" system 2>/dev/null
 check '! grep -q NTP_SERVER "$ONU_ROOT/run/onu-system"'
+# The name the panel shows: 1 to 20 characters of ASCII, letters, digits,
+# blanks, hyphens and dots, a letter or a digit first and last; nothing that
+# HTML, a header or a file system reads, no byte past ASCII, no 21st
+# character. An empty one takes it away, for the default the panel knows.
+printf 'PRODUCT_NAME=Fibre Box 2.0\n' | "$STORE_SCRIPT" system 2>/dev/null
+check 'stored "SYS_PRODUCT_NAME=Fibre Box 2.0"'
+check 'grep -q -x "PRODUCT_NAME=Fibre Box 2.0" "$ONU_ROOT/run/onu-system"'
+check 'grep -q -x MGMT_VLAN=100 "$ONU_ROOT/run/onu-system"'
+for good in PRODUCT_NAME=BuchOS PRODUCT_NAME=x PRODUCT_NAME=7 PRODUCT_NAME=a-1.b \
+	"PRODUCT_NAME=Abcdefghij Klmnopqr9"; do
+	printf '%s\n' "$good" | "$STORE_SCRIPT" system 2>/dev/null
+	check 'grep -q -x -F "$good" "$ONU_ROOT/run/onu-system"'
+done
+cp "$ONU_STORE" "$T/before"
+tab=$(printf 'a\tb')
+for bad in "PRODUCT_NAME= x" "PRODUCT_NAME=x " PRODUCT_NAME=-x PRODUCT_NAME=x. \
+	PRODUCT_NAME=.x 'PRODUCT_NAME=<b>x</b>' 'PRODUCT_NAME=a&b' 'PRODUCT_NAME=a"b' \
+	"PRODUCT_NAME=a'b" PRODUCT_NAME=a/b 'PRODUCT_NAME=a\b' PRODUCT_NAME=a_b \
+	'PRODUCT_NAME=$(reboot)' 'PRODUCT_NAME=a;b' PRODUCT_NAME=a=b \
+	"PRODUCT_NAME=Abcdefghij Klmnopqrs9" PRODUCT_NAME=Światłowód \
+	"PRODUCT_NAME=$tab"; do
+	printf '%s\n' "$bad" | "$STORE_SCRIPT" system 2>/dev/null
+	rc=$?
+	check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+done
+check 'grep -q -x "PRODUCT_NAME=Abcdefghij Klmnopqr9" "$ONU_ROOT/run/onu-system"'
+# A save of the data path keeps it, a load puts it back, and it is no line
+# of onu.conf.
+run save
+rm -f "$ONU_ROOT/run/onu-system"
+run load
+check 'grep -q -x "PRODUCT_NAME=Abcdefghij Klmnopqr9" "$ONU_ROOT/run/onu-system"'
+check '! grep -q PRODUCT_NAME "$ONU_ROOT/run/onu.conf"'
+printf 'PRODUCT_NAME=\n' | "$STORE_SCRIPT" system 2>/dev/null
+check '! grep -q PRODUCT_NAME "$ONU_ROOT/run/onu-system"'
+check 'grep -q -x MGMT_VLAN=100 "$ONU_ROOT/run/onu-system"'
 teardown
 # A store without them at all leaves no file behind at boot.
 setup

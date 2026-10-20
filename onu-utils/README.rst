@@ -165,8 +165,8 @@ by its whole path where procd starts it.
    store each setting that ``/run/onu.conf`` no longer has, such as a key a
    later version replaced (an import's ``-KEY`` line), unless that file is
    missing or empty. ``onu-config system`` keeps the stick's own settings of
-   ``KEY=VALUE`` lines on its input as ``SYS_*`` keys, each in the shape the
-   boot script takes. Where the identity in force came from is ``store`` or
+   ``KEY=VALUE`` lines on its input as ``SYS_*`` keys, each in the shape its
+   reader takes. Where the identity in force came from is ``store`` or
    ``factory`` in ``/run/onu-identity-source``. ``onu-config pd N`` keeps the
    host session N delegates its IPv6 prefix to, so that after a restart the
    prefix goes to that router at once, though it asks for nothing;
@@ -204,10 +204,21 @@ by its whole path where procd starts it.
         - ``onu-config system``
         - The line ``NAME=value`` of ``/run/onu-system``, for ``HOSTNAME``,
           ``MGMT_VLAN``, ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER`` (the
-          address of the server the clock is set from) and ``LOG_SERVER`` (the
+          address of the server the clock is set from), ``LOG_SERVER`` (the
           address of a server of the host side that the system log goes to as
-          well, with a port after it where it is not 514). The stick runs
-          offline and resolves no name, so a name is refused.
+          well, with a port after it where it is not 514) and
+          ``PRODUCT_NAME``. The stick runs offline and resolves no name, so a
+          server's name is refused. ``PRODUCT_NAME`` is the name the panel
+          shows for this system, ``BuchOS`` without one, and the status
+          daemon names the files it hands out after it (``pond/README.rst``):
+          1 to 20 characters of ASCII, letters, digits, blanks, hyphens and
+          dots, a letter or a digit first and last. ASCII, so that the limit
+          counts the same in the shell, in C and in the browser, and the name
+          means nothing to HTML, a header or a file system; 20, about as many
+          as the heading of the panel's menu shows whole. It labels the panel
+          and its downloads alone: the stick's host name, its identity
+          towards the OLT and what its DHCP clients send do not change with
+          it.
       * - ``PDn_HOST``
         - ``onu-config pd``
         - ``/run/dhcp6d/pdN``: the host session N delegated its IPv6 prefix to,

@@ -24,8 +24,9 @@
 #   onu-config auth HASH a hash of root's password made elsewhere, the same way
 #   onu-config system    the stick's own settings of the KEY=VALUE lines of the
 #                        standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
-#                        SFP_LANE, NTP_SERVER, LOG_SERVER) into the store and
-#                        into /run/onu-system; an empty value removes the key
+#                        SFP_LANE, NTP_SERVER, LOG_SERVER, PRODUCT_NAME) into
+#                        the store and into /run/onu-system; an empty value
+#                        removes the key
 #   onu-config pd N      the host session N delegates its IPv6 prefix to, the
 #                        line dhcp6d keeps in /run/dhcp6d/pdN, into the store;
 #                        without the file, out of it
@@ -354,7 +355,7 @@ identity() {
 }
 
 # The stick's own settings of KEY=VALUE lines on the standard input, as SYS_
-# keys; only the keys the boot script knows, with values of their shape. The
+# keys; only the keys their readers know, with values of their shape. The
 # stick runs offline and has no resolver, so the servers are addresses, never
 # names.
 system() {
@@ -411,7 +412,14 @@ system() {
 		# A server of the system log: an address, with a port after it.
 		if (k == "LOG_SERVER" && !logserver(v))
 			exit 1
-		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE|NTP_SERVER|LOG_SERVER)$/)
+		# The name the panel shows for the system, which the files the
+		# status daemon hands out are named after: 1 to 20 characters
+		# of ASCII, letters, digits, blanks, hyphens and dots, a letter
+		# or a digit first and last; pond checks it alike.
+		if (k == "PRODUCT_NAME" &&
+		    (length(v) > 20 || v !~ /^([A-Za-z0-9]([A-Za-z0-9 .-]*[A-Za-z0-9])?)?$/))
+			exit 1
+		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE|NTP_SERVER|LOG_SERVER|PRODUCT_NAME)$/)
 			exit 1
 		print "SYS_" k "=" v
 	}') || return 1
