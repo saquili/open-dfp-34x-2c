@@ -415,13 +415,16 @@ Where the code is
        regions), ``rtl9602c_ponmac_init()`` (the build), ``rtl9602c_pbo_init()``
        (the packet buffer), the stream, queue and T-CONT operations
        (``rtl9602c_ponq_stream_queue_set()``, ``rtl9602c_ponmac_sid_valid()``,
-       ``rtl9602c_pon_drain()``, ``rtl9602c_pon_queue_add()``) and the debugfs
-       views ``ponmac``, ``ponpath`` and ``pondp``.
+       ``rtl9602c_pon_drain()``, ``rtl9602c_pon_queue_add()``,
+       ``rtl9602c_pon_queue_del()``) and the debugfs views ``ponmac``,
+       ``ponpath`` and ``pondp``.
    * - ``drivers/net/pon/rtl9602c/rtl9602c-gem.c``
      - GEM ports as network interfaces of the PON class:
        ``rtl9602c_gem_setup()`` and ``rtl9602c_gem_teardown()``, the operations
        table ``rtl9602c_pon_ops``, the programming of a flow
        (``rtl9602c_gem_program()`` and ``rtl9602c_gem_unprogram()``), the
+       scheduling and the detach of a GEM T-CONT's queue
+       (``rtl9602c_gem_queue_sched()`` and ``rtl9602c_gem_queue_put()``), the
        bridge and VLAN operations, and the upstream octet count of a port.
    * - ``drivers/net/pon/rtl9602c/rtl9602c-omci.c``
      - The OMCI channel as the PON class's OMCI port: ``rtl9602c_omci_setup()``
@@ -446,9 +449,10 @@ Where the code is
    * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-calc.c``, ``rtl9602c-pon-test.c``
      - The calculations of the driver that touch no register (the serial
        number and the password, the length of a burst's overhead, the split of
-       the equalization delay, the units of a queue's rates, the names of the
-       PLOAM messages), and the KUnit tests of them and of the numbering of
-       T-CONTs and their queues.
+       the equalization delay, the units of a queue's rates, the queues a
+       T-CONT's GEM ports send through, the names of the PLOAM messages), and
+       the KUnit tests of them and of the numbering of T-CONTs and their
+       queues.
    * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-main.c``
      - The PON driver's probe and remove (``rtl9602c_ponmac_probe()``, the OMCI
        port and the GEM data path are created and removed there), its PON
@@ -491,8 +495,9 @@ twenty digits; the bytes and the length field of a burst's overhead, with the
 guard time capped at 32 bits and the length within the field's limits; the
 split of the equalization delay into whole upstream frames and bits; the units
 of a queue's rates, the committed rate rounded up and the peak rate down; the
-numbering of T-CONTs and their queues; and the names of the PLOAM messages. They
-run on any architecture, under qemu::
+numbering of T-CONTs and their queues; the queues a T-CONT's GEM ports send
+through, which decide whether a queue stays attached; and the names of the
+PLOAM messages. They run on any architecture, under qemu::
 
     tools/testing/kunit/kunit.py run --arch=arm64 --kunitconfig=FILE
 
@@ -1190,7 +1195,11 @@ grants to the T-CONT's Alloc-ID. Each queue has its own scheduling settings: a
 strict or a weighted queue, with a weight, and a committed and a peak rate. A
 queue the driver attaches starts strict and unshaped, sending as much as its
 T-CONT is granted, and a GEM T-CONT's queue then takes the scheduling of the
-GEM ports that send through it (see "GEM ports as network interfaces").
+GEM ports that send through it (see "GEM ports as network interfaces"). Once
+no GEM port sends through a queue any more, the driver detaches it again: it
+drains the queue, takes it out of the map and makes it strict and unshaped,
+and switches off a T-CONT whose map that leaves empty (see "Detaching a queue
+from a T-CONT" under "Sequences").
 
 The chain from a frame to the fibre, and the numbers the driver gives it::
 
@@ -1349,6 +1358,18 @@ T-CONT 16.
      - The enable word read ``0x00010000`` right after the driver enabled T-CONT
        16, its map still empty before the drain; OMCI crosses once queue 64 is
        in T-CONT 16's map (OMCI both ways over ``/dev/pon0omci0``).
+   * - A queue is detached in this order: the streams that sent through it
+       are parked first, by their owners; the queue is drained; its bit is
+       cleared in the T-CONT's map; it is made strict and unshaped; and the
+       T-CONT's enable bit is cleared once its map is empty. Queue 64 is never
+       detached from T-CONT 16, the OMCC's.
+     - I
+     - Assumption, load-bearing for every detach: no step of it has been run
+       on the board. Deleting the only GEM port of a queue while another port
+       of the same T-CONT sends upstream, reading the ``ponmac`` view before
+       and after, would confirm it: the ``qmap`` line loses the queue's bit
+       and keeps the other's, the other port's upstream octets keep rising,
+       and with the T-CONT's last queue its bit leaves ``tcont en``.
    * - ``RTL9602C_PONSCH_TOKEN_CLK``, ``0xf02190``: the token-bucket clock of
        the queue rate limiters, ``RTL9602C_PONSCH_TOKEN_CLK_PERIOD`` (bits 7:0)
        = ``0x6e`` and ``RTL9602C_PONSCH_TOKEN_CLK_TOKENS`` (bits 15:8) =
@@ -1385,14 +1406,15 @@ What a queue drain depends on
 -----------------------------
 
 A queue is emptied before it is attached to a T-CONT, so that it is attached
-empty. The drain is a command to the PON MAC that the hardware takes at once
-and finishes later; the driver polls the busy bit (see "Draining a queue"
-under "Sequences"). On a cold boot the drain of the OMCC's queue ends before
-the first step of the clock. It does not end while the GPON MAC is still in
-the state that a warm reset left it in, which is why the bring-up takes the ONU
-to O1 before it builds the PON MAC. The driver times in steps of 10 ns, but its
-polls sleep until the next 4 ms tick, so a duration that it reports ends at the
-poll that saw the end.
+empty, and before it is detached, so that nothing is left in it. The drain is
+a command to the PON MAC that the hardware takes at once and finishes later;
+the driver polls the busy bit (see "Draining a queue" under "Sequences"). On a
+cold boot the drain of the OMCC's queue ends before the first step of the
+clock. It does not end while the GPON MAC is still in the state that a warm
+reset left it in, which is why the bring-up takes the ONU to O1 before it
+builds the PON MAC. The driver times in steps of 10 ns, but its polls sleep
+until the next 4 ms tick, so a duration that it reports ends at the poll that
+saw the end.
 
 .. list-table::
    :header-rows: 1
@@ -1415,15 +1437,16 @@ poll that saw the end.
      - A drain with the GPON MAC held in O1 against one in O5, each with a known
        number of frames queued, would say more.
    * - A drain issued while other streams keep feeding the queue. The driver
-       drains a queue only when no T-CONT's map holds it yet, and the GEM
-       ports of one T-CONT share its queue (see "GEM ports as network
-       interfaces"), so an attach drains no queue that carries other ports'
-       traffic.
+       drains a queue only when no T-CONT's map holds it yet, before it is
+       attached, and when no GEM port sends through it any more, its streams
+       parked, before it is detached; the GEM ports of one T-CONT share its
+       queue (see "GEM ports as network interfaces"), so no drain meets a
+       queue that an admitted stream feeds.
      - I
      - Not load-bearing: a T-CONT's own queue is drained only before its
-       first GEM port, and a queue in a map is never drained. Draining a queue
-       during an upstream flood into it would show whether the drain completes
-       and what it discards.
+       first GEM port and after its last. Draining a queue during an upstream
+       flood into it would show whether the drain completes and what it
+       discards.
    * - With the build not waiting for ``RTL9602C_PKTBUF_STAT_INIT_DONE``, the
        first drain failed on 3 of 44 bring-ups, the drain register reading
        ``0x00000205`` each time (start taken, busy set). In one failure the busy
@@ -1434,13 +1457,27 @@ poll that saw the end.
        every time.
      - M
      - Bring-ups counted with the wait left out.
-   * - Queues are never detached and T-CONTs never disabled after the build: a
-       deleted GEM port's queue stays in its T-CONT's map until reboot, and its
-       stream is parked instead (see "GEM ports as network interfaces").
-     - T
-     - Deleting GEM interfaces leaves the remaining one carrying traffic: a
-       routed-traffic check deletes the spare GEM interfaces and the bridge,
-       and the remaining interface carries the routed traffic.
+   * - A deleted GEM port's stream is parked, and its queue stays attached
+       while another port sends through it; the queue of the last port is
+       drained and detached, and a T-CONT left without a queue is switched off
+       (see "GEM ports as network interfaces"). A drain that does not complete
+       leaves the queue attached, strict and unshaped, and the next attach of
+       that queue, which finds it in the map, does not drain it.
+     - T, I
+     - T for the parked stream: a routed-traffic check deletes the spare GEM
+       interfaces and the bridge, and the remaining interface carries the
+       routed traffic. I for the detach: the same check, with the ``ponmac``
+       view read before and after, would show the deleted ports' queues gone
+       from their maps and the remaining one still carrying the traffic.
+   * - A drain before a detach completes as the drains before an attach do:
+       no admitted stream feeds the queue, and the ONU is in a state in which
+       its T-CONTs hold Alloc-IDs, O4 to O6.
+     - I
+     - Assumption, load-bearing for the detach. Only drains before an attach
+       have been seen: in O1 at the build, and in O5 when a T-CONT is given
+       its first GEM port. The ``PON queue N did not drain`` error in the
+       kernel log after a GEM interface is deleted, or after a port's queue is
+       changed, would refute it.
    * - The driver's clock advances in steps of 10 ns on this board (timer 1,
        Documentation/arch/mips/rtl9602c.rst), but a sleep between polls lasts
        until the next 4 ms tick (HZ 250, and the tick timer has no one-shot
@@ -1633,31 +1670,35 @@ Flows, streams and T-CONTs
        unless one of them has none, which leaves the queue unshaped. Rates are
        kept within ``RTL9602C_PONSCH_QUEUE_RATE_MAX``, a committed rate within
        the peak rate. A queue no GEM port sends through any more is strict and
-       unshaped again.
-     - M
-     - Through the link attributes, with the OLT's port and a second one on
+       unshaped again, and detached from its T-CONT (see "Detaching a queue
+       from a T-CONT").
+     - M, I
+     - M: through the link attributes, with the OLT's port and a second one on
        GEM T-CONT 0, each offered 1.2 Gbit/s: priorities 0 and 1 went to queues
        7 and 6 and sent 960 and 6 Mbit/s; weights 3 and 1 became 12 and 4 and
        shared 74.5 % to 25.5 %; a peak rate of 16 MiB/s became ``0x4000``, 136
        Mbit/s, the other port sending 823; a committed rate of 32 MiB/s became
-       ``0x8000`` and gave the lower-priority port 273 Mbit/s. Deleting the
-       only port of queue 7 left it strict and unshaped (the queue lines of the
-       ``ponmac`` view).
+       ``0x8000`` and gave the lower-priority port 273 Mbit/s. Before queues
+       were detached, deleting the only port of queue 7 left it strict and
+       unshaped (the queue lines of the ``ponmac`` view). I for the detach:
+       the same deletion would leave no queue line for queue 7 and no bit 7 in
+       the ``qmap[ 0]`` line.
    * - A change of a port's scheduling (``gem_change``) programs the upstream
        half again with it while the T-CONT is bound: a new queue is attached
        and the stream moved to it, and the old queue is scheduled for the ports
        left in it, while the frames already in it leave in the T-CONT's
-       grants. If the new queue cannot be attached, the old configuration is
-       kept. A port that carries no upstream traffic has no upstream half, so
-       a change of its downstream limit leaves its stream parked and attaches
-       no queue.
+       grants; an old queue that no port is left in is detached, and its drain
+       discards the frames still in it. If the new queue cannot be attached,
+       the old configuration is kept. A port that carries no upstream traffic
+       has no upstream half, so a change of its downstream limit leaves its
+       stream parked and attaches no queue.
      - T, I
      - T: the changes of the row above, between runs, each followed by the
        stream lines of the ``ponmac`` view. I for a change under traffic, for
-       a failed attach and for a downstream-only port: changing the
-       downstream limit of one on a flow below 64 while GEM T-CONT 0 is bound,
-       then reading the ``ponmac`` view, would show no ``sid`` line for its
-       flow.
+       a failed attach, for the detach of the old queue and for a
+       downstream-only port: changing the downstream limit of one on a flow
+       below 64 while GEM T-CONT 0 is bound, then reading the ``ponmac`` view,
+       would show no ``sid`` line for its flow.
    * - A new downstream limit of a GEM port (``IFLA_GEM_DS_RATE`` and
        ``IFLA_GEM_DS_BURST``), at its creation or in ``gem_change``, goes to the
        switch driver through the host operation ``gem_ds_limit``, outside the
@@ -1736,10 +1777,12 @@ Flows, streams and T-CONTs
        the reference and the classifier's stream entries are rebuilt; then, if
        the block is built, its stream is unadmitted and parked, its upstream
        Port-ID and downstream type are zeroed, and its Port-ID table entry is
-       cleared (its queue stays in its T-CONT's map).
-     - T
-     - A routed-traffic check deletes the spare GEM interfaces and the bridge,
-       and the remaining interface carries the routed traffic.
+       cleared; last, if it sent upstream on a bound T-CONT, its queue is
+       scheduled for the ports left in it, or detached when it was the last.
+     - T, I
+     - T: a routed-traffic check deletes the spare GEM interfaces and the
+       bridge, and the remaining interface carries the routed traffic. I for
+       the detach (see "Detaching a queue from a T-CONT").
 
 Transmit and receive
 --------------------
@@ -2333,10 +2376,11 @@ upstream GEM port.
    its group. (M)
 2. If the T-CONT's map is empty, set its enable bit. Purpose: the first queue
    switches the T-CONT on. (M)
-3. If no T-CONT of the group has the queue in its map, drain it (next list); a
-   drain that does not end fails the attach. A queue already in a map carries
-   other GEM ports' frames and is not drained. Purpose: a new queue is attached
-   empty, and a queue in use loses nothing. (T)
+3. If no T-CONT of the group has the queue in its map, drain it (see
+   "Draining a queue"); a drain that does not end fails the attach. A queue
+   already in a map carries other GEM ports' frames and is not drained.
+   Purpose: a new queue is attached empty, and a queue in use loses nothing.
+   (T)
 4. Add the queue to the T-CONT's map. Purpose: the T-CONT schedules it. (T)
 5. Set the queue strict, committed rate 0, peak rate the maximum, weight 1.
    Purpose: it sends as much as the T-CONT is granted. (T)
@@ -2345,6 +2389,28 @@ No stream is admitted here. The streams pointed at the queue may be parked
 ones, since queue 63 is a GEM T-CONT's queue too, and each stream that sends is
 admitted by its owner: the OMCC's by the build, a GEM port's when its upstream
 is programmed.
+
+Detaching a queue from a T-CONT
+-------------------------------
+
+``rtl9602c_pon_queue_del()``, for the queue of a GEM T-CONT that no GEM port
+sends through any more: after the last port of the queue is deleted, or has
+moved to another queue (``rtl9602c_gem_queue_put()``). Queue 64, the OMCC's,
+is never detached. Its owners have parked the streams that sent through the
+queue before it is called.
+
+1. If the queue is not in the T-CONT's map, stop here. Purpose: a queue whose
+   attach failed has nothing to undo. (M)
+2. Drain the queue (next list); a drain that does not end leaves the queue in
+   the map and the T-CONT on, and is logged. Purpose: nothing is left in the
+   queue, and no frame waits there for the next port that the queue is given.
+   (I)
+3. Clear the queue's bit in the T-CONT's map. Purpose: the T-CONT no longer
+   schedules it. (I)
+4. Set the queue strict, committed rate 0, peak rate the maximum, weight 1.
+   Purpose: the queue is as the build left it. (T)
+5. If the map is now empty, clear the T-CONT's enable bit. Purpose: a T-CONT
+   without a queue is switched off, as it was before its first queue. (I)
 
 Draining a queue
 ----------------
@@ -2402,11 +2468,13 @@ Deleting a GEM port
    stream entries without it. Purpose: no entry names a flow that is gone. (T)
 3. If the block is built, unadmit the flow's stream and point it at queue 63,
    zero the flow's upstream Port-ID and downstream type, and clear its Port-ID
-   table entry. The queue stays in its T-CONT's map. Purpose: the flow is free,
-   and its stream is parked. (T)
+   table entry. Purpose: the flow is free, and its stream is parked. (T)
 4. If the port sent upstream on a bound T-CONT, schedule its queue for the
    ports left in it. Purpose: a deleted port's weight and rates go with it.
    (I)
+5. If no port is left in that queue, detach it (see "Detaching a queue from a
+   T-CONT"). Purpose: a T-CONT schedules only the queues of its ports, and is
+   switched off without one. (I)
 
 Known limitations
 =================
@@ -2424,9 +2492,11 @@ Known limitations
   T-CONT"). The default Alloc-ID cannot serve a GEM T-CONT: T-CONT 16 holds it
   for the OMCC, and a mapping to it is refused with ``-EOPNOTSUPP``, although
   G.988 allows it.
-  Queues are never detached and T-CONTs never disabled after the build, so a
-  deleted port's queue stays in its T-CONT's map until the next boot. The queue
-  numbering is measured for T-CONTs 0, 1 and 16 only.
+  The queue numbering is measured for T-CONTs 0, 1 and 16 only.
+- A queue that its last GEM port leaves is drained before it is detached, and
+  the drain discards the frames still waiting in it, also when the port only
+  moved to another queue of its T-CONT. A queue whose drain does not complete
+  stays attached, strict and unshaped, and its T-CONT stays on.
 - A VLAN rule (tc flower, offloaded to the classifier) that sends frames into
   a VLAN whose priorities several GEM ports divide, and that keeps a priority
   it neither matches nor writes, puts all its frames on the GEM port of
@@ -2550,6 +2620,13 @@ Assumptions the driver depends on
        ("Upstream streams, queues and T-CONTs").
      - Removing each write and repeating the OMCI exchange; a limited peak rate
        against a flood above it. Revision 1 has not been seen.
+   * - The detach of a queue: its order, and that its drain completes once no
+       admitted stream feeds the queue ("Upstream streams, queues and
+       T-CONTs", "What a queue drain depends on").
+     - Deleting the only GEM port of a queue while another port of its T-CONT
+       sends upstream, reading the ``ponmac`` view and the other port's
+       upstream octets before and after, with no drain error in the kernel
+       log.
    * - What the drain waits for, and what it does to a queue that other streams
        go on feeding ("What a queue drain depends on").
      - A drain with the GPON MAC held in O1 against one in O5, each with a known

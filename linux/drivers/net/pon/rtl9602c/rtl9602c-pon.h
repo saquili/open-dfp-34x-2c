@@ -424,6 +424,8 @@ void rtl9602c_pon_queue_set(struct rtl9602c_pon *p, unsigned int q,
 			    unsigned int weight, u32 cir, u32 pir);
 int rtl9602c_pon_queue_add(struct rtl9602c_pon *p, unsigned int tcont,
 			   unsigned int queue);
+int rtl9602c_pon_queue_del(struct rtl9602c_pon *p, unsigned int tcont,
+			   unsigned int queue);
 void rtl9602c_ponq_stream_queue_set(struct rtl9602c_pon *p, unsigned int sid,
 				    unsigned int queue);
 int rtl9602c_gem_setup(struct rtl9602c_pon *p);
@@ -463,6 +465,8 @@ const char *rtl9602c_ploam_ds_name(u8 id);
 const char *rtl9602c_ploam_us_name(u8 id);
 void rtl9602c_gem_rate_units(u64 cir, u64 pir, bool limited, u32 *cir_u,
 			     u32 *pir_u);
+u32 rtl9602c_gem_tcont_qmap(const struct pon_gem_config *cfg,
+			    const unsigned long *flows, u32 tcont);
 
 int rtl9602c_pon_probe(struct rtl9602c_pon_data *pd, struct device *dev);
 void rtl9602c_pon_remove(struct rtl9602c_pon_data *pd);

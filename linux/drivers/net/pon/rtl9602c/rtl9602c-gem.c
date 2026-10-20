@@ -138,6 +138,28 @@ static void rtl9602c_gem_queue_sched(struct rtl9602c_pon *p, u32 tcont,
 }
 
 /*
+ * The queue of priority @queue of GEM T-CONT @tcont, attached while the
+ * T-CONT holds an Alloc-ID, after one of its ports stopped sending through
+ * it, that port's stream parked: the queue is scheduled for the ports left
+ * in it (rtl9602c_gem_queue_sched()), and once no port is left, detached
+ * from the T-CONT, which is switched off with its last queue
+ * (rtl9602c_pon_queue_del()). A queue whose drain does not complete stays
+ * attached, strict and unshaped, and the drain logs why.
+ */
+static void rtl9602c_gem_queue_put(struct rtl9602c_pon *p, u32 tcont,
+				   u8 queue)
+{
+	unsigned int bit = rtl9602c_gem_tcont_qbit(tcont, queue);
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	rtl9602c_gem_queue_sched(p, tcont, queue);
+	if (rtl9602c_gem_tcont_qmap(p->gem_cfg, p->gem_flows, tcont) & BIT(bit))
+		return;
+	rtl9602c_pon_queue_del(p, rtl9602c_gem_tcont(tcont), bit);
+}
+
+/*
  * The upstream half of flow @f, for a GEM port on a T-CONT that holds an
  * Alloc-ID: the port's queue of its T-CONT is attached
  * (rtl9602c_gem_tcont_qbit()), the flow is given the Port-ID its upstream
@@ -202,8 +224,8 @@ static int rtl9602c_gem_program(struct rtl9602c_pon *p, unsigned int f,
  * Undo rtl9602c_gem_program() for flow @f: the stream, when the flow has
  * one, is no longer admitted and goes back to the parking queue, the
  * upstream Port-ID and the downstream type are zeroed, and the flow's entry
- * in the Port-ID table is cleared. The queue stays in its T-CONT's map,
- * since queues are never detached.
+ * in the Port-ID table is cleared. The queue is left to the caller
+ * (rtl9602c_gem_queue_put()), since other ports may send through it.
  */
 /* Park the stream of flow @f: not admitted, on the parking queue. */
 static void rtl9602c_gem_park(struct rtl9602c_pon *p, unsigned int f)
@@ -448,7 +470,9 @@ bool rtl9602c_gem_us_ready(struct rtl9602c_pon *p, unsigned int flow)
  * this call. A routed flow that names the port is forgotten with the
  * references of the devices over it, and the stream entries are rebuilt
  * without it. Then, if the PON MAC is built, the port's hardware is undone,
- * and the queue it sent through is scheduled for the GEM ports left in it.
+ * and the queue it sent through is scheduled for the GEM ports left in it,
+ * or detached from its T-CONT when it was the last
+ * (rtl9602c_gem_queue_put()).
  */
 static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 {
@@ -462,7 +486,7 @@ static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 		rtl9602c_gem_unprogram(p, flow);
 		if ((cfg->direction & IFLA_GEM_DIR_UPSTREAM) &&
 		    rtl9602c_gem_tcont_bound(p, cfg->tcont))
-			rtl9602c_gem_queue_sched(p, cfg->tcont, cfg->queue);
+			rtl9602c_gem_queue_put(p, cfg->tcont, cfg->queue);
 	}
 	mutex_unlock(&p->gpon_lock);
 
@@ -492,9 +516,11 @@ static void rtl9602c_gem_rx_filter(struct pon_device *pon, unsigned int flow,
  * bridge's VLAN changes are. Then the configuration is recorded, and while
  * the port's upstream is programmed, the upstream half is programmed again
  * for it, which moves the stream to a new queue when the queue changes, and
- * the old queue is scheduled for the ports left in it. Frames already in the
- * old queue still leave in the T-CONT's grants. A port that carries no
- * upstream traffic has no upstream half: only its downstream limit changes.
+ * the old queue is scheduled for the ports left in it, or detached when none
+ * is left (rtl9602c_gem_queue_put()). Frames already in an old queue that
+ * other ports keep still leave in the T-CONT's grants; a detached one is
+ * drained, which discards them. A port that carries no upstream traffic has
+ * no upstream half: only its downstream limit changes.
  * When the new queue cannot be attached, the old configuration, claims and
  * limit are put back.
  */
@@ -538,7 +564,7 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 		goto out;
 	}
 	if (old.queue != cfg->queue)
-		rtl9602c_gem_queue_sched(p, old.tcont, old.queue);
+		rtl9602c_gem_queue_put(p, old.tcont, old.queue);
 out:
 	mutex_unlock(&p->gpon_lock);
 	if (err && cfg->pbits != old.pbits)

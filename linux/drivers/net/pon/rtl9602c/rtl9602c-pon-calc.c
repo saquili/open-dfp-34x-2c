@@ -5,7 +5,8 @@
  * file includes with CONFIG_PON_RTL9602C_KUNIT_TEST): the parsing of the
  * serial number and the password, the length of a burst's overhead, the
  * split of the equalization delay, the transmit power level modes, the units
- * of a queue's rates, and the names of the PLOAM messages.
+ * of a queue's rates, the queues a T-CONT's GEM ports send through, and the
+ * names of the PLOAM messages.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
@@ -14,6 +15,7 @@
 #include <linux/bitops.h>
 #include <linux/compiler.h>
 #include <linux/errno.h>
+#include <linux/if_link.h>
 #include <linux/kernel.h>
 #include <linux/math64.h>
 #include <linux/minmax.h>
@@ -242,6 +244,33 @@ void rtl9602c_gem_rate_units(u64 cir, u64 pir, bool limited, u32 *cir_u,
 	units = cir / RTL9602C_GEM_RATE_UNIT + !!(cir % RTL9602C_GEM_RATE_UNIT);
 	*cir_u = min_t(u64, units, peak);
 	*pir_u = peak;
+}
+
+/**
+ * rtl9602c_gem_tcont_qmap() - the queues the GEM ports of a T-CONT send
+ *			       through
+ * @cfg: each flow's GEM port configuration, by flow
+ * @flows: the flows that hold GEM ports
+ * @tcont: the PON class's T-CONT
+ *
+ * A port that sends upstream has a flow with a stream, below
+ * RTL9602C_PON_NUM_SID, so the flows from there up are not looked at.
+ *
+ * Return: the bits, in the map of the scheduler's T-CONT
+ * rtl9602c_gem_tcont(@tcont), of the queues that the upstream GEM ports on
+ * @tcont send through (rtl9602c_gem_tcont_qbit()); 0 when there is none.
+ */
+u32 rtl9602c_gem_tcont_qmap(const struct pon_gem_config *cfg,
+			    const unsigned long *flows, u32 tcont)
+{
+	unsigned int f;
+	u32 qmap = 0;
+
+	for_each_set_bit(f, flows, RTL9602C_PON_NUM_SID)
+		if ((cfg[f].direction & IFLA_GEM_DIR_UPSTREAM) &&
+		    cfg[f].tcont == tcont)
+			qmap |= BIT(rtl9602c_gem_tcont_qbit(tcont, cfg[f].queue));
+	return qmap;
 }
 
 /*

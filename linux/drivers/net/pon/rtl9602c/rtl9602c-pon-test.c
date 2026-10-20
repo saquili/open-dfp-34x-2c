@@ -4,8 +4,8 @@
  * file when CONFIG_PON_RTL9602C_KUNIT_TEST is set: the parsing of the serial
  * number and the password, the length of a burst's overhead, the split of the
  * equalization delay, the transmit power level modes, the units of a queue's
- * rates, the numbering of T-CONTs and their queues, and the names of the PLOAM
- * messages.
+ * rates, the numbering of T-CONTs and their queues, the queues a T-CONT's GEM
+ * ports send through, and the names of the PLOAM messages.
  */
 
 #include <kunit/test.h>
@@ -386,6 +386,78 @@ static void rtl9602c_test_tcont_numbers(struct kunit *test)
 				rtl9602c_gem_tcont_qbit(0, k));
 }
 
+/*
+ * The queues a T-CONT's GEM ports send through, which decide whether a queue
+ * stays attached: one bit for each priority in use, which the ports of one
+ * priority share. Ports that send nothing upstream, ports of other T-CONTs,
+ * flows without a GEM port and flows without a stream do not count.
+ */
+static void rtl9602c_test_tcont_qmap(struct kunit *test)
+{
+	const struct pon_gem_config both = {
+		.direction = IFLA_GEM_DIR_BOTH, .tcont = 1, .queue = 0,
+	};
+	struct pon_gem_config *cfg;
+	unsigned long *flows;
+
+	cfg = kunit_kcalloc(test, RTL9602C_GPON_NUM_FLOW, sizeof(*cfg),
+			    GFP_KERNEL);
+	flows = kunit_kcalloc(test, BITS_TO_LONGS(RTL9602C_GPON_NUM_FLOW),
+			      sizeof(*flows), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, cfg);
+	KUNIT_ASSERT_NOT_NULL(test, flows);
+
+	/* No GEM port, no queue. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 0), 0);
+
+	/* Two ports of priority 0 on T-CONT 1 share its highest queue, bit 15. */
+	cfg[0] = both;
+	cfg[3] = both;
+	__set_bit(0, flows);
+	__set_bit(3, flows);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 1), BIT(15));
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 0), 0);
+
+	/* The first port leaves: the queue stays for the second. */
+	__clear_bit(0, flows);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 1), BIT(15));
+
+	/* The second moves to priority 7: the queue of bit 8 takes its place. */
+	cfg[3].queue = 7;
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 1), BIT(8));
+
+	/* An upstream-only port counts; a downstream-only one does not. */
+	cfg[5] = both;
+	cfg[5].direction = IFLA_GEM_DIR_UPSTREAM;
+	cfg[5].queue = 2;
+	cfg[6] = both;
+	cfg[6].direction = IFLA_GEM_DIR_DOWNSTREAM;
+	cfg[6].queue = 4;
+	__set_bit(5, flows);
+	__set_bit(6, flows);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 1),
+			BIT(8) | BIT(13));
+
+	/* A configuration whose flow holds no GEM port does not count. */
+	cfg[9] = both;
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 1),
+			BIT(8) | BIT(13));
+
+	/* T-CONT 5 is the scheduler's 9 and uses the same bits as T-CONT 1. */
+	cfg[10] = both;
+	cfg[10].tcont = 5;
+	__set_bit(10, flows);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 5), BIT(15));
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 1),
+			BIT(8) | BIT(13));
+
+	/* Only flows with a stream are looked at; the OMCC's, 64, is one. */
+	cfg[RTL9602C_PON_NUM_SID] = both;
+	__set_bit(RTL9602C_PON_NUM_SID, flows);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qmap(cfg, flows, 1),
+			BIT(8) | BIT(13));
+}
+
 static void rtl9602c_test_ploam_names(struct kunit *test)
 {
 	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(1), "Upstream_Overhead");
@@ -421,6 +493,7 @@ static struct kunit_case rtl9602c_pon_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_tod_delta),
 	KUNIT_CASE(rtl9602c_test_rate_units),
 	KUNIT_CASE(rtl9602c_test_tcont_numbers),
+	KUNIT_CASE(rtl9602c_test_tcont_qmap),
 	KUNIT_CASE(rtl9602c_test_ploam_names),
 	{ }
 };
