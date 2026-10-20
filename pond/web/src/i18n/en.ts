@@ -492,6 +492,12 @@ export const en = {
     outHint: "Block, if only the devices the rules allow should reach the internet.",
     between: "Between the LANs",
     betweenHint: "Block, so that guests do not see the house's devices; a rule opens a given way.",
+    pingIn: "Ping from the internet",
+    pingInHint:
+      "Allow, if the operator checks the line with a ping of the stick's address. The stick answers a ping on the management VLAN whatever this says.",
+    pingLans: "Ping from the LANs",
+    pingLansHint:
+      "Allow, so that the devices behind the stick, and the router it hands its address to, can ping it as their gateway.",
     allow: "Allow",
     block: "Block",
     allowed: "allowed",

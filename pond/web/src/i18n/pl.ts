@@ -491,6 +491,12 @@ export const pl: Dictionary = {
     between: "Między sieciami LAN",
     betweenHint:
       "Zablokuj, żeby np. goście nie widzieli urządzeń w domu; konkretne przejście otworzy reguła.",
+    pingIn: "Ping z internetu",
+    pingInHint:
+      "Zezwól, jeśli operator sprawdza łącze pingiem adresu wkładki. Na VLAN-ie zarządzania wkładka odpowiada na ping niezależnie od tego ustawienia.",
+    pingLans: "Ping z sieci LAN",
+    pingLansHint:
+      "Zezwól, żeby urządzenia za wkładką i router, któremu przekazuje ona adres, mogły ją pingować jako swoją bramę.",
     allow: "Zezwól",
     block: "Zablokuj",
     allowed: "dozwolone",

@@ -324,11 +324,15 @@ export interface RuleInfo {
 /**
  * What the firewall does where no rule decides: from the local networks to
  * the internet, and between them. From the internet in it always blocks,
- * but for the forwards and the DMZ (NAT).
+ * but for the forwards and the DMZ (NAT). And whether the stick answers a
+ * ping from the internet and from the LANs, block where the stick says
+ * nothing; on the management VLAN it always does.
  */
 export interface FwDefaults {
   out: "allow" | "block";
   between: "allow" | "block";
+  ping_in?: "allow" | "block";
+  ping_lans?: "allow" | "block";
 }
 
 /** A connection's DMZ: the device that takes what comes in that no forward takes. */

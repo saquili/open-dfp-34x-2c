@@ -6,7 +6,9 @@
  * no rule decides: from the internet in it blocks, but for NAT's forwards and
  * DMZ; from the local networks to the internet it lets through; between the
  * networks it blocks, so that guests do not reach the house; the last two
- * can be changed. The rules are exceptions, in order: the first one traffic
+ * can be changed, and so can whether the stick answers a ping from the
+ * internet and from the LANs, which it does not by default (on the
+ * management VLAN it always does). The rules are exceptions, in order: the first one traffic
  * matches decides, and the arrows by a rule's number move it. A rule is
  * where traffic comes from and goes to (the internet or a part of it, every
  * local network, one, or a device of one), its protocol and ports, IPv4,
@@ -108,6 +110,13 @@ function DefaultsBar({ d, onEdit }: { d: FwDefaults; onEdit: () => void }) {
       <span>
         <span className="text-base-content/70">{t("fw.between")}:</span> {act(d.between)}
       </span>
+      <span>
+        <span className="text-base-content/70">{t("fw.pingIn")}:</span> {act(d.ping_in ?? "block")}
+      </span>
+      <span>
+        <span className="text-base-content/70">{t("fw.pingLans")}:</span>{" "}
+        {act(d.ping_lans ?? "block")}
+      </span>
       <button
         type="button"
         className="btn btn-ghost btn-xs btn-square ml-auto text-base-content/70"
@@ -121,12 +130,14 @@ function DefaultsBar({ d, onEdit }: { d: FwDefaults; onEdit: () => void }) {
   );
 }
 
-/** The defaults' form: to the internet, and between the networks. */
+/** The defaults' form: to the internet, between the networks, and the pings answered. */
 function DefaultsForm({ d, onClose }: { d: FwDefaults; onClose: () => void }) {
   const { t } = useI18n();
   const change = useFwChange();
   const state = useChangeState(change);
-  const form = useForm<FwDefaults>({ defaultValues: d });
+  const form = useForm<FwDefaults>({
+    defaultValues: { ping_in: "block", ping_lans: "block", ...d },
+  });
   const { isDirty } = form.formState;
   const both = [
     { value: "allow" as const, label: t("fw.allow") },
@@ -141,7 +152,15 @@ function DefaultsForm({ d, onClose }: { d: FwDefaults; onClose: () => void }) {
     >
       <form
         onSubmit={form.handleSubmit((v) =>
-          change.mutate({ OUT: v.out, BETWEEN: v.between }, { onSuccess: onClose }),
+          change.mutate(
+            {
+              OUT: v.out,
+              BETWEEN: v.between,
+              PING_IN: v.ping_in ?? "block",
+              PING_LANS: v.ping_lans ?? "block",
+            },
+            { onSuccess: onClose },
+          ),
         )}
         noValidate
         className="flex min-h-0 flex-1 flex-col"
@@ -161,6 +180,18 @@ function DefaultsForm({ d, onClose }: { d: FwDefaults; onClose: () => void }) {
             label={t("fw.between")}
             hint={t("fw.betweenHint")}
             field={form.register("between")}
+            options={both}
+          />
+          <Choices
+            label={t("fw.pingIn")}
+            hint={t("fw.pingInHint")}
+            field={form.register("ping_in")}
+            options={both}
+          />
+          <Choices
+            label={t("fw.pingLans")}
+            hint={t("fw.pingLansHint")}
+            field={form.register("ping_lans")}
             options={both}
           />
         </div>

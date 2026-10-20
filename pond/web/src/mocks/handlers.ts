@@ -1092,15 +1092,22 @@ export const handlers = [
     return HttpResponse.json({ id: "rule", ok: true });
   }),
 
-  /* What the firewall does where no rule decides: OUT, to the internet, and BETWEEN the networks. */
+  /*
+   * What the firewall does where no rule decides: OUT, to the internet, and
+   * BETWEEN the networks; and the pings the stick answers, PING_IN and PING_LANS.
+   */
   http.post("*/api/set/fw", async ({ request }) => {
     await delay(400);
     if (!signedIn) return unauthorized();
     const b = kv(await request.text());
     const now = settings.fw ?? { out: "allow", between: "block" };
+    const pick = (v: string | undefined, was: "allow" | "block" | undefined) =>
+      v === "allow" || v === "block" ? v : (was ?? "block");
     settings.fw = {
       out: b.OUT === "block" ? "block" : b.OUT === "allow" ? "allow" : now.out,
       between: b.BETWEEN === "allow" ? "allow" : b.BETWEEN === "block" ? "block" : now.between,
+      ping_in: pick(b.PING_IN, now.ping_in),
+      ping_lans: pick(b.PING_LANS, now.ping_lans),
     };
     return HttpResponse.json({ id: "fw", ok: true });
   }),
