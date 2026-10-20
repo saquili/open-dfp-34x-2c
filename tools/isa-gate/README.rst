@@ -7,12 +7,12 @@ tools/isa-gate
 
 The instruction-set gate for target binaries.
 
-This core is MIPS I only. It runs no MIPS32 instruction, and although it
-executes the load-linked instruction it never completes a store-conditional, so
-any such pairing must be absent from shipped code. A program that uses one does
-not crash: it spins in the first retry loop of its first atomic operation. The
-gate scans the target binaries and fails the build on an instruction that this
-core does not run.
+This core runs MIPS I and, of MIPS II, ``ll``, ``sc`` and ``sync``. It traps
+on the other instructions of MIPS II and MIPS32 that were tried, or runs them
+wrongly without a signal, as it does ``bltzl`` (M,
+``linux/Documentation/arch/mips/rtl9602c.rst``, "Instructions beyond MIPS I").
+The gate scans the target binaries and fails the build on an instruction that
+this core does not run, or that this system does not use.
 
 Usage
 =====
@@ -39,15 +39,19 @@ printed per file, and the count in the last line is exact.
 What it checks
 ==============
 
-**Instructions.** Every code section is listed as MIPS I (``objdump -d -m
-mips:3000``). The set that is allowed is the MIPS I integer instruction set, by
+**Instructions.** Every code section is listed as MIPS II (``objdump -d -m
+mips:6000``). The set that is allowed is the MIPS I integer instruction set, by
 the names objdump prints for it, aliases included (``move``, ``li``,
-``nop``, ``b``, ``bal``, ``beqz``, ``bnez``, ``negu``, ``not``). Anything else
-is a finding. That is an allowlist on purpose: a listing as MIPS I leaves every
+``nop``, ``b``, ``bal``, ``beqz``, ``bnez``, ``negu``, ``not``), and three
+instructions of MIPS II: ``ll``, ``sc`` and ``sync``, which the core runs and
+the compiler's atomic operations are made of
+(``docs/adr/0021-atomic-operations-use-the-cores-ll-and-sc.rst``). Anything else
+is a finding. That is an allowlist on purpose: a listing as MIPS II names the
+other instructions of MIPS II, such as ``beql`` and ``teq``, and leaves every
 instruction of a later architecture as ``.word``, or as a coprocessor access,
-and a denylist would have to name each of them. The two that matter most show up
-in disguise: ``ll`` and ``sc`` share their opcodes with the coprocessor-0 loads
-``lwc0`` and ``swc0`` of MIPS I, and appear under those names. The unaligned
+and a denylist would have to name each of them. Some that the core runs, such
+as ``movz``, ``movn`` and ``madd``, are refused as well: the compiler for this
+core does not make them, and nothing of this system needs them. The unaligned
 loads and stores (``lwl``, ``lwr``, ``swl``, ``swr``) run correctly at all four
 byte offsets and are allowed.
 
@@ -66,17 +70,18 @@ Where to run it
 
 On what is shipped: the target root filesystem as the build assembles it, and
 the archives of our own code before they are linked. Not on a toolchain's own
-static libraries or on a build tree: they hold members that no binary links, and
-the C library's atomics, for one, are safe by configuration (no threads) and not
-by construction. They are judged where they end up, in the final binaries.
+static libraries or on a build tree: they hold members that no binary links,
+such as libgcc's speculation barrier. They are judged where they end up, in the
+final binaries.
 
-The kernel is not covered yet. Its binary holds the compare-and-swap paths and
-the code for coprocessor registers of other cores behind tests that run at boot
-(``cpu_has_llsc`` and its relatives), so a scan of ``vmlinux`` finds them
-although none runs on this core. A feature-override header for the platform that
-fixes those tests at build time would let the compiler drop them, and the kernel
-could then be held to the same rule; until it exists the gate is run on
-userspace only.
+The kernel is not covered yet. Its binary holds the code for coprocessor
+registers and instructions of other cores behind tests that run at boot (the
+``cpu_has_*`` of ``asm/cpu-features.h``), so a scan of ``vmlinux`` finds it
+although none of it runs on this core; its ``ll``/``sc`` sequences, behind
+``cpu_has_llsc``, which is true on this core, the gate allows. A
+feature-override header for the platform that fixes those tests at build time
+would let the compiler drop them, and the kernel could then be held to the same
+rule; until it exists the gate is run on userspace only.
 
 Tests
 =====

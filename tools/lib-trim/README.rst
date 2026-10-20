@@ -90,10 +90,10 @@ Why the instruction-set gate still has the last word
 ====================================================
 
 The cut is not what keeps the image to the instructions the core runs; the gate
-over the target tree is (``tools/isa-gate``). The C library's ``_test_and_set``,
-which the core cannot run, is left out because no program imports it, and an
-image whose programs started to import it would fail the gate, not slip
-through.
+over the target tree is (``tools/isa-gate``). ``libgcc_s``, whose speculation
+barrier holds instructions that the gate refuses, is removed because no program
+loads it, and an image whose programs started to load it would fail the gate,
+not slip through.
 
 Tests
 =====
