@@ -30,6 +30,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -58,6 +59,34 @@ function gzipOnly(): Plugin {
         writeFileSync(`${file}.gz`, gzipSync(readFileSync(file), { level: 9 }));
         unlinkSync(file);
       }
+    },
+  };
+}
+
+/*
+ * The theme's script, src/theme-boot.js, loaded before anything else, so
+ * that the reader's theme is on the page at its first paint. pond's
+ * Content-Security-Policy runs no script written into the page, so it is a
+ * file of its own under assets/, named by its content as the bundle's files
+ * are, since pond lets a browser keep those for a year. The dev server
+ * serves it from src/ as it is.
+ */
+function themeBoot(): Plugin {
+  const source = readFileSync(new URL("./src/theme-boot.js", import.meta.url), "utf8");
+  const hash = createHash("sha256").update(source).digest("base64url").slice(0, 8);
+  const file = `assets/theme-${hash}.js`;
+  let src = "";
+  return {
+    name: "pond-theme-boot",
+    configResolved(c) {
+      src = c.command === "serve" ? `${c.base}src/theme-boot.js` : `${c.base}${file}`;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler: () => [{ tag: "script", attrs: { src }, injectTo: "head-prepend" }],
+    },
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: file, source });
     },
   };
 }
@@ -133,6 +162,7 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       preact(),
       tailwindcss(),
+      themeBoot(),
       licenceNotices(),
       ...(demo ? [spaFallback()] : [gzipOnly()]),
       ...(mode === "mock" ? [mockApi()] : []),

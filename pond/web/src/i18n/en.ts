@@ -33,6 +33,12 @@ export const en = {
     changePassword: "Change password",
     language: "Language",
   },
+  theme: {
+    label: "Theme: {name}",
+    system: "As the system",
+    light: "Light",
+    dark: "Dark",
+  },
   connection: {
     answered: "answered {ago}",
     silentSince: "not answering · last {ago}",

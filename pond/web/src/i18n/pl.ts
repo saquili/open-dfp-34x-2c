@@ -35,6 +35,12 @@ export const pl: Dictionary = {
     changePassword: "Zmień hasło",
     language: "Język",
   },
+  theme: {
+    label: "Motyw: {name}",
+    system: "Jak w systemie",
+    light: "Jasny",
+    dark: "Ciemny",
+  },
   connection: {
     answered: "odpowiedź {ago}",
     silentSince: "nie odpowiada · ostatnio {ago}",

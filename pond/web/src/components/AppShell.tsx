@@ -5,7 +5,8 @@
  * The frame around every page: the menu (a drawer on a phone), with the
  * pages of the internet, of the switch and of the operator under an entry
  * each, the internet's with how many things each holds; whether the stick
- * answers, the language and the user. When the stick stops answering,
+ * answers, the panel's own settings (its theme and language, kept in the
+ * browser) and the user. When the stick stops answering,
  * the pages keep the last figures and a bar says since when. A change of the
  * settings on trial is confirmed here, whatever the page (ADR 0011).
  */
@@ -18,10 +19,13 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Monitor,
+  Moon,
   Network,
   RadioTower,
   Settings2,
   ShieldCheck,
+  Sun,
   WifiOff,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -32,6 +36,7 @@ import { useLive } from "../api/live";
 import { type Key, useI18n } from "../i18n";
 import { useCountdown } from "../lib/countdown";
 import { clock } from "../lib/format";
+import { THEMES, type Theme, useTheme } from "../lib/theme";
 import { confirmable, trialsToConfirm } from "../lib/trial";
 import { INTERNET_PAGES, useInternetCounts } from "../pages/Internet";
 
@@ -147,6 +152,61 @@ function Clock({ now }: { now: number }) {
     >
       {clock(now, lang, true)}
     </time>
+  );
+}
+
+const THEME_ICON: Record<Theme, ReactNode> = {
+  system: <Monitor className="size-4" />,
+  light: <Sun className="size-4" />,
+  dark: <Moon className="size-4" />,
+};
+
+/*
+ * The panel's theme: the system's, light or dark, in a menu beside the
+ * language's, since both are settings of this browser and not of the stick.
+ * The menu opens as its button takes the focus and shuts as a choice, or
+ * Escape, takes it away.
+ */
+function ThemeMenu() {
+  const { t } = useI18n();
+  const [theme, setTheme] = useTheme();
+  const label = t("theme.label", { name: t(`theme.${theme}`) });
+  const shut = () => (document.activeElement as HTMLElement | null)?.blur();
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: Escape from within the menu's buttons
+    <div
+      className="dropdown dropdown-end"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") shut();
+      }}
+    >
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm btn-square"
+        aria-label={label}
+        title={label}
+      >
+        {THEME_ICON[theme]}
+      </button>
+      <ul className="menu dropdown-content z-30 mt-2 w-44 rounded-box border border-base-300 bg-base-100 p-1">
+        {THEMES.map((x) => (
+          <li key={x}>
+            <button
+              type="button"
+              aria-pressed={x === theme}
+              className={x === theme ? "menu-active" : ""}
+              onClick={() => {
+                setTheme(x);
+                shut();
+              }}
+            >
+              {THEME_ICON[x]}
+              {t(`theme.${x}`)}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -337,6 +397,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
           </div>
           <LastAnswer now={now} />
           <Clock now={now} />
+          <ThemeMenu />
           <div className="dropdown dropdown-end">
             <button
               type="button"
