@@ -2092,6 +2092,47 @@ static void test_the_vlan_rules_that_write_two_tags(void)
 	down();
 }
 
+/*
+ * A rule on the EtherType of untagged frames tags a message only of its
+ * EtherType: an IGMP message, IPv4, passes a rule on IPv6 by, to the default
+ * rule of untagged frames, which comes last, and takes the tag of a rule on
+ * IPv4.
+ */
+static void test_the_vlan_rules_on_an_ethertype(void)
+{
+	static const uint32_t etype[][4] = {
+		/* untagged IPv6: C-VID 36 */
+		{ 0xf8000000u, 0xf8000004u, 0x000f0000u,
+		  (0u << 16) | (36u << 3) },
+		/* untagged, the default: C-VID 10 */
+		{ 0xf8000000u, 0xf8000000u, 0x000f0000u,
+		  (0u << 16) | (10u << 3) },
+		/* untagged IPv4: C-VID 35 */
+		{ 0xf8000000u, 0xf8000001u, 0x000f0000u,
+		  (0u << 16) | (35u << 3) },
+	};
+	unsigned int tpid, tci;
+	uint8_t out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	rules(etype, 2);
+	CHECK_EQ(join_up(-1, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == 10u);
+	rules(etype, 3);
+	CHECK_EQ(join_up(-1, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == 35u);
+	rules(etype, 0);
+	down();
+}
+
 static void test_the_gem_port_of_a_message(void)
 {
 	static const uint32_t xlate[][4] = {
@@ -2554,6 +2595,7 @@ int main(void)
 	RUN(test_the_vlan_rules_discard_messages_they_do_not_take);
 	RUN(test_a_vlan_rule_discards_the_messages_of_its_vid);
 	RUN(test_the_vlan_rules_that_write_two_tags);
+	RUN(test_the_vlan_rules_on_an_ethertype);
 	RUN(test_the_gem_port_of_a_message);
 	RUN(test_the_downstream_tag_of_multicast);
 	RUN(test_lost_groups);

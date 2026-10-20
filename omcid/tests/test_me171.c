@@ -567,7 +567,7 @@ int main(void)
 	uint8_t ethertype_rule[RULE_BYTES];
 
 	make_rule(ethertype_rule, (15u << 28) | (4096u << 15),
-		  (6u << 28) | (77u << 15) | 3u, (1u << 30) | (15u << 16),
+		  (6u << 28) | (77u << 15) | 7u, (1u << 30) | (15u << 16),
 		  (6u << 16) | (1410u << 3));
 	CHECK_EQ(set_rule(eng, 6, ethertype_rule), 3u);
 
@@ -635,7 +635,7 @@ int main(void)
 		uint8_t ether[RULE_BYTES];
 
 		make_rule(ether, (15u << 28) | (4096u << 15),
-			  (6u << 28) | (555u << 15) | 3u,
+			  (6u << 28) | (555u << 15) | 7u,
 			  (1u << 30) | (15u << 16), (6u << 16) | (1555u << 3));
 		CHECK_EQ(set_rule_on(eng, INST, 242, ether), 3u);
 

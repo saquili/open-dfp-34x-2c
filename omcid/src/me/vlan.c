@@ -27,6 +27,12 @@
  * priority and in a treatment copies the inner tag's. Removing three tags
  * discards the frame.
  *
+ * The filter on the EtherType (G.988 9.3.13, Filter Ethertype, the low four
+ * bits of the inner filter word) takes the frames of IPoE, PPPoE, ARP, IPv6 or
+ * EAPOL alone (enum omci_hw_ethertype); its other codes are reserved. A rule
+ * on an untagged or a single-tagged frame may name one; one on a
+ * double-tagged frame, and a discard, may not here.
+ *
  * A treatment priority of 10, derived from the frame's DSCP by the map the ME
  * holds, is not carried: the switch has one DSCP map, by which a port that
  * trusts the DSCP gives every frame its priority (dcb), and the ME's map
@@ -91,7 +97,11 @@ const char *omci_vlan_reject_name(enum omci_vlan_reject r)
 	case OMCI_VLAN_REJECT_NONE:
 		return "none";
 	case OMCI_VLAN_REJECT_ETHERTYPE:
-		return "ethertype filter";
+		return "ethertype filter of a double-tagged frame or a discard; not carried";
+	case OMCI_VLAN_REJECT_ETHERTYPE_CODE:
+		return "reserved ethertype filter";
+	case OMCI_VLAN_REJECT_ETHERTYPE_PASS:
+		return "untagged ethertype left as is ahead of a rule that tags it; not carried";
 	case OMCI_VLAN_REJECT_PCP_REMARK:
 		return "priority remark";
 	case OMCI_VLAN_REJECT_SHAPE:
@@ -155,6 +165,9 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 	out->treat_inner_vid = (uint16_t)treat_vid(w3);
 	out->treat_inner_tpid = (uint8_t)treat_tpid(w3);
 
+	if (out->filter_ethertype > OMCI_HW_ETHERTYPE_EAPOL)
+		return refuse(out, OMCI_VLAN_REJECT_ETHERTYPE_CODE);
+
 	/*
 	 * A discard of the single-tagged frames of one VID drops them, of the
 	 * priority the filter names or of any; nothing comes back downstream
@@ -204,8 +217,6 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		const unsigned int vid = inner ? out->treat_inner_vid :
 						 out->treat_outer_vid;
 
-		if (out->filter_ethertype != 0u)
-			return refuse(out, OMCI_VLAN_REJECT_ETHERTYPE);
 		if (pri > 7u)
 			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
 		if (!vid_is_programmable(vid))
@@ -227,8 +238,6 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 	    out->filter_inner_pri == VLAN_PRI_NO_TAG &&
 	    out->tags_to_remove == VLAN_TAGS_REMOVE_0 &&
 	    out->treat_outer_pri != VLAN_PRI_NO_TAG) {
-		if (out->filter_ethertype != 0u)
-			return refuse(out, OMCI_VLAN_REJECT_ETHERTYPE);
 		if (out->treat_inner_pri > 7u || out->treat_outer_pri > 7u)
 			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
 		if (!vid_is_programmable(out->treat_inner_vid) ||
@@ -248,7 +257,8 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 	if (out->filter_inner_vid == VLAN_VID_WILDCARD)
 		return true;
 
-	if (out->filter_ethertype != 0u)
+	if (out->filter_ethertype != 0u &&
+	    out->filter_outer_pri != VLAN_PRI_NO_TAG)
 		return refuse(out, OMCI_VLAN_REJECT_ETHERTYPE);
 
 	const bool inner_remarks = out->treat_inner_pri <= 7u &&
@@ -390,6 +400,7 @@ static struct omci_hw_vlan_xlate hw_rule_of(const struct omci_vlan_rule *d)
 		.match_pri = d->match_pri,
 		.inner_has_pri = d->inner_has_pri,
 		.inner_pri = d->inner_pri,
+		.ethertype = d->filter_ethertype,
 	};
 }
 
@@ -448,13 +459,17 @@ static bool same_family(const struct omci_hw_vlan_xlate *a,
 	       (b->kind == OMCI_HW_VLAN_DISCARD_TAGGED);
 }
 
-/* Whether two rules take the same frames: one VID, and one priority or any. */
+/*
+ * Whether two rules take the same frames: one VID, one priority or any, and
+ * one EtherType or any.
+ */
 static bool same_match(const struct omci_hw_vlan_xlate *a,
 		       const struct omci_hw_vlan_xlate *b)
 {
 	return same_family(a, b) && a->match_cvid == b->match_cvid &&
 	       a->match_has_pri == b->match_has_pri &&
-	       (!a->match_has_pri || a->match_pri == b->match_pri);
+	       (!a->match_has_pri || a->match_pri == b->match_pri) &&
+	       a->ethertype == b->ethertype;
 }
 
 /* Whether an earlier rule takes every frame a later one would. */
@@ -465,7 +480,9 @@ static bool covers(const struct omci_hw_vlan_xlate *earlier,
 	       earlier->match_cvid == later->match_cvid &&
 	       (!earlier->match_has_pri ||
 		(later->match_has_pri &&
-		 earlier->match_pri == later->match_pri));
+		 earlier->match_pri == later->match_pri)) &&
+	       (earlier->ethertype == OMCI_HW_ETHERTYPE_ANY ||
+		earlier->ethertype == later->ethertype);
 }
 
 /*
@@ -523,7 +540,9 @@ static enum slot_verdict slot_for(const struct omci_hw_vlan_xlate *rules,
 
 /*
  * The priorities that the rules before a discard of any priority take from
- * its VID, bit p for priority p; @rival is the last of those rules.
+ * its VID, bit p for priority p; @rival is the last of those rules. A rule on
+ * one EtherType takes none whole, and the discard, which decides first in the
+ * switch, takes its frames as well.
  */
 static uint8_t taken_pri(const struct omci_hw_vlan_xlate *rules, size_t n,
 			 const struct omci_hw_vlan_xlate *r, size_t *rival)
@@ -533,7 +552,8 @@ static uint8_t taken_pri(const struct omci_hw_vlan_xlate *rules, size_t n,
 	for (size_t k = 0; k < n; k++) {
 		if (!same_family(&rules[k], r) ||
 		    rules[k].match_cvid != r->match_cvid ||
-		    !rules[k].match_has_pri)
+		    !rules[k].match_has_pri ||
+		    rules[k].ethertype != OMCI_HW_ETHERTYPE_ANY)
 			continue;
 		taken |= (uint8_t)(1u << rules[k].match_pri);
 		*rival = k;
@@ -575,10 +595,22 @@ size_t omci_vlan_last_reconcile(unsigned int *yielded, size_t *preferred)
 	return g_last_plain;
 }
 
-/* The fates of the last programming. */
+/*
+ * The fates of the last programming, and the key of the rule of each
+ * (omci_hw_vlan_key()), by which the hardware refuses it.
+ */
 static struct omci_vlan_fate_rec g_fate[OMCI_VLAN_FATE_MAX];
+static uint16_t g_fate_key[OMCI_VLAN_FATE_MAX];
 static size_t g_fate_n;
 static unsigned int g_fate_over;
+
+/*
+ * The filters of the rules that leave the untagged frames of an EtherType as
+ * they are, ahead of a rule that tags them, which the last programming left
+ * out (see passes_ahead_of_tag()).
+ */
+static uint8_t g_pass_refused[OMCI_VLAN_FATE_MAX][8];
+static size_t g_pass_refused_n;
 
 const char *omci_vlan_fate_name(enum omci_vlan_fate f)
 {
@@ -613,8 +645,9 @@ size_t omci_vlan_fates(const struct omci_vlan_fate_rec **out,
 }
 
 static void fate_put(bool record, uint16_t instance, size_t row,
-		     enum omci_vlan_fate f, uint16_t match_cvid,
-		     uint16_t net_vid, const struct omci_hw_vlan_xlate *rival)
+		     enum omci_vlan_fate f,
+		     const struct omci_hw_vlan_xlate *rule, uint16_t net_vid,
+		     const struct omci_hw_vlan_xlate *rival)
 {
 	if (!record)
 		return;
@@ -626,12 +659,14 @@ static void fate_put(bool record, uint16_t instance, size_t row,
 	static_assert(OMCI_MIB_TABLE_ENTRIES <= 0x100u,
 		      "a row index must fit struct omci_vlan_fate_rec");
 
+	g_fate_key[g_fate_n] = omci_hw_vlan_key(rule);
+
 	struct omci_vlan_fate_rec *r = &g_fate[g_fate_n++];
 
 	r->instance = instance;
 	r->row = (uint8_t)row;
 	r->fate = (uint8_t)f;
-	r->match_cvid = match_cvid;
+	r->match_cvid = rule->match_cvid;
 	r->net_vid = net_vid;
 	r->rival_match = rival != NULL ? rival->match_cvid : 0u;
 	r->rival_net = rival != NULL ? net_vid_of(rival) : 0u;
@@ -662,13 +697,47 @@ struct listed_row {
 	size_t index;
 };
 
+/*
+ * Whether a row is one of the three default rules, of the untagged, the
+ * single-tagged and the double-tagged frames: a filter that names neither
+ * tag's VID, no EtherType and no extended criteria, with the priority of no
+ * tag or of the default (G.988 9.3.13). The ONU takes them as a last resort,
+ * after every other rule.
+ */
+static bool default_row(const uint8_t *row)
+{
+	const uint32_t w0 = omci_be32(&row[0]);
+	const uint32_t w1 = omci_be32(&row[4]);
+	const unsigned int p0 = filter_pri(w0), p1 = filter_pri(w1);
+
+	if (filter_vid(w0) != VLAN_VID_WILDCARD ||
+	    filter_vid(w1) != VLAN_VID_WILDCARD || (w1 & 0xFFFu) != 0u)
+		return false;
+	return (p0 == VLAN_PRI_NO_TAG &&
+		(p1 == VLAN_PRI_NO_TAG || p1 == VLAN_PRI_DEFAULT)) ||
+	       (p0 == VLAN_PRI_DEFAULT && p1 == VLAN_PRI_DEFAULT);
+}
+
+/*
+ * The list order of two rows: on their first eight bytes, the default rules
+ * after all others.
+ */
+static int list_cmp(const uint8_t *a, const uint8_t *b)
+{
+	const bool da = default_row(a), db = default_row(b);
+
+	if (da != db)
+		return da ? 1 : -1;
+	return memcmp(a, b, 8);
+}
+
 /* Put @r among the @n rows of @out, which are in list order. */
 static void insert_listed(struct listed_row *out, size_t n,
 			  const struct listed_row *r)
 {
 	size_t at = n;
 
-	while (at > 0 && memcmp(out[at - 1].bytes, r->bytes, 8) > 0) {
+	while (at > 0 && list_cmp(out[at - 1].bytes, r->bytes) > 0) {
 		out[at] = out[at - 1];
 		at--;
 	}
@@ -678,7 +747,7 @@ static void insert_listed(struct listed_row *out, size_t n,
 /*
  * The rows of an instance's rule table in list order, which sorts them on
  * their first eight bytes, the filter (G.988 9.3.13), whatever order the OLT
- * set them in.
+ * set them in, but for the default rules, which come last.
  *
  * Return: their number.
  */
@@ -698,6 +767,36 @@ static size_t rows_in_list_order(const struct omci_mib *mib, uint16_t class_id,
 			insert_listed(out, n++, &r);
 	}
 	return n;
+}
+
+/*
+ * Whether rule @d of row @j of the @count rows of @listed, which leaves the
+ * untagged frames of an EtherType as they are and so has no rule of the
+ * switch, comes ahead of a rule that tags those frames: the switch would give
+ * them to that rule, and no rule of the switch found yet leaves a frame as it
+ * is ahead of one that tags it.
+ */
+static bool passes_ahead_of_tag(const struct listed_row *listed, size_t count,
+				size_t j, const struct omci_vlan_rule *d)
+{
+	if (d->filter_ethertype == OMCI_HW_ETHERTYPE_ANY ||
+	    d->filter_outer_pri != VLAN_PRI_NO_TAG ||
+	    d->filter_inner_pri != VLAN_PRI_NO_TAG ||
+	    d->tags_to_remove != VLAN_TAGS_REMOVE_0)
+		return false;
+
+	for (size_t k = j + 1; k < count; k++) {
+		struct omci_vlan_rule later;
+
+		(void)omci_vlan_decode(listed[k].bytes, sizeof(listed[k].bytes),
+				       &later);
+		if ((later.op == OMCI_VLAN_OP_CVID_PUSH ||
+		     later.op == OMCI_VLAN_OP_SCVID_PUSH) &&
+		    (later.filter_ethertype == OMCI_HW_ETHERTYPE_ANY ||
+		     later.filter_ethertype == d->filter_ethertype))
+			return true;
+	}
+	return false;
 }
 
 /*
@@ -721,6 +820,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 	if (record) {
 		g_fate_n = 0;
 		g_fate_over = 0;
+		g_pass_refused_n = 0;
 	}
 
 	bool warned_full = false;
@@ -748,6 +848,19 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 				struct omci_vlan_rule d;
 				(void)omci_vlan_decode(row, sizeof(row), &d);
 
+				if (d.op == OMCI_VLAN_OP_NONE &&
+				    passes_ahead_of_tag(listed, count, j, &d)) {
+					(void)refuse(
+						&d,
+						OMCI_VLAN_REJECT_ETHERTYPE_PASS);
+					if (record &&
+					    g_pass_refused_n <
+						    ARRAY_SIZE(g_pass_refused))
+						memcpy(g_pass_refused
+							       [g_pass_refused_n++],
+						       row, 8);
+				}
+
 				struct omci_hw_vlan_xlate cand = hw_rule_of(&d);
 
 				if (prefer_in_force) {
@@ -771,13 +884,13 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 
 					fate_put(record, cur.instance, i,
 						 OMCI_VLAN_FATE_UNSUPPORTED,
-						 d.match_cvid, 0u, NULL);
+						 &cand, 0u, NULL);
 					continue;
 				}
 				if (d.op == OMCI_VLAN_OP_NONE) {
 					fate_put(record, cur.instance, i,
-						 OMCI_VLAN_FATE_INERT,
-						 d.match_cvid, 0u, NULL);
+						 OMCI_VLAN_FATE_INERT, &cand,
+						 0u, NULL);
 					continue;
 				}
 
@@ -796,8 +909,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 						v == SLOT_DUP ?
 							OMCI_VLAN_FATE_COLLAPSED :
 							OMCI_VLAN_FATE_SHADOWED,
-						d.match_cvid, net_vid,
-						&rules[rival]);
+						&cand, net_vid, &rules[rival]);
 					continue;
 				}
 
@@ -819,7 +931,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 						fate_put(
 							record, cur.instance, i,
 							OMCI_VLAN_FATE_SHADOWED,
-							d.match_cvid, 0u,
+							&cand, 0u,
 							&rules[rival]);
 						continue;
 					}
@@ -836,7 +948,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 					over++;
 					fate_put(record, cur.instance, i,
 						 OMCI_VLAN_FATE_OVER_BUDGET,
-						 d.match_cvid, net_vid, NULL);
+						 &cand, net_vid, NULL);
 					continue;
 				}
 
@@ -859,8 +971,8 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 
 				rules[n] = cand;
 				fate_put(record, cur.instance, i,
-					 OMCI_VLAN_FATE_PROGRAMMED,
-					 d.match_cvid, net_vid, NULL);
+					 OMCI_VLAN_FATE_PROGRAMMED, &cand,
+					 net_vid, NULL);
 				n++;
 			}
 		}
@@ -934,12 +1046,13 @@ enum omci_status omci_vlan_program(const struct omci_mib *mib,
 	g_rejected = rejected;
 	for (size_t i = 0; i < g_fate_n; i++)
 		if (g_fate[i].fate == OMCI_VLAN_FATE_PROGRAMMED &&
-		    omci_hw_reject_has(&rejected, g_fate[i].match_cvid))
+		    omci_hw_reject_has(&rejected, g_fate_key[i]))
 			g_fate[i].fate = OMCI_VLAN_FATE_REFUSED;
 
 	g_in_force_n = 0;
 	for (size_t i = 0; i < n; i++) {
-		if (omci_hw_reject_has(&rejected, rules[i].match_cvid)) {
+		if (omci_hw_reject_has(&rejected,
+				       omci_hw_vlan_key(&rules[i]))) {
 			OMCI_WARN(
 				"me171: the switch would not take C-VID %u -> %u; it is NOT in force",
 				rules[i].match_cvid, net_vid_of(&rules[i]));
@@ -969,11 +1082,19 @@ bool omci_vlan_row_refused(const uint8_t *row, size_t len)
 {
 	struct omci_vlan_rule d;
 
+	if (row == NULL || len < 16)
+		return false;
+	for (size_t i = 0; i < g_pass_refused_n; i++)
+		if (memcmp(g_pass_refused[i], row, 8) == 0)
+			return true;
 	if (g_rejected.n == 0)
 		return false;
 	if (!omci_vlan_decode(row, len, &d))
 		return false;
-	return omci_hw_reject_has(&g_rejected, (uint16_t)d.match_cvid);
+
+	const struct omci_hw_vlan_xlate r = hw_rule_of(&d);
+
+	return omci_hw_reject_has(&g_rejected, omci_hw_vlan_key(&r));
 }
 
 bool omci_vlan_has_room(const struct omci_mib *mib, uint16_t class_id,

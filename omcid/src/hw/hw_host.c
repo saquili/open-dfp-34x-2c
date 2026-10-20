@@ -82,9 +82,9 @@ void omci_hw_vlan_fail_next(void)
 static uint16_t g_vlan_reject_id;
 static bool g_vlan_reject_next;
 
-void omci_hw_vlan_reject_next(uint16_t match_cvid)
+void omci_hw_vlan_reject_next(uint16_t key)
 {
-	g_vlan_reject_id = match_cvid;
+	g_vlan_reject_id = key;
 	g_vlan_reject_next = true;
 }
 
@@ -112,7 +112,7 @@ enum omci_status omci_hw_vlan_apply(const struct omci_hw_vlan_xlate *rules,
 	if (g_vlan_reject_next) {
 		g_vlan_reject_next = false;
 		for (size_t i = 0; i < n; i++)
-			if (rules[i].match_cvid == g_vlan_reject_id) {
+			if (omci_hw_vlan_key(&rules[i]) == g_vlan_reject_id) {
 				omci_hw_reject_add(rejected, g_vlan_reject_id);
 				return OMCI_DECLINED;
 			}

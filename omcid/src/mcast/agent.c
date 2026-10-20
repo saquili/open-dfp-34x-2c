@@ -825,6 +825,35 @@ static size_t push_tag(uint8_t *f, size_t len, unsigned int tpid,
 	return len + 4u;
 }
 
+/* The EtherType of a frame, behind its tags. */
+static unsigned int frame_ethertype(const uint8_t *f, size_t len)
+{
+	size_t off = 12;
+	unsigned int type = omci_be16(&f[off]);
+
+	while ((type == 0x8100u || type == 0x88a8u) && off + 6u <= len) {
+		off += 4;
+		type = omci_be16(&f[off]);
+	}
+	return type;
+}
+
+/* Whether a rule takes frames of EtherType @type. */
+static bool rule_takes_ethertype(const struct omci_hw_vlan_xlate *r,
+				 unsigned int type)
+{
+	uint16_t et[OMCI_HW_ETHERTYPES_MAX];
+	size_t n;
+
+	if (r->ethertype == OMCI_HW_ETHERTYPE_ANY)
+		return true;
+	n = omci_hw_ethertypes(r->ethertype, et);
+	for (size_t i = 0; i < n; i++)
+		if (et[i] == type)
+			return true;
+	return false;
+}
+
 /*
  * The upstream tag the extended VLAN tagging operation gives a frame: the
  * first rule in force that matches it, as the switch takes them, or none.
@@ -838,12 +867,15 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 	unsigned int tci = 0;
 	const bool ctag = outer_tag(f, &tci) == 0x8100u;
 	const unsigned int vid = tci & 0x0fffu, pcp = tci >> 13;
+	const unsigned int type = frame_ethertype(f, len);
 	bool discard = false;
 
 	for (size_t i = 0; i < n; i++) {
 		const unsigned int pri =
 			r[i].assign_pri <= 7u ? r[i].assign_pri : pcp;
 
+		if (!rule_takes_ethertype(&r[i], type))
+			continue;
 		if (r[i].kind == OMCI_HW_VLAN_DISCARD_TAGGED) {
 			discard = true;
 			continue;

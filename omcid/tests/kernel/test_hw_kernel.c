@@ -96,6 +96,28 @@ static bool at(const char *dev, unsigned int pref, const char *text)
 	return false;
 }
 
+/* How many filters of priority @pref on @dev hold @text. */
+static unsigned int count_at(const char *dev, unsigned int pref,
+			     const char *text)
+{
+	char head[48];
+	const char *s = shown(dev);
+	unsigned int n = 0;
+
+	snprintf(head, sizeof(head), " pref %u ", pref);
+	for (const char *f = strstr(s, "filter protocol"); f;) {
+		const char *next = strstr(f + 1, "filter protocol");
+		size_t len = next ? (size_t)(next - f) : strlen(f);
+		const char *h = strstr(f, head);
+		const char *t = strstr(f, text);
+
+		if (h && h < f + len && t && t < f + len)
+			n++;
+		f = next;
+	}
+	return n;
+}
+
 static int sh(const char *cmd)
 {
 	return system(cmd);
@@ -215,6 +237,40 @@ static void vlan_rules(void)
 	CHECK(at("sfp", TC_PRIO_VLAN + 2, "modify id 101"));
 	CHECK(at("sfp", TC_PRIO_VLAN + 2, "priority 4"));
 	CHECK(at("sfp", TC_PRIO_VLAN + 2, "push id 301"));
+	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
+	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
+
+	const struct omci_hw_vlan_xlate etype[] = {
+		{ .kind = OMCI_HW_VLAN_CVID_PUSH,
+		  .assign_cvid = 35,
+		  .assign_pri = 0,
+		  .ethertype = OMCI_HW_ETHERTYPE_PPPOE },
+		{ .kind = OMCI_HW_VLAN_CVID_PUSH,
+		  .assign_cvid = 36,
+		  .assign_pri = 0,
+		  .ethertype = OMCI_HW_ETHERTYPE_IPV4 },
+		{ .kind = OMCI_HW_VLAN_CVID_XLATE,
+		  .match_cvid = 410,
+		  .assign_cvid = 1410,
+		  .assign_pri = OMCI_HW_VLAN_PRI_KEEP,
+		  .ethertype = OMCI_HW_ETHERTYPE_IPV6 },
+	};
+
+	puts("rules on an EtherType: a filter for each, PPPoE's two, of untagged frames or behind the tag; undone downstream by the VID");
+	CHECK(omci_hw_kernel_ops.vlan_apply(etype, 3, &rejected) == OMCI_OK);
+	CHECK(rejected.n == 0);
+	CHECK(count_at("sfp", TC_PRIO_VLAN, "push id 35") == 2u);
+	CHECK(count_at("sfp", TC_PRIO_VLAN, "num_of_vlans 0") == 2u);
+	CHECK(at("sfp", TC_PRIO_VLAN, "ppp_disc") ||
+	      at("sfp", TC_PRIO_VLAN, "8863"));
+	CHECK(count_at("pon", TC_PRIO_VLAN, "pop") == 1u);
+	CHECK(at("pon", TC_PRIO_VLAN, "vlan_id 35"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 1, "eth_type ip"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 1, "push id 36"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 2, "vlan_id 410"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 2, "vlan_ethtype ipv6"));
+	CHECK(at("pon", TC_PRIO_VLAN + 2, "modify id 410"));
+	CHECK(!at("pon", TC_PRIO_VLAN + 2, "vlan_ethtype"));
 	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
 	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
 }

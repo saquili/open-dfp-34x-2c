@@ -2882,8 +2882,9 @@ struct tc_vlan_act {
  * A VLAN filter: the frames it takes, untagged ones or those whose outer tag,
  * of protocol @match_proto (802.1Q for 0), has VID @match_vid and, with
  * @match_has_pri, priority @match_pri, and with @match_ctag a C-tag behind
- * it; and its vlan actions, @n_act of them, which act on the frame in their
- * order.
+ * it, or with @ethertype, not 0, that EtherType behind it, the frame's own for
+ * an untagged one; and its vlan actions, @n_act of them, which act on the
+ * frame in their order.
  */
 struct tc_vlan_filter {
 	bool untagged;
@@ -2892,6 +2893,7 @@ struct tc_vlan_filter {
 	bool match_has_pri;
 	uint8_t match_pri;
 	bool match_ctag;
+	uint16_t ethertype;
 	size_t n_act;
 	struct tc_vlan_act act[TC_VLAN_ACTS];
 };
@@ -2931,6 +2933,12 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 
 		off = nla_put(req, off, TCA_FLOWER_KEY_NUM_OF_VLANS, &none,
 			      sizeof(none));
+		if (f->ethertype) {
+			uint16_t proto = htons(f->ethertype);
+
+			off = nla_put(req, off, TCA_FLOWER_KEY_ETH_TYPE, &proto,
+				      sizeof(proto));
+		}
 	} else {
 		uint16_t proto = htons(match_proto);
 
@@ -2941,11 +2949,12 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 		if (f->match_has_pri)
 			off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_PRIO,
 				      &f->match_pri, sizeof(f->match_pri));
-		if (f->match_ctag) {
-			uint16_t ctag = htons(ETH_P_8021Q);
+		if (f->match_ctag || f->ethertype) {
+			uint16_t next = htons(f->match_ctag ? ETH_P_8021Q :
+							      f->ethertype);
 
 			off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_ETH_TYPE,
-				      &ctag, sizeof(ctag));
+				      &next, sizeof(next));
 		}
 	}
 	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
@@ -3022,8 +3031,33 @@ static size_t ctag_rewrite(struct tc_vlan_act *a, uint16_t vid, uint8_t pri)
 	return 2;
 }
 
-/* The most upstream filters a rule takes: one per priority. */
-#define VLAN_UP_MAX 8u
+/*
+ * The most upstream filters a rule takes: one per priority, each once for
+ * each EtherType.
+ */
+#define VLAN_PRIS 8u
+#define VLAN_UP_MAX (VLAN_PRIS * OMCI_HW_ETHERTYPES_MAX)
+
+/*
+ * The @n upstream filters @up of rule @r, each once for each EtherType the
+ * rule takes, of the frame or behind its tag: PPPoE's are two, as a filter
+ * names one EtherType. Returns their number.
+ */
+static size_t vlan_filters_ethertype(const struct omci_hw_vlan_xlate *r,
+				     struct tc_vlan_filter *up, size_t n)
+{
+	uint16_t et[OMCI_HW_ETHERTYPES_MAX];
+	const size_t ne = omci_hw_ethertypes(r->ethertype, et);
+
+	if (ne == 0)
+		return n;
+	for (size_t e = ne; e-- > 0;)
+		for (size_t i = 0; i < n; i++) {
+			up[e * n + i] = up[i];
+			up[e * n + i].ethertype = et[e];
+		}
+	return n * ne;
+}
 
 /*
  * The filters of a rule: the upstream ones on sfp, and on pon the downstream
@@ -3038,7 +3072,9 @@ static size_t ctag_rewrite(struct tc_vlan_act *a, uint16_t vid, uint8_t pri)
  * names the priority it gives, and so does a rule that takes each priority
  * apart (@per_pri), so that the switch gives the frames of each priority the
  * GEM port of that priority. Returns the number of upstream filters, 0 for a
- * rule of no kind known here.
+ * rule of no kind known here. A rule on an EtherType takes these once for
+ * each EtherType upstream (vlan_filters_ethertype()), and is undone downstream
+ * by the VID it gives, whatever the EtherType.
  */
 static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 			   struct tc_vlan_filter up[static VLAN_UP_MAX],
@@ -3047,7 +3083,7 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 	switch (r->kind) {
 	case OMCI_HW_VLAN_CVID_XLATE: {
 		const bool apart = r->per_pri && !r->match_has_pri;
-		const size_t n = apart ? VLAN_UP_MAX : 1u;
+		const size_t n = apart ? VLAN_PRIS : 1u;
 
 		for (size_t i = 0; i < n; i++) {
 			up[i] = (struct tc_vlan_filter){
@@ -3083,7 +3119,7 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 		return 1;
 	case OMCI_HW_VLAN_SVID_PUSH: {
 		const bool copy = r->assign_pri == OMCI_HW_VLAN_PRI_COPY;
-		const size_t n = copy && !r->match_has_pri ? VLAN_UP_MAX : 1u;
+		const size_t n = copy && !r->match_has_pri ? VLAN_PRIS : 1u;
 
 		for (size_t i = 0; i < n; i++) {
 			const uint8_t pri = r->match_has_pri ? r->match_pri :
@@ -3145,7 +3181,8 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
  * C-VID the OLT translates from the subscriber's side, held or not, with the
  * VID it leads into, in XLATE_PATH. onu-apply runs a session given the
  * subscriber's VID of a translation in the VID it leads into, as the
- * subscriber's frames would leave. The file is replaced whole, and only when
+ * subscriber's frames would leave; a translation of one EtherType's frames is
+ * none of the VID's. The file is replaced whole, and only when
  * it changes.
  */
 #define XLATE_PATH OMCI_RUN_DIR "/xlate"
@@ -3160,6 +3197,7 @@ static void xlate_publish(const struct omci_hw_vlan_xlate *rules, size_t n)
 
 	for (size_t i = 0; i < n; i++) {
 		if (rules[i].kind != OMCI_HW_VLAN_CVID_XLATE ||
+		    rules[i].ethertype != OMCI_HW_ETHERTYPE_ANY ||
 		    !vid_put(subs, &n_subs, ARRAY_SIZE(subs),
 			     rules[i].match_cvid))
 			continue;
@@ -3169,6 +3207,18 @@ static void xlate_publish(const struct omci_hw_vlan_xlate *rules, size_t n)
 	}
 	run_publish(XLATE_PATH, text, last, sizeof(last), &published,
 		    "vlan: the translations");
+}
+
+/*
+ * The name of an EtherType code (enum omci_hw_ethertype) in a log line, with a
+ * space in front; none for any EtherType.
+ */
+static const char *ethertype_name(uint8_t code)
+{
+	static const char *const names[] = { "",     " IPoE", " PPPoE",
+					     " ARP", " IPv6", " EAPOL" };
+
+	return code < ARRAY_SIZE(names) ? names[code] : " ?";
 }
 
 /* Replace the VLAN rules, each with its filters (see vlan_filters()). */
@@ -3235,7 +3285,8 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 					"vlan: the discard of C-VID %u refused: %s (%s)",
 					r->match_cvid, strerror(-err),
 					omci_hw_last_extack());
-				omci_hw_reject_add(rejected, r->match_cvid);
+				omci_hw_reject_add(rejected,
+						   omci_hw_vlan_key(r));
 				continue;
 			}
 			sub[n_sub++] = r->match_cvid;
@@ -3265,13 +3316,14 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 			continue;
 		}
 
-		const size_t n_up = vlan_filters(r, up, &down);
+		const size_t n_up = vlan_filters_ethertype(
+			r, up, vlan_filters(r, up, &down));
 
 		if (!n_up) {
 			OMCI_WARN(
 				"vlan: rule %zu (C-VID %u) is of no kind known here; not programmed",
 				i, r->match_cvid);
-			omci_hw_reject_add(rejected, r->match_cvid);
+			omci_hw_reject_add(rejected, omci_hw_vlan_key(r));
 			continue;
 		}
 
@@ -3282,7 +3334,7 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 			OMCI_WARN("vlan: upstream rule %zu refused: %s (%s)", i,
 				  strerror(-err), omci_hw_last_extack());
 			(void)tc_filter_del((int)uni, prio);
-			omci_hw_reject_add(rejected, r->match_cvid);
+			omci_hw_reject_add(rejected, omci_hw_vlan_key(r));
 			continue;
 		}
 		err = r->up_only ? 0 : tc_filter_add((int)pon, prio, &down);
@@ -3290,7 +3342,7 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 			OMCI_WARN("vlan: downstream rule %zu refused: %s (%s)",
 				  i, strerror(-err), omci_hw_last_extack());
 			(void)tc_filter_del((int)uni, prio);
-			omci_hw_reject_add(rejected, r->match_cvid);
+			omci_hw_reject_add(rejected, omci_hw_vlan_key(r));
 			continue;
 		}
 		if (r->kind == OMCI_HW_VLAN_CVID_XLATE)
@@ -3299,18 +3351,21 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		    r->kind != OMCI_HW_VLAN_SCVID_PUSH)
 			sub[n_sub++] = r->match_cvid;
 
-		char pri[16] = "";
+		char pri[32] = "";
 
 		if (r->match_has_pri)
-			snprintf(pri, sizeof(pri), " priority %u",
-				 r->match_pri);
+			snprintf(pri, sizeof(pri), " priority %u%s",
+				 r->match_pri, ethertype_name(r->ethertype));
+		else
+			snprintf(pri, sizeof(pri), "%s",
+				 ethertype_name(r->ethertype));
 		if (r->kind == OMCI_HW_VLAN_CVID_PUSH)
-			OMCI_INFO("vlan: untagged <-> C-VID %u in hardware",
-				  r->assign_cvid);
+			OMCI_INFO("vlan: untagged%s <-> C-VID %u in hardware",
+				  pri, r->assign_cvid);
 		else if (r->kind == OMCI_HW_VLAN_SCVID_PUSH)
 			OMCI_INFO(
-				"vlan: untagged <-> C-VID %u behind S-VID %u, in hardware%s",
-				r->assign_cvid, r->assign_svid,
+				"vlan: untagged%s <-> C-VID %u behind S-VID %u, in hardware%s",
+				pri, r->assign_cvid, r->assign_svid,
 				r->up_only ? ", upstream only" : "");
 		else if (r->kind == OMCI_HW_VLAN_SVID_PUSH && r->inner_has_pri)
 			OMCI_INFO(
@@ -3327,7 +3382,9 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 			OMCI_INFO(
 				"vlan: C-VID %u%s <-> %u translated in hardware%s%s",
 				r->match_cvid, pri, r->assign_cvid,
-				n_up > 1u ? ", each priority apart" : "",
+				r->per_pri && !r->match_has_pri ?
+					", each priority apart" :
+					"",
 				r->up_only ? ", upstream only" : "");
 	}
 

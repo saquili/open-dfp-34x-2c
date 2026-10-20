@@ -111,7 +111,8 @@ __must_check const char *omci_hw_source(void);
 
 /**
  * struct omci_hw_reject - The items the hardware refused.
- * @id: the VID or port identifier of each
+ * @id: the port identifier of each, or of a VLAN rule its key
+ *	(omci_hw_vlan_key())
  * @n: how many there are
  */
 struct omci_hw_reject {
@@ -203,6 +204,8 @@ enum omci_hw_vlan_kind {
  *	@inner_pri: the C-tag of a C- and S-VID push, and the frame's own C-tag
  *	where an S-VID push changes its priority
  * @inner_pri: that priority, 0 to 7
+ * @ethertype: the EtherTypes of the frames the rule takes, an &enum
+ *	omci_hw_ethertype; %OMCI_HW_ETHERTYPE_ANY for frames of any
  */
 struct omci_hw_vlan_xlate {
 	enum omci_hw_vlan_kind kind;
@@ -217,13 +220,83 @@ struct omci_hw_vlan_xlate {
 	uint8_t keep_pri;
 	bool inner_has_pri;
 	uint8_t inner_pri;
+	uint8_t ethertype;
 };
+
+/**
+ * enum omci_hw_ethertype - The EtherTypes a VLAN rule takes, as the Filter
+ *	Ethertype field of the extended VLAN tagging operation codes them
+ *	(G.988 9.3.13); the other codes are reserved.
+ * @OMCI_HW_ETHERTYPE_ANY: any EtherType
+ * @OMCI_HW_ETHERTYPE_IPV4: 0x0800, IPoE
+ * @OMCI_HW_ETHERTYPE_PPPOE: 0x8863 and 0x8864, PPPoE discovery and session
+ * @OMCI_HW_ETHERTYPE_ARP: 0x0806
+ * @OMCI_HW_ETHERTYPE_IPV6: 0x86DD, IPv6 IPoE
+ * @OMCI_HW_ETHERTYPE_EAPOL: 0x888E
+ */
+enum omci_hw_ethertype {
+	OMCI_HW_ETHERTYPE_ANY = 0,
+	OMCI_HW_ETHERTYPE_IPV4 = 1,
+	OMCI_HW_ETHERTYPE_PPPOE = 2,
+	OMCI_HW_ETHERTYPE_ARP = 3,
+	OMCI_HW_ETHERTYPE_IPV6 = 4,
+	OMCI_HW_ETHERTYPE_EAPOL = 5,
+};
+
+/* The most EtherTypes that one code names. */
+#define OMCI_HW_ETHERTYPES_MAX 2u
+
+/**
+ * omci_hw_ethertypes() - The EtherTypes of a code.
+ * @code: an &enum omci_hw_ethertype
+ * @out: the EtherTypes
+ *
+ * Return: how many there are; 0 for any EtherType or a reserved code.
+ */
+static inline size_t omci_hw_ethertypes(uint8_t code,
+					uint16_t out[OMCI_HW_ETHERTYPES_MAX])
+{
+	switch (code) {
+	case OMCI_HW_ETHERTYPE_IPV4:
+		out[0] = 0x0800u;
+		return 1;
+	case OMCI_HW_ETHERTYPE_PPPOE:
+		out[0] = 0x8863u;
+		out[1] = 0x8864u;
+		return 2;
+	case OMCI_HW_ETHERTYPE_ARP:
+		out[0] = 0x0806u;
+		return 1;
+	case OMCI_HW_ETHERTYPE_IPV6:
+		out[0] = 0x86ddu;
+		return 1;
+	case OMCI_HW_ETHERTYPE_EAPOL:
+		out[0] = 0x888eu;
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+/**
+ * omci_hw_vlan_key() - The key of a VLAN rule among those the hardware
+ *	refuses (struct omci_hw_reject): the VID it takes, and in bits 15:12
+ *	its EtherType code, so that rules of one VID, or of untagged frames,
+ *	on different EtherTypes are told apart.
+ * @r: the rule
+ *
+ * Return: the key; for a rule of any EtherType its VID.
+ */
+static inline uint16_t omci_hw_vlan_key(const struct omci_hw_vlan_xlate *r)
+{
+	return (uint16_t)(r->match_cvid | (unsigned int)r->ethertype << 12);
+}
 
 /**
  * omci_hw_vlan_apply() - Replace the VLAN rules of the hardware (host backend).
  * @rules: the complete set
  * @n: how many
- * @rejected: the rules the hardware refused, by matched VID
+ * @rejected: the rules the hardware refused, by key (omci_hw_vlan_key())
  *
  * Return: %OMCI_OK; %OMCI_DECLINED when some rules were refused; another
  * error when none could be programmed.
@@ -242,7 +315,7 @@ size_t omci_hw_vlan_recorded(const struct omci_hw_vlan_xlate **out);
 
 void omci_hw_vlan_fail_next(void);
 
-void omci_hw_vlan_reject_next(uint16_t match_cvid);
+void omci_hw_vlan_reject_next(uint16_t key);
 #endif
 
 /* The GEM ports the PON MAC can carry. */

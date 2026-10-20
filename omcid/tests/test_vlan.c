@@ -201,7 +201,9 @@ int main(void)
 	pack(row, 0xf8000000u, 0xf8000002u, 0x000f0000u,
 	     (5u << 16) | (410u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
-	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE);
+	CHECK_EQ(r.op, OMCI_VLAN_OP_CVID_PUSH);
+	CHECK_EQ(r.filter_ethertype, OMCI_HW_ETHERTYPE_PPPOE);
+	CHECK_EQ(r.assign_cvid, 410u);
 	pack(row, 0xf8000000u, 0xf8000000u, 0x000f0000u,
 	     (8u << 16) | (410u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
@@ -246,7 +248,8 @@ int main(void)
 	pack(row, 0xf8000000u, 0xf8000004u, (3u << 16) | (36u << 3),
 	     (5u << 16) | (410u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
-	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE);
+	CHECK_EQ(r.op, OMCI_VLAN_OP_SCVID_PUSH);
+	CHECK_EQ(r.filter_ethertype, OMCI_HW_ETHERTYPE_IPV6);
 
 	/* A translation that gives the tag a new priority. */
 	pack(row, 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
@@ -259,12 +262,56 @@ int main(void)
 	CHECK(omci_vlan_decode(row, 16, &r));
 	CHECK_EQ(r.assign_pri, OMCI_HW_VLAN_PRI_KEEP);
 
+	/*
+	 * The filter on the EtherType: of a single-tagged frame it is taken;
+	 * of a double-tagged one, or with a code G.988 reserves, it is
+	 * refused. The codes name the EtherTypes of G.988 (11/2022) 9.3.13,
+	 * PPPoE's discovery and session both.
+	 */
 	pack(row, 0xf8000000u, (6u << 28) | (410u << 15) | 3u, 0x400f0000u,
 	     (6u << 16) | (1410u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_CVID_XLATE);
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_NONE);
+	CHECK_EQ(r.filter_ethertype, 3u);
+	pack(row, 0xf8000000u, (6u << 28) | (410u << 15) | 6u, 0x400f0000u,
+	     (6u << 16) | (1410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE_CODE);
+	pack(row, 0xf8000000u, 0xf800000fu, 0x000f0000u,
+	     (5u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE_CODE);
+	pack(row, (6u << 28) | (10u << 15), (6u << 28) | (410u << 15) | 1u,
+	     0x400f0000u, (6u << 16) | (1410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
 	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
 	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE);
-	CHECK_EQ(r.filter_ethertype, 3u);
+	{
+		static const struct {
+			uint8_t code;
+			size_t n;
+			uint16_t type[2];
+		} codes[] = {
+			{ 0u, 0u, { 0u } },
+			{ 1u, 1u, { 0x0800u } },
+			{ 2u, 2u, { 0x8863u, 0x8864u } },
+			{ 3u, 1u, { 0x0806u } },
+			{ 4u, 1u, { 0x86ddu } },
+			{ 5u, 1u, { 0x888eu } },
+			{ 6u, 0u, { 0u } },
+		};
+
+		for (size_t i = 0; i < ARRAY_SIZE(codes); i++) {
+			uint16_t et[OMCI_HW_ETHERTYPES_MAX] = { 0 };
+
+			CHECK_EQ(omci_hw_ethertypes(codes[i].code, et),
+				 codes[i].n);
+			for (size_t k = 0; k < codes[i].n; k++)
+				CHECK_EQ(et[k], codes[i].type[k]);
+		}
+	}
 
 	/* A translation that gives the tag priority 0, of one priority or any. */
 	pack(row, 0xf8000000u, (6u << 28) | (410u << 15), 0x400f0000u,
@@ -441,6 +488,10 @@ int main(void)
 	CHECK(omci_vlan_reject_name(OMCI_VLAN_REJECT_SHAPE)[0] != '\0');
 	CHECK(omci_vlan_reject_name(OMCI_VLAN_REJECT_VID_RANGE)[0] != '\0');
 	CHECK(omci_vlan_reject_name(OMCI_VLAN_REJECT_DISCARD)[0] != '\0');
+	CHECK(omci_vlan_reject_name(OMCI_VLAN_REJECT_ETHERTYPE_CODE)[0] !=
+	      '\0');
+	CHECK(omci_vlan_reject_name(OMCI_VLAN_REJECT_ETHERTYPE_PASS)[0] !=
+	      '\0');
 	CHECK(omci_vlan_reject_name(OMCI_VLAN_REJECT_NONE)[0] != '\0');
 
 	CHECK(!omci_vlan_decode(row, 15, &r));
@@ -532,6 +583,82 @@ int main(void)
 			 OMCI_OK);
 		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		clear_rows(mib);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	}
+
+	/*
+	 * Rules on the EtherType of untagged frames come ahead of the default
+	 * rule of untagged frames, which comes last in list order whatever its
+	 * bytes (G.988 9.3.13); of two rules that push one VID, the later works
+	 * upstream only. The switch refuses a rule by its VID and EtherType, so
+	 * the other rules of untagged frames stay in force. A rule that leaves
+	 * the untagged frames of an EtherType as they are, ahead of one that
+	 * tags them, is left out; with no such rule after it, it needs nothing.
+	 */
+	{
+		static const char pass_out[] =
+			"untagged ethertype left as is ahead of a rule that tags it";
+		uint8_t dflt[16], ppp[16], v6[16], pass[16];
+		const struct omci_hw_vlan_xlate *in = NULL;
+		char log[4096];
+
+		clear_rows(mib);
+		pack(dflt, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+		     (0u << 16) | (10u << 3));
+		pack(ppp, 0xf8000000u, 0xf8000002u, 0x000f0000u,
+		     (0u << 16) | (35u << 3));
+		pack(v6, 0xf8000000u, 0xf8000004u, 0x000f0000u,
+		     (0u << 16) | (10u << 3));
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, dflt, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, ppp, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, v6, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		if (omci_hw_vlan_recorded(&applied) == 3u) {
+			CHECK_EQ(applied[0].kind, OMCI_HW_VLAN_CVID_PUSH);
+			CHECK_EQ(applied[0].ethertype, OMCI_HW_ETHERTYPE_PPPOE);
+			CHECK_EQ(applied[0].assign_cvid, 35u);
+			CHECK(!applied[0].up_only);
+			CHECK_EQ(applied[1].ethertype, OMCI_HW_ETHERTYPE_IPV6);
+			CHECK_EQ(applied[1].assign_cvid, 10u);
+			CHECK(!applied[1].up_only);
+			CHECK_EQ(applied[2].ethertype, OMCI_HW_ETHERTYPE_ANY);
+			CHECK_EQ(applied[2].assign_cvid, 10u);
+			CHECK(applied[2].up_only);
+		}
+
+		omci_hw_vlan_reject_next(
+			(uint16_t)(OMCI_HW_ETHERTYPE_PPPOE << 12));
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_DECLINED);
+		CHECK(omci_vlan_row_refused(ppp, sizeof(ppp)));
+		CHECK(!omci_vlan_row_refused(dflt, sizeof(dflt)));
+		CHECK(!omci_vlan_row_refused(v6, sizeof(v6)));
+		CHECK_EQ(omci_vlan_in_force(&in), 2u);
+
+		pack(pass, 0xf8000000u, 0xf8000005u, 0x000f0000u, 0x000f0000u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, pass, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		OMCI_T_CAPTURE_LOG(log, {
+			CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL),
+				 OMCI_OK);
+		});
+		CHECK(strstr(log, pass_out) != NULL);
+		CHECK(omci_vlan_row_refused(pass, sizeof(pass)));
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+
+		CHECK_EQ(omci_mib_table_remove(mib, 171u, 0x101u, 6u, dflt, 8),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK(!omci_vlan_row_refused(pass, sizeof(pass)));
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 2u);
 		clear_rows(mib);
 		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	}
@@ -877,7 +1004,7 @@ int main(void)
 	{
 		uint8_t bad[16];
 
-		pack(bad, 0xf8000000u, (6u << 28) | (410u << 15) | 3u,
+		pack(bad, 0xf8000000u, (6u << 28) | (410u << 15) | 7u,
 		     0x400f0000u, (6u << 16) | (1410u << 3));
 		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, bad, 16, 8,
 					    OMCI_MIB_TABLE_LAST),
@@ -944,7 +1071,7 @@ int main(void)
 
 		uint8_t unprog[16];
 
-		pack(unprog, 0xf8000000u, (6u << 28) | (36u << 15) | 3u,
+		pack(unprog, 0xf8000000u, (6u << 28) | (36u << 15) | 7u,
 		     0x400f0000u, (6u << 16) | (1502u << 3));
 		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, unprog, 16,
 					    8, OMCI_MIB_TABLE_LAST),

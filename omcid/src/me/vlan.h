@@ -58,7 +58,8 @@ enum omci_vlan_op {
 /**
  * enum omci_vlan_reject - Why a rule cannot be programmed.
  * @OMCI_VLAN_REJECT_NONE: it can
- * @OMCI_VLAN_REJECT_ETHERTYPE: it filters on an Ethertype
+ * @OMCI_VLAN_REJECT_ETHERTYPE: it filters on an Ethertype, and is a rule on a
+ *	double-tagged frame or a discard, which take none here
  * @OMCI_VLAN_REJECT_PCP_REMARK: it sets a priority that is not carried: one
  *	taken from a tag the frame does not have, or from its DSCP
  * @OMCI_VLAN_REJECT_SHAPE: its combination of filter and treatment has no
@@ -66,6 +67,11 @@ enum omci_vlan_op {
  * @OMCI_VLAN_REJECT_VID_RANGE: a VID outside 1 to 4094
  * @OMCI_VLAN_REJECT_DISCARD: it discards the double-tagged frames of a VID;
  *	no rule of the switch found yet takes those alone
+ * @OMCI_VLAN_REJECT_ETHERTYPE_CODE: its filter on the Ethertype has a code
+ *	G.988 reserves
+ * @OMCI_VLAN_REJECT_ETHERTYPE_PASS: it leaves the untagged frames of an
+ *	Ethertype as they are, ahead of a rule that tags them; no rule of the
+ *	switch found yet leaves a frame as it is ahead of one that tags it
  */
 enum omci_vlan_reject {
 	OMCI_VLAN_REJECT_NONE = 0,
@@ -74,6 +80,8 @@ enum omci_vlan_reject {
 	OMCI_VLAN_REJECT_SHAPE,
 	OMCI_VLAN_REJECT_VID_RANGE,
 	OMCI_VLAN_REJECT_DISCARD,
+	OMCI_VLAN_REJECT_ETHERTYPE_CODE,
+	OMCI_VLAN_REJECT_ETHERTYPE_PASS,
 };
 
 /**
@@ -101,7 +109,7 @@ enum omci_vlan_reject {
  * @filter_inner_pri: see @filter_outer_pri
  * @filter_inner_vid: see @filter_outer_pri
  * @filter_inner_tpid: see @filter_outer_pri
- * @filter_ethertype: see @filter_outer_pri
+ * @filter_ethertype: see @filter_outer_pri; an &enum omci_hw_ethertype
  * @tags_to_remove: see @filter_outer_pri
  * @treat_outer_pri: see @filter_outer_pri
  * @treat_outer_vid: see @filter_outer_pri
@@ -178,7 +186,9 @@ enum omci_status omci_vlan_program(const struct omci_mib *mib,
 				   unsigned int *refused);
 
 /**
- * omci_vlan_row_refused() - Whether the hardware refused a rule at the last programming.
+ * omci_vlan_row_refused() - Whether the hardware refused a rule at the last
+ *	programming, or the programming left it out as one that the hardware
+ *	cannot carry where it stands in the list.
  * @row: the rule
  * @len: its size
  *
