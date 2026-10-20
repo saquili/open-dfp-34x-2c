@@ -442,6 +442,7 @@ by its whole path where procd starts it.
       onu-apply reidentify # after the identity changed: register again
       onu-apply iface      # netifd's, for an interface that came up or down
       onu-apply sync       # follow what changed outside the settings
+      onu-apply guard      # at boot and after a change of the management pair
 
    A change on trial (ADR 0011) is applied but not saved, and the settings
    and accounts applied before it are kept aside, in ``/run/onu-kept``,
@@ -466,6 +467,13 @@ by its whole path where procd starts it.
    first and restarts omcid afterwards, so the OLT sees the stick leave and
    register anew. The MIB that omcid kept in ``/run/omcid/mib`` stays, and the
    new omcid goes on from it until the OLT provisions the stick again.
+
+   ``guard`` puts the filters that keep a session's packets off the host
+   side's networks on the sessions' interfaces again, and the guard of the
+   stick's own programs (``onu-fw guard``, below) in place, which ``apply``
+   and ``sync`` keep up to date as well: the stick's servers answer on the
+   management VLAN alone, in bridge mode, in passthrough and with local
+   networks alike.
 
 ``onu-mgmt``
    the VLAN and the address the stick is managed on from the host side, and a
@@ -682,7 +690,15 @@ by its whole path where procd starts it.
    whose name begins so, ``data IFNAME ADDR`` for a bench's address on the
    host link, ``session IFNAME``, ``ipoe IFNAME [dhcp]``, ``link IFNAME
    [dhcp] [dhcp6]`` and ``lan IFNAME [dhcp]`` for the others, and ``ping
-   in`` or ``ping lans`` where a ping of that side is answered. A guard
+   in`` or ``ping lans`` where a ping of that side is answered
+   (``FW_PING_IN`` and ``FW_PING_LANS``, both ``block`` by default; the
+   management VLAN is answered always). ``onu-apply`` writes the file,
+   ``/run/onu-guard.conf``, in every mode: at boot, before the servers start
+   (``onu-mgmt start`` runs ``onu-apply guard``), and after each apply and
+   sync, with ``mgmt mgmt*``, which names a pair on trial as well, the
+   sessions' interfaces while there are sessions, the interface of each IPoE
+   connection that is up, each link and each local network as the settings
+   make them, and the pings. A guard
    without a management interface is refused, as it would keep everyone off
    the stick. The forward chain comes before the one of ``inet onu``, whose
    NAT, firewall and flowtable stay as they are. ``tests/test_onu_fw.sh``

@@ -125,10 +125,11 @@ setup() {
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
 	# nft stays a stand-in, so that a call to it would show in the log: the
 	# stick has no nft, and onu-apply puts its table in place with onu-fw,
-	# whose stand-in keeps the file it is given, of the table or of the ACL.
+	# whose stand-in keeps the file it is given, of the table, of the guard
+	# or of the ACL.
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
-	printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf"\n[ "$1" = acl ] && cp "$2" "%s/acl.conf"\nexit 0\n' \
-		"$T" "$T" >"$T/bin/onu-fw"
+	printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf"\n[ "$1" = guard ] && cp "$2" "%s/guard.conf"\n[ "$1" = acl ] && cp "$2" "%s/acl.conf"\nexit 0\n' \
+		"$T" "$T" "$T" >"$T/bin/onu-fw"
 	# pppoed opens IPv4, or IPv6 alone when told -6, and keeps it two seconds.
 	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\ncase " $* " in\n%s\n%s\nesac\n%s 2\n' \
 		'*" -6 "*) echo "up6 ppp1 local fe80::2 peer fe80::1 session 18" ;;' \
@@ -166,6 +167,42 @@ check '! logged "^onu-config"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 teardown
 
+echo "the guard of the stick's own programs, in bridge mode, from the boot on"
+setup
+printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=\n' \
+	>"$ONU_ROOT/run/onu-mgmt"
+conf MODE=bridge
+# The boot's onu-mgmt start asks for it, before the servers start and
+# before onu-apply start: the management VLAN alone.
+"$MODE_SCRIPT" guard 2>/dev/null
+check 'logged "^onu-fw guard $ONU_ROOT/run/onu-guard.conf$" && [ "$(cat "$T/guard.conf")" = "mgmt mgmt*" ]'
+# The start finds it in place and puts it there no second time.
+: >"$LOG"
+"$MODE_SCRIPT" start 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ] && ! logged "^onu-fw"'
+# The address on the host link itself, a bench's, is a management address too.
+printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=192.0.2.2/30\n' \
+	>"$ONU_ROOT/run/onu-mgmt"
+"$MODE_SCRIPT" guard 2>/dev/null
+check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\ndata sfp 192.0.2.2")" ]'
+# A ping answered from either side, in bridge mode as well, as the settings say.
+printf 'FW_PING_IN=allow\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'grep -qx "ping in" "$T/guard.conf" && ! grep -q "ping lans" "$T/guard.conf"'
+printf 'FW_PING_LANS=allow\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'grep -qx "ping lans" "$T/guard.conf" && ! grep -q "ping in" "$T/guard.conf"'
+# One the kernel refuses is tried again at the next run.
+printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\nexit 1\n' >"$T/bin/onu-fw"
+printf 'FW_PING_LANS=allow\nFW_PING_IN=allow\n' >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-fw guard" && [ ! -e "$ONU_ROOT/run/onu-guard.conf" ]'
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check 'logged "^onu-fw guard"'
+teardown
+
 echo "a local network, routed out by a session that keeps its address"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
@@ -201,6 +238,10 @@ check 'grep -qx "opt dns 198.51.100.53" "$U"'
 check 'logged "procd start udhcpd-net1 .*udhcpd -f .*/run/udhcpd-net1.conf"'
 check 'logged "^onu-fw apply" && grep -qx "lan net1 192.168.1.0/24" "$T/fw.conf" &&
 	grep -qx "wan gem256" "$T/fw.conf" && grep -qxF "out ppp*" "$T/fw.conf"'
+# A router's servers answer on the management VLAN alone as well: the guard
+# takes the DHCP server's requests on the network's interface, the DHCPv6
+# client's answers on the sessions', and no ping.
+check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\nsession ppp*\nlan net1 dhcp")" ]'
 # A router of networks is a hop, and forwards.
 check 'logged "l3_ttl_decrement true"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
@@ -219,6 +260,7 @@ check 'has nets "interface net1: device=sfp proto=static ipaddr=10.0.0.1/24"'
 check '! part nets | grep -q "8021q"'
 check 'grep -qx "interface sfp" "$U" && grep -qx "start 10.0.0.1" "$U" && grep -qx "end 10.0.0.254" "$U"'
 check 'grep -qx "lan sfp 10.0.0.0/24" "$T/fw.conf"'
+check 'grep -qx "lan sfp dhcp" "$T/guard.conf" && ! grep -q "net1" "$T/guard.conf"'
 
 echo "a network without DHCP has no server"
 printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 \
@@ -227,6 +269,7 @@ printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN
 "$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "procd stop udhcpd-net1" && [ ! -e "$U" ]'
 check 'has nets "interface net1: device=sfp proto=static ipaddr=10.0.0.1/24"'
+check 'grep -qx "lan sfp" "$T/guard.conf"'
 
 echo "the network gone"
 printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off >"$ONU_ROOT/run/onu.conf"
@@ -234,6 +277,9 @@ printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off >"$ONU_RO
 "$MODE_SCRIPT" reload 2>/dev/null
 check '[ ! -e "$ONU_ROOT/run/network.d/nets" ] && logged "^onu-fw clear"'
 check '[ ! -e "$ONU_ROOT/run/onu-fw.conf" ]'
+# The guard stays without the networks: the session that keeps its address
+# is the operator's side.
+check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\nsession ppp*")" ]'
 check 'logged "l3_ttl_decrement false"'
 # The session is the stick's way out no more, and comes up again without it.
 check 'logged "session 1 down" && has ses1 "interface ses1: device=wan410 proto=pppoed session=1 family=ipv4 pass=0 defaultroute=0"'
@@ -475,6 +521,9 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_HOST_VLAN=36 \
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
+# Passthrough without networks has the guard too: the DHCP server's requests
+# on the link, the DHCPv6 client's answers on the sessions'.
+check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\nsession ppp*\nlink lan36 dhcp")" ]'
 # omcid bridges the rest of what the OLT provisions, without the session's VLAN.
 check 'logged "^omcid -m .*/run/omcid/mib -x .*/usr/lib/onu/onu-call$"'
 check '! logged "omcid -r"'
@@ -568,6 +617,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	"$REAL_SLEEP" 0.2
 done
 check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/dhcp6d/pd2 -x $ONU_ROOT/usr/lib/onu/onu-call -n ses2$"'
+# The guard takes the requests to udhcpd and to dhcp6d's server on the link,
+# and the answers to dhcp6d's client on the sessions'.
+check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\nsession ppp*\nlink lan36 dhcp dhcp6")" ]'
 # It runs as its own account with the three powers it uses, and tells onu-apply
 # of a change through onu-call, which an account that is not root's can run.
 check 'logged "^onu-drop -c net_bind_service,net_admin,net_raw dhcp6d dhcp6d -w ppp1 "'
@@ -1434,6 +1486,8 @@ U=$ONU_ROOT/run/udhcpd-net1.conf
 check 'grep -qx "opt dns 198.51.100.53" "$U"'
 check 'grep -qx "lan net1 192.168.1.0/24" "$T/fw.conf" && grep -qx "wan gem256" "$T/fw.conf" &&
 	grep -qx "out wan420" "$T/fw.conf" && ! grep -qF "out ppp*" "$T/fw.conf"'
+# Its address typed in, the connection runs no DHCP client to take answers.
+check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\nipoe wan420\nlan net1 dhcp")" ]'
 # The operator's side is kept from the host side's networks.
 check 'logged "onu-nl clsact add wan420" && logged "onu-nl filter add wan420 pref 1 dst 169.254.0.0/16 drop"'
 "$MODE_SCRIPT" state >"$T/state" 2>/dev/null
@@ -1475,6 +1529,8 @@ printf '%s\n' IPOE1_KIND=dhcp IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_FAMILY=ipv4 \
 : >"$LOG"
 "$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "connection 1 down" && logged "procd start udhcpc-ipoe1 .*onu-drop -c net_raw,net_bind_service dhcpc udhcpc -f -R -i wan420 -s .*/usr/lib/onu/onu-dhcpc"'
+# The guard takes the DHCP client's answers on the connection's interface.
+check 'grep -qx "ipoe wan420 dhcp" "$T/guard.conf"'
 check 'logged "^udhcpc -f -R -i wan420"'
 # Until the lease comes, the interface is up without an address.
 check 'has ipoe-1 "interface ipoe1: device=wan420 proto=none"'

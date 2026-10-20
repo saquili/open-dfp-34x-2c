@@ -25,7 +25,10 @@
 #                      -h), with ACTION, INTERFACE and DEVICE: a session's
 #                      interface that comes up hands on what it brought
 #   onu-apply guard    the filters that keep the sessions' packets off the
-#                      host side again, after the management pair changed
+#                      host side again, after the management pair changed,
+#                      and the guard of the stick's own programs (guard_fw()),
+#                      which onu-mgmt start puts in place at boot, before
+#                      the servers start
 #   onu-apply state    the state last brought up, as lines name=value for the
 #                      status daemon (state() below)
 #   onu-apply sync     follow what changed outside the settings: the GEM
@@ -148,6 +151,15 @@
 # ENTRIES [WHY]" a line; the rules leave the ACL with the last rule in
 # force, and with the networks.
 #
+# The stick talks to the host over its management VLAN, and its servers
+# answer there alone, in every shape, a router's too: onu-fw's guard, the
+# table "inet onu_guard", drops what comes in to the stick by any other
+# interface, but what a program of the stick takes there, and forwards
+# nothing to the management VLAN nor from it (guard_fw()). A ping is
+# answered from the operator's side when FW_PING_IN is allow, from the local
+# networks and the links to the router when FW_PING_LANS is; on the
+# management VLAN always.
+#
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
 
@@ -242,7 +254,7 @@ load() {
 		eval "LAN${n}_IPV6= LAN${n}_IPV6_SUBNET="
 		n=$((n + 1))
 	done
-	FW_OUT= FW_BETWEEN=
+	FW_OUT= FW_BETWEEN= FW_PING_IN= FW_PING_LANS=
 	defaults=$(onu-config defaults) || {
 		log "the defaults of the settings are not known: onu-config does not say them"
 		defaults=
@@ -289,9 +301,9 @@ load_file() {
 		IPOE[1-7]_KIND | IPOE[1-7]_GEM | IPOE[1-7]_VLAN | IPOE[1-7]_MAC | \
 			IPOE[1-7]_FAMILY | IPOE[1-7]_ADDRESS | IPOE[1-7]_GATEWAY | \
 			IPOE[1-7]_ADDRESS6 | IPOE[1-7]_GATEWAY6 | IPOE[1-7]_PREFIX6) ;;
-		# The firewall's defaults; its rules are read where they are
-		# needed (rules_fw()).
-		FW_OUT | FW_BETWEEN) ;;
+		# The firewall's defaults and the pings answered; its rules are
+		# read where they are needed (rules_fw()).
+		FW_OUT | FW_BETWEEN | FW_PING_IN | FW_PING_LANS) ;;
 		# Name servers, one blank apart.
 		IPOE[1-7]_DNS)
 			case $value in
@@ -2005,6 +2017,71 @@ lans_fw() {
 	acl_fw "$lf_fwd"
 }
 
+# The guard of the stick's own programs, onu-fw's table "inet onu_guard", in
+# every shape of the stick, with networks or without: what comes in to the
+# stick by any interface but the management VLAN's is dropped, but what one
+# of its programs takes there, and nothing is forwarded to that VLAN nor from
+# it. Its file, $RUN/onu-guard.conf, names the management interfaces by the
+# beginning of their names, mgmt and the mgmtVID of a pair on trial, so that
+# a pair added beside the old one is reached at once; the address on the
+# host link itself, a bench's (DATA_ADDRESS of /run/onu-mgmt), which is a
+# management address too; the sessions' interfaces, pppN, whose dhcp6d asks
+# for a prefix; the interface of each IPoE connection that is up, with its
+# DHCP client when its address comes from DHCP; each link a session hands
+# its address down by, with udhcpd where one hands its IPv4 address and
+# dhcp6d's server where one hands its prefix; each local network's
+# interface, with its DHCP server when it has one; and the sides a ping is
+# answered from. It runs at boot, before the servers start (onu-mgmt start,
+# by "onu-apply guard"), and after each apply and sync; what onu-fw holds
+# already is not put in place again. One that fails leaves the one there
+# was, and is tried again at the next run.
+guard_fw() {
+	{
+		echo "mgmt mgmt*"
+		gf_data=$(sed -n 's/^DATA_ADDRESS=//p' "$RUN/onu-mgmt" 2>/dev/null | head -n 1)
+		[ -z "$gf_data" ] || echo "data sfp ${gf_data%/*}"
+		[ -z "$(sessions)" ] || echo "session ppp*"
+		for gf_d in "$IPOE_DIR"/*; do
+			[ -r "$gf_d/dev" ] || continue
+			gf_k=${gf_d##*/}
+			gf_take=
+			[ "$(ipoe_setting "$gf_k" KIND)" = dhcp ] && ipoe_carries "$gf_k" ipv4 &&
+				gf_take=" dhcp"
+			echo "ipoe $(cat "$gf_d/dev")$gf_take"
+		done
+		for gf_l in $(pass_links); do
+			gf_take=
+			for gf_f in ipv4 ipv6; do
+				for gf_s in $(sessions); do
+					[ "$(link_of "$(down_vlan "$gf_s")")" = "$gf_l" ] &&
+						hands "$gf_s" "$gf_f" || continue
+					[ "$gf_f" = ipv4 ] && gf_take="$gf_take dhcp"
+					[ "$gf_f" = ipv6 ] && gf_take="$gf_take dhcp6"
+					break
+				done
+			done
+			echo "link $gf_l$gf_take"
+		done
+		for gf_n in $(lans); do
+			gf_take=
+			[ "$(lan_setting "$gf_n" DHCP)" = on ] && gf_take=" dhcp"
+			echo "lan $(lan_if "$gf_n")$gf_take"
+		done
+		[ "$FW_PING_IN" != allow ] || echo "ping in"
+		[ "$FW_PING_LANS" != allow ] || echo "ping lans"
+	} >"$RUN/onu-guard.conf.new"
+	if [ -e "$RUN/onu-guard.conf" ] &&
+		[ "$(cat "$RUN/onu-guard.conf.new")" = "$(cat "$RUN/onu-guard.conf")" ]; then
+		rm -f "$RUN/onu-guard.conf.new"
+		return 0
+	fi
+	mv "$RUN/onu-guard.conf.new" "$RUN/onu-guard.conf"
+	onu-fw guard "$RUN/onu-guard.conf" || {
+		log "onu-fw did not put the guard in place: the one there was stays, if any"
+		rm -f "$RUN/onu-guard.conf"
+	}
+}
+
 ttl_decrement() {
 	onu-nl param l3_ttl_decrement "$1" ||
 		log "the switch did not take l3_ttl_decrement $1"
@@ -2178,6 +2255,7 @@ apply() {
 	settings_copy "$APPLIED"
 	log "$MODE mode"
 	sync_all
+	guard_fw
 }
 
 # The settings in force, /run/onu.conf and the sessions' accounts, copied
@@ -2328,7 +2406,7 @@ state() {
 }
 
 case ${1:-} in
-start | reload | try | confirm | revert | expire | stop | identity | reidentify | iface) lock ;;
+start | reload | try | confirm | revert | expire | stop | identity | reidentify | iface | guard) lock ;;
 esac
 
 case ${1:-} in
@@ -2405,6 +2483,7 @@ sync | omcid | dhcp6d | dhcpc)
 	rm -f "$AGAIN"
 	load
 	sync_all
+	guard_fw
 	;;
 iface)
 	load
@@ -2417,6 +2496,8 @@ guard)
 	for d in "$IPOE_DIR"/*; do
 		[ -r "$d/dev" ] && guard "$(cat "$d/dev")"
 	done
+	load
+	guard_fw
 	exit 0
 	;;
 *)

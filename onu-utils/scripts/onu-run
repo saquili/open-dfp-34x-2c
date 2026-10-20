@@ -54,8 +54,10 @@
 #
 # The addresses are the pair in use, from /run/onu-mgmt, which onu-mgmt keeps:
 # a server started again after a change of the pair listens on the new one.
-# The servers listen on the host side and nowhere else: the stick has no
-# packet filter, and nothing on the PON side is to reach them. Without the
+# The servers listen on the management addresses and nowhere else, and
+# onu-apply's guard (onu-fw guard) drops what comes to them by any interface
+# but the management VLAN's, and the host link's to its own address there:
+# nothing on the PON side, nor a local network, is to reach them. Without the
 # addresses it waits a little before it fails, so that procd does not start
 # it again twice a second. The console and omcid need no address, and come
 # up whatever the boot script did. ONU_ROOT, when set, is put in front of /run
