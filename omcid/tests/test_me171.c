@@ -899,9 +899,9 @@ int main(void)
 		if (!omci_mib_exists(mib, ME171, INST_B3))
 			CHECK_EQ(omci_mib_create(mib, ME171, INST_B3), OMCI_OK);
 
-		make_rule(r, (15u << 28) | (4096u << 15),
-			  (2u << 28) | (44u << 15), 0xc00f0000u,
-			  (2u << 16) | (55u << 3));
+		/* A discard of the double-tagged frames of VID 44: unsupported. */
+		make_rule(r, (2u << 28) | (44u << 15), (2u << 28) | (44u << 15),
+			  0xc00f0000u, (2u << 16) | (55u << 3));
 		CHECK_EQ(set_rule(eng, tid++, r), 3u);
 
 		for (unsigned int k = 0; k < 5u; k++) {

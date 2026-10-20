@@ -40,6 +40,22 @@ static void xlate_row(uint8_t row[16], unsigned int tag, unsigned int match,
 	     0x400f0000u, (8u << 16) | (assign << 3));
 }
 
+/* A translation of the frames of one VID and priority, which keeps it. */
+static void pri_xlate_row(uint8_t row[16], unsigned int pri, unsigned int match,
+			  unsigned int assign)
+{
+	pack(row, 0xf8000000u, (pri << 28) | (match << 15), 0x400f0000u,
+	     (8u << 16) | (assign << 3));
+}
+
+/* A discard of the frames of one VID, of priority @pri or of any (8). */
+static void discard_row(uint8_t row[16], unsigned int tag, unsigned int pri,
+			unsigned int match)
+{
+	pack(row, 0xf8000000u, (pri << 28) | (match << 15) | ((tag & 7u) << 12),
+	     0xc00f0000u, 0x000f0000u);
+}
+
 static void passthru_row(uint8_t row[16], unsigned int pri, unsigned int match)
 {
 	pack(row, 0xf8000000u, (pri << 28) | (match << 15), 0x000f0000u,
@@ -91,10 +107,45 @@ int main(void)
 	CHECK(omci_vlan_decode(row, 16, &r));
 	CHECK_EQ(r.op, OMCI_VLAN_OP_NONE);
 
+	/*
+	 * A discard of the single-tagged frames of a VID, of the priority the
+	 * filter names or of any; of the double-tagged frames of a VID it is
+	 * refused, and so is one with an Ethertype or a VID out of range.
+	 */
 	pack(row, 0xf8000000u, 0x60cd5000u, 0xc00f0000u, 0x00062c12u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_DISCARD_VID);
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_NONE);
+	CHECK_EQ(r.match_cvid, 410u);
+	CHECK(r.match_has_pri);
+	CHECK_EQ(r.match_pri, 6u);
+	pack(row, 0xf8000000u, (8u << 28) | (410u << 15), 0xc00f0000u,
+	     0x000f0000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_DISCARD_VID);
+	CHECK_EQ(r.match_cvid, 410u);
+	CHECK(!r.match_has_pri);
+	pack(row, (8u << 28) | (200u << 15), (8u << 28) | (410u << 15),
+	     0xc00f0000u, 0x000f0000u);
 	CHECK(omci_vlan_decode(row, 16, &r));
 	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
 	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_DISCARD);
+	pack(row, (8u << 28) | (4096u << 15), (8u << 28) | (410u << 15),
+	     0xc00f0000u, 0x000f0000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_DISCARD);
+	pack(row, 0xf8000000u, (8u << 28) | (410u << 15) | 2u, 0xc00f0000u,
+	     0x000f0000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE);
+	pack(row, 0xf8000000u, (8u << 28) | (4095u << 15), 0xc00f0000u,
+	     0x000f0000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_VID_RANGE);
+	pack(row, 0xf8000000u, (8u << 28) | (0u << 15), 0xc00f0000u,
+	     0x000f0000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_VID_RANGE);
 
 	pack(row, 0xf8000000u, 0x60000000u | (4096u << 15), 0x400f0000u,
 	     0x00002c12u);
@@ -424,6 +475,111 @@ int main(void)
 			 OMCI_OK);
 		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		clear_rows(mib);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	}
+
+	/*
+	 * A discard of the frames of a VID is programmed in its place in list
+	 * order. Of any priority, it leaves the priorities that earlier rules
+	 * take from its VID to them, and takes no frame when they take all
+	 * eight. A rule after it on its VID is shadowed, and so is a discard
+	 * after a rule that takes its frames. Two discards of different VIDs
+	 * are no many-to-one mapping.
+	 */
+	{
+		static const char after_discard[] =
+			"me171: C-VID 410<->2000 comes after the discard of C-VID 410";
+		static const char discard_after[] =
+			"me171: the discard of C-VID 430 comes after the 430<->1430 rule";
+		static const char takes_none[] =
+			"me171: the discard of C-VID 440 takes no frame";
+		uint8_t d[16], d2[16], t[16];
+		char log[4096];
+
+		clear_rows(mib);
+		pri_xlate_row(t, 5u, 410u, 1410u);
+		discard_row(d, 0u, 8u, 410u);
+		discard_row(d2, 0u, 8u, 420u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, d, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, d2, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, t, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		if (omci_hw_vlan_recorded(&applied) == 3u) {
+			CHECK_EQ(applied[0].kind, OMCI_HW_VLAN_CVID_XLATE);
+			CHECK_EQ(applied[0].match_pri, 5u);
+			CHECK_EQ(applied[1].kind, OMCI_HW_VLAN_DISCARD_VID);
+			CHECK_EQ(applied[1].match_cvid, 410u);
+			CHECK(!applied[1].match_has_pri);
+			CHECK_EQ(applied[1].keep_pri, 1u << 5);
+			CHECK(!applied[1].up_only);
+			CHECK_EQ(applied[2].kind, OMCI_HW_VLAN_DISCARD_VID);
+			CHECK_EQ(applied[2].match_cvid, 420u);
+			CHECK_EQ(applied[2].keep_pri, 0u);
+			CHECK(!applied[2].up_only);
+		}
+		CHECK(omci_vlan_has_room(mib, 171u, 6u, d, sizeof(d)));
+
+		xlate_row(t, 6u, 410u, 2000u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, t, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		OMCI_T_CAPTURE_LOG(log, {
+			CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL),
+				 OMCI_OK);
+		});
+		CHECK(strstr(log, after_discard) != NULL);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+
+		clear_rows(mib);
+		xlate_row(t, 0u, 430u, 1430u);
+		discard_row(d, 5u, 8u, 430u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, t, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, d, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		OMCI_T_CAPTURE_LOG(log, {
+			CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL),
+				 OMCI_OK);
+		});
+		CHECK(strstr(log, discard_after) != NULL);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 1u);
+
+		clear_rows(mib);
+		for (unsigned int p = 0; p < 8u; p++) {
+			pri_xlate_row(t, p, 440u, 1440u);
+			CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, t,
+						    16, 8, OMCI_MIB_TABLE_LAST),
+				 OMCI_OK);
+		}
+		discard_row(d, 0u, 8u, 440u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, d, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		OMCI_T_CAPTURE_LOG(log, {
+			CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL),
+				 OMCI_OK);
+		});
+		CHECK(strstr(log, takes_none) != NULL);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 8u);
+		{
+			const struct omci_vlan_fate_rec *f = NULL;
+			const size_t nf = omci_vlan_fates(&f, NULL);
+
+			CHECK_EQ(nf, 9u);
+			if (nf == 9u)
+				CHECK_EQ(f[8].fate,
+					 (uint8_t)OMCI_VLAN_FATE_SHADOWED);
+		}
 		clear_rows(mib);
 		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	}
@@ -771,8 +927,9 @@ int main(void)
 					    OMCI_MIB_TABLE_LAST),
 			 OMCI_OK);
 
-		pack(fr, 0xf8000000u, (2u << 28) | (44u << 15), 0xc00f0000u,
-		     (2u << 16) | (55u << 3));
+		/* A discard of the double-tagged frames of VID 44: unsupported. */
+		pack(fr, (2u << 28) | (44u << 15), (2u << 28) | (44u << 15),
+		     0xc00f0000u, (2u << 16) | (55u << 3));
 		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, fr, 16, 8,
 					    OMCI_MIB_TABLE_LAST),
 			 OMCI_OK);
@@ -800,9 +957,10 @@ int main(void)
 		}
 
 		/*
-		 * In list order, sorted on the filter: the unsupported row of
-		 * priority 2 first, then the four rows of VID 410 by their TPID
-		 * field, 0, 4, 5, 6, and last the row that names no tag.
+		 * In list order, sorted on the filter: the unsupported row, whose
+		 * filter names an outer tag, first, then the four rows of VID 410
+		 * by their TPID field, 0, 4, 5, 6, and last the row that names no
+		 * tag.
 		 */
 		static const uint8_t listed[6] = { 5u, 2u, 3u, 1u, 0u, 4u };
 

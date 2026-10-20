@@ -153,12 +153,15 @@ static inline bool omci_hw_reject_has(const struct omci_hw_reject *r,
  * @OMCI_HW_VLAN_CVID_PUSH: give an untagged frame a tag
  * @OMCI_HW_VLAN_DISCARD_TAGGED: drop the single-tagged frames from the
  *	subscriber side that no other rule takes; it matches no VID itself
+ * @OMCI_HW_VLAN_DISCARD_VID: drop the single-tagged frames of one VID from
+ *	the subscriber side; nothing comes back downstream
  */
 enum omci_hw_vlan_kind {
 	OMCI_HW_VLAN_CVID_XLATE = 0,
 	OMCI_HW_VLAN_SVID_PUSH,
 	OMCI_HW_VLAN_CVID_PUSH,
 	OMCI_HW_VLAN_DISCARD_TAGGED,
+	OMCI_HW_VLAN_DISCARD_VID,
 };
 
 /*
@@ -187,6 +190,9 @@ enum omci_hw_vlan_kind {
  *	eight rules that each match one: it keeps any priority, and the GEM
  *	ports of the VLAN it leads into divide that VLAN's priorities, while
  *	one rule of the switch sends its frames to one GEM port
+ * @keep_pri: of a discard that names no priority, the priorities that earlier
+ *	rules take from its VID, bit p for priority p: it leaves those frames
+ *	to them
  */
 struct omci_hw_vlan_xlate {
 	enum omci_hw_vlan_kind kind;
@@ -198,6 +204,7 @@ struct omci_hw_vlan_xlate {
 	uint8_t match_pri;
 	bool up_only;
 	bool per_pri;
+	uint8_t keep_pri;
 };
 
 /**

@@ -32,6 +32,8 @@
  * @OMCI_VLAN_OP_CVID_PUSH: give an untagged frame a tag
  * @OMCI_VLAN_OP_DISCARD_TAGGED: drop the single-tagged frames that no other
  *	rule takes: the default rule of such frames, when it discards them
+ * @OMCI_VLAN_OP_DISCARD_VID: drop the single-tagged frames of one VID, and of
+ *	one priority when the filter names it
  */
 enum omci_vlan_op {
 	OMCI_VLAN_OP_NONE = 0,
@@ -45,6 +47,8 @@ enum omci_vlan_op {
 	OMCI_VLAN_OP_CVID_PUSH,
 
 	OMCI_VLAN_OP_DISCARD_TAGGED,
+
+	OMCI_VLAN_OP_DISCARD_VID,
 };
 
 /**
@@ -56,8 +60,8 @@ enum omci_vlan_op {
  * @OMCI_VLAN_REJECT_SHAPE: its combination of filter and treatment has no
  *	counterpart in the hardware
  * @OMCI_VLAN_REJECT_VID_RANGE: a VID outside 1 to 4094
- * @OMCI_VLAN_REJECT_DISCARD: it discards tagged frames, which the hardware
- *	cannot do
+ * @OMCI_VLAN_REJECT_DISCARD: it discards the double-tagged frames of a VID;
+ *	no rule of the switch found yet takes those alone
  */
 enum omci_vlan_reject {
 	OMCI_VLAN_REJECT_NONE = 0,
@@ -72,7 +76,8 @@ enum omci_vlan_reject {
  * struct omci_vlan_rule - A decoded rule.
  * @op: what it asks of the hardware
  * @reject: why it cannot be programmed, when @op is unsupported
- * @match_cvid: the VID the rule matches, 0 for an untagged frame
+ * @match_cvid: the VID the rule matches, 0 for an untagged frame; of a
+ *	discard, the VID of the frames it drops
  * @assign_cvid: the VID that replaces it, for a translation, or of the tag a
  *	C-VID push adds
  * @assign_svid: the VID of the added outer tag, for an S-VID push

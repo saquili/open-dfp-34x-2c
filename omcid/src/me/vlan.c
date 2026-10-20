@@ -92,7 +92,7 @@ const char *omci_vlan_reject_name(enum omci_vlan_reject r)
 	case OMCI_VLAN_REJECT_VID_RANGE:
 		return "VID outside 1..4094";
 	case OMCI_VLAN_REJECT_DISCARD:
-		return "discard of the frames of a VID; not carried";
+		return "discard of the double-tagged frames of a VID; not carried";
 	default:
 		return "?";
 	}
@@ -149,14 +149,29 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 	out->treat_inner_tpid = (uint8_t)treat_tpid(w3);
 
 	/*
-	 * A discard of the frames of one VID is not carried. A discard that
-	 * names no tag is accepted; of those, the default rule of the
-	 * single-tagged frames drops what no other rule takes, and the others
-	 * leave nothing to program.
+	 * A discard of the single-tagged frames of one VID drops them, of the
+	 * priority the filter names or of any; nothing comes back downstream
+	 * (G.988 9.3.13, treatment tags to remove 3). A discard of the
+	 * double-tagged frames of a VID is not carried. A discard that names no
+	 * tag is accepted; of those, the default rule of the single-tagged
+	 * frames drops what no other rule takes, and the others leave nothing to
+	 * program.
 	 */
 	if (out->tags_to_remove == VLAN_TAGS_REMOVE_3) {
-		if (filter_names_a_tag(w0) || filter_names_a_tag(w1))
+		if (filter_names_a_tag(w0) ||
+		    (filter_names_a_tag(w1) &&
+		     out->filter_outer_pri != VLAN_PRI_NO_TAG))
 			return refuse(out, OMCI_VLAN_REJECT_DISCARD);
+		if (filter_names_a_tag(w1)) {
+			if (out->filter_ethertype != 0u)
+				return refuse(out, OMCI_VLAN_REJECT_ETHERTYPE);
+			if (!vid_is_programmable(out->filter_inner_vid))
+				return refuse(out, OMCI_VLAN_REJECT_VID_RANGE);
+			out->op = OMCI_VLAN_OP_DISCARD_VID;
+			out->match_cvid = out->filter_inner_vid;
+			match_priority(out);
+			return true;
+		}
 		if (out->filter_outer_pri == VLAN_PRI_NO_TAG &&
 		    out->filter_inner_pri == VLAN_PRI_DEFAULT)
 			out->op = OMCI_VLAN_OP_DISCARD_TAGGED;
@@ -289,7 +304,8 @@ static bool programmable(enum omci_vlan_op op)
 {
 	return op == OMCI_VLAN_OP_CVID_XLATE || op == OMCI_VLAN_OP_SVID_PUSH ||
 	       op == OMCI_VLAN_OP_CVID_PUSH ||
-	       op == OMCI_VLAN_OP_DISCARD_TAGGED;
+	       op == OMCI_VLAN_OP_DISCARD_TAGGED ||
+	       op == OMCI_VLAN_OP_DISCARD_VID;
 }
 
 /* The hardware rule of a programmable operation. */
@@ -302,13 +318,25 @@ static enum omci_hw_vlan_kind kind_of(enum omci_vlan_op op)
 		return OMCI_HW_VLAN_CVID_PUSH;
 	case OMCI_VLAN_OP_DISCARD_TAGGED:
 		return OMCI_HW_VLAN_DISCARD_TAGGED;
+	case OMCI_VLAN_OP_DISCARD_VID:
+		return OMCI_HW_VLAN_DISCARD_VID;
 	default:
 		return OMCI_HW_VLAN_CVID_XLATE;
 	}
 }
 
+/* Whether a rule gives its frames a tag toward the network: a discard gives none. */
+static bool gives_net(const struct omci_hw_vlan_xlate *r)
+{
+	return r->kind != OMCI_HW_VLAN_DISCARD_TAGGED &&
+	       r->kind != OMCI_HW_VLAN_DISCARD_VID;
+}
+
+/* The VID a rule gives its frames toward the network, 0 for none. */
 static uint16_t net_vid_of(const struct omci_hw_vlan_xlate *r)
 {
+	if (!gives_net(r))
+		return 0u;
 	return (r->kind == OMCI_HW_VLAN_SVID_PUSH) ? r->assign_svid :
 						     r->assign_cvid;
 }
@@ -402,11 +430,18 @@ static bool covers(const struct omci_hw_vlan_xlate *earlier,
 		 earlier->match_pri == later->match_pri));
 }
 
-/* Whether two rules give frames the same tag toward the network. */
+/*
+ * Whether two rules give frames the same tag toward the network; two
+ * discards, which give none, do the same thing.
+ */
 static bool same_net(const struct omci_hw_vlan_xlate *a,
 		     const struct omci_hw_vlan_xlate *b)
 {
-	return same_family(a, b) && net_vid_of(a) == net_vid_of(b) &&
+	if (!same_family(a, b))
+		return false;
+	if (!gives_net(a) || !gives_net(b))
+		return gives_net(a) == gives_net(b);
+	return net_vid_of(a) == net_vid_of(b) &&
 	       (a->kind == OMCI_HW_VLAN_SVID_PUSH) ==
 		       (b->kind == OMCI_HW_VLAN_SVID_PUSH);
 }
@@ -418,7 +453,8 @@ static bool same_net(const struct omci_hw_vlan_xlate *a,
  * the new one is a duplicate when it gives them the same network tag, and
  * shadowed when not. An earlier rule that gives frames the same network tag
  * from other frames makes the new one a many-to-one mapping: it works
- * upstream, and the way back downstream is the earlier rule's.
+ * upstream, and the way back downstream is the earlier rule's. A discard has
+ * no way back, so no such mapping.
  */
 enum slot_verdict {
 	SLOT_NEW,
@@ -440,13 +476,33 @@ static enum slot_verdict slot_for(const struct omci_hw_vlan_xlate *rules,
 			return same_net(&rules[k], r) ? SLOT_DUP :
 							SLOT_CONFLICT;
 		}
-		if (v == SLOT_NEW && same_net(&rules[k], r)) {
+		if (v == SLOT_NEW && gives_net(r) && same_net(&rules[k], r)) {
 			if (rival != NULL)
 				*rival = k;
 			v = SLOT_UP_ONLY;
 		}
 	}
 	return v;
+}
+
+/*
+ * The priorities that the rules before a discard of any priority take from
+ * its VID, bit p for priority p; @rival is the last of those rules.
+ */
+static uint8_t taken_pri(const struct omci_hw_vlan_xlate *rules, size_t n,
+			 const struct omci_hw_vlan_xlate *r, size_t *rival)
+{
+	uint8_t taken = 0;
+
+	for (size_t k = 0; k < n; k++) {
+		if (!same_family(&rules[k], r) ||
+		    rules[k].match_cvid != r->match_cvid ||
+		    !rules[k].match_has_pri)
+			continue;
+		taken |= (uint8_t)(1u << rules[k].match_pri);
+		*rival = k;
+	}
+	return taken;
 }
 
 /* What the hardware refused, and the rules in force, at the last programming. */
@@ -543,6 +599,25 @@ static void fate_put(bool record, uint16_t instance, size_t row,
 	r->net_vid = net_vid;
 	r->rival_match = rival != NULL ? rival->match_cvid : 0u;
 	r->rival_net = rival != NULL ? net_vid_of(rival) : 0u;
+}
+
+/* Say why a rule whose frames an earlier rule takes is left out. */
+static void warn_shadowed(const struct omci_hw_vlan_xlate *r,
+			  const struct omci_hw_vlan_xlate *rival)
+{
+	if (!gives_net(r))
+		OMCI_WARN(
+			"me171: the discard of C-VID %u comes after the %u<->%u rule, which takes its frames; ignoring it",
+			r->match_cvid, rival->match_cvid, net_vid_of(rival));
+	else if (!gives_net(rival))
+		OMCI_WARN(
+			"me171: C-VID %u<->%u comes after the discard of C-VID %u, which takes its frames; ignoring it",
+			r->match_cvid, net_vid_of(r), rival->match_cvid);
+	else
+		OMCI_WARN(
+			"me171: C-VID %u<->%u conflicts with the existing %u<->%u rule (a VID would match two entries in one direction); ignoring it",
+			r->match_cvid, net_vid_of(r), rival->match_cvid,
+			net_vid_of(rival));
 }
 
 /* A row of a rule table, and its place in the table. */
@@ -670,10 +745,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 					continue;
 				}
 
-				const uint16_t net_vid =
-					(d.op == OMCI_VLAN_OP_SVID_PUSH) ?
-						d.assign_svid :
-						d.assign_cvid;
+				const uint16_t net_vid = net_vid_of(&cand);
 
 				size_t rival = 0;
 				const enum slot_verdict v =
@@ -681,12 +753,8 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 
 				if (v == SLOT_DUP || v == SLOT_CONFLICT) {
 					if (v == SLOT_CONFLICT && warn)
-						OMCI_WARN(
-							"me171: C-VID %u<->%u conflicts with the existing %u<->%u rule (a VID would match two entries in one direction); ignoring it",
-							d.match_cvid, net_vid,
-							rules[rival].match_cvid,
-							net_vid_of(
-								&rules[rival]));
+						warn_shadowed(&cand,
+							      &rules[rival]);
 					fate_put(
 						record, cur.instance, i,
 						v == SLOT_DUP ?
@@ -695,6 +763,30 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 						d.match_cvid, net_vid,
 						&rules[rival]);
 					continue;
+				}
+
+				/*
+				 * A discard of any priority leaves the frames
+				 * of the priorities that earlier rules take from
+				 * its VID to them, and takes none when they take
+				 * them all.
+				 */
+				if (cand.kind == OMCI_HW_VLAN_DISCARD_VID &&
+				    !cand.match_has_pri) {
+					cand.keep_pri = taken_pri(
+						rules, n, &cand, &rival);
+					if (cand.keep_pri == 0xffu) {
+						if (warn)
+							OMCI_WARN(
+								"me171: the discard of C-VID %u takes no frame, as earlier rules take each of its priorities; ignoring it",
+								d.match_cvid);
+						fate_put(
+							record, cur.instance, i,
+							OMCI_VLAN_FATE_SHADOWED,
+							d.match_cvid, 0u,
+							&rules[rival]);
+						continue;
+					}
 				}
 
 				if (n >= cap) {

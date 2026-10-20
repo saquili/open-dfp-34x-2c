@@ -2014,6 +2014,44 @@ static void test_the_vlan_rules_discard_messages_they_do_not_take(void)
 	down();
 }
 
+/*
+ * A rule that discards the frames of a VID discards the messages in it but
+ * those of a priority an earlier rule takes, as the switch drops them.
+ */
+static void test_a_vlan_rule_discards_the_messages_of_its_vid(void)
+{
+	static const uint32_t discard[][4] = {
+		/* C-VID 410 at priority 5 to 1410 */
+		{ 0xf8000000u, (5u << 28) | (410u << 15), 0x400f0000u,
+		  (5u << 16) | (1410u << 3) },
+		/* C-VID 410, any priority: discard */
+		{ 0xf8000000u, (8u << 28) | (410u << 15), 0xc00f0000u,
+		  0x000f0000u },
+	};
+	unsigned int tpid, tci;
+	uint8_t f[256], out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	rules(discard, ARRAY_SIZE(discard));
+
+	CHECK_EQ(join_up(410, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 1410u));
+	g_pcp = 3;
+	const size_t before = sent_count();
+
+	hear(f, igmp(f, 410, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	CHECK_EQ(sent_count(), before);
+	g_pcp = 5;
+	rules(discard, 0);
+	down();
+}
+
 static void test_the_gem_port_of_a_message(void)
 {
 	static const uint32_t xlate[][4] = {
@@ -2474,6 +2512,7 @@ int main(void)
 	RUN(test_the_upstream_igmp_tag_control);
 	RUN(test_the_vlan_rules_tag_the_messages);
 	RUN(test_the_vlan_rules_discard_messages_they_do_not_take);
+	RUN(test_a_vlan_rule_discards_the_messages_of_its_vid);
 	RUN(test_the_gem_port_of_a_message);
 	RUN(test_the_downstream_tag_of_multicast);
 	RUN(test_lost_groups);

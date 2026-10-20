@@ -158,6 +158,46 @@ static void vlan_rules(void)
 	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
 }
 
+/*
+ * The discards of VLAN rules: drops on sfp at the discards' priorities, one
+ * a rule, of any priority, of one, or of each priority but those that
+ * earlier rules take.
+ */
+static void vlan_discards(void)
+{
+	const struct omci_hw_vlan_xlate rules[] = {
+		{ .kind = OMCI_HW_VLAN_DISCARD_VID, .match_cvid = 430 },
+		{ .kind = OMCI_HW_VLAN_DISCARD_VID,
+		  .match_cvid = 440,
+		  .keep_pri = 1u << 5 },
+		{ .kind = OMCI_HW_VLAN_DISCARD_VID,
+		  .match_cvid = 450,
+		  .match_has_pri = true,
+		  .match_pri = 3 },
+	};
+	const unsigned int first = TC_PRIO_VLAN_DISCARD;
+	struct omci_hw_reject rejected;
+
+	puts("the discards of VLAN rules: drops on sfp, ahead of the other rules");
+	CHECK(omci_hw_kernel_ops.vlan_apply(rules, 3, &rejected) == OMCI_OK);
+	CHECK(rejected.n == 0);
+	CHECK(at("sfp", first, "vlan_id 430"));
+	CHECK(at("sfp", first, "drop"));
+	CHECK(!at("sfp", first, "vlan_prio"));
+	CHECK(at("sfp", first + 1, "vlan_id 440"));
+	for (unsigned int pcp = 0; pcp < 8; pcp++) {
+		char text[16];
+
+		snprintf(text, sizeof(text), "vlan_prio %u", pcp);
+		CHECK(at("sfp", first + 1, text) == (pcp != 5));
+		CHECK(at("sfp", first + 2, text) == (pcp == 3));
+	}
+	CHECK(!at("pon", first, NULL) && !at("sfp", TC_PRIO_VLAN, NULL));
+	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
+	CHECK(!at("sfp", first, NULL) && !at("sfp", first + 1, NULL) &&
+	      !at("sfp", first + 2, NULL));
+}
+
 static void port_filters(void)
 {
 	const struct omci_hw_filter rules[] = {
@@ -606,6 +646,7 @@ int main(void)
 	} else {
 		puts("(this kernel has no vlan action: the VLAN rules and the multicast tags are skipped)");
 	}
+	vlan_discards();
 	port_filters();
 	mode_applied();
 	time_of_day();

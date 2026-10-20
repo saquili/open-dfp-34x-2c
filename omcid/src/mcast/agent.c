@@ -828,8 +828,8 @@ static size_t push_tag(uint8_t *f, size_t len, unsigned int tpid,
 /*
  * The upstream tag the extended VLAN tagging operation gives a frame: the
  * first rule in force that matches it, as the switch takes them, or none.
- * Returns the frame's new length, or 0 for a tagged frame that no rule
- * takes while the rules discard such frames.
+ * Returns the frame's new length, or 0 for a frame that a rule discards, or
+ * a tagged frame that no rule takes while the rules discard such frames.
  */
 static size_t tag_by_rules(uint8_t *f, size_t len)
 {
@@ -860,6 +860,11 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 		if (!ctag || vid != r[i].match_cvid ||
 		    (r[i].match_has_pri && pcp != r[i].match_pri))
 			continue;
+		if (r[i].kind == OMCI_HW_VLAN_DISCARD_VID) {
+			if ((r[i].keep_pri >> pcp) & 1u)
+				continue;
+			return 0;
+		}
 		if (r[i].kind == OMCI_HW_VLAN_CVID_XLATE) {
 			omci_be16_store(&f[14], pri << 13 | (tci & 0x1000u) |
 							r[i].assign_cvid);
@@ -1304,11 +1309,15 @@ static bool unicast_vlan(uint16_t vid)
 	const struct omci_hw_vlan_xlate *r;
 	const size_t n = omci_vlan_in_force(&r);
 
-	for (size_t i = 0; i < n; i++)
+	for (size_t i = 0; i < n; i++) {
+		if (r[i].kind == OMCI_HW_VLAN_DISCARD_TAGGED ||
+		    r[i].kind == OMCI_HW_VLAN_DISCARD_VID)
+			continue;
 		if ((r[i].kind == OMCI_HW_VLAN_SVID_PUSH ?
 			     r[i].assign_svid :
 			     r[i].assign_cvid) == vid)
 			return true;
+	}
 	return false;
 }
 

@@ -2801,6 +2801,11 @@ static enum omci_status kernel_optics_limits(struct omci_hw_optics_limits *out)
 #define TC_PRIO_LAST (TC_PRIO_VLAN + OMCI_HW_VLAN_MAX_RULES)
 _Static_assert(OMCI_HW_VLAN_MAX_RULES <= TC_PRIO_VLAN_N,
 	       "more VLAN rules than priorities in the registry");
+_Static_assert(OMCI_HW_VLAN_MAX_RULES <= TC_PRIO_VLAN_DISCARD_N,
+	       "more VLAN rules than priorities of discards in the registry");
+
+static int vlan_discard_add(int uni, unsigned int prio,
+			    const struct omci_hw_vlan_xlate *r);
 
 /* The info word of a filter: its priority and protocol. */
 static uint32_t tc_info(unsigned int prio, uint16_t proto)
@@ -3120,6 +3125,8 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		(void)tc_filter_del((int)uni, prio);
 		(void)tc_filter_del((int)pon, prio);
 	}
+	for (unsigned int k = 0; k < OMCI_HW_VLAN_MAX_RULES; k++)
+		(void)tc_filter_del((int)uni, TC_PRIO_VLAN_DISCARD + k);
 
 	for (size_t i = 0; i < n; i++) {
 		const unsigned int prio = TC_PRIO_VLAN + (unsigned int)i;
@@ -3129,6 +3136,33 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		/* No filter of its own: what it drops follows from the others. */
 		if (r->kind == OMCI_HW_VLAN_DISCARD_TAGGED) {
 			discard = true;
+			continue;
+		}
+
+		if (r->kind == OMCI_HW_VLAN_DISCARD_VID) {
+			err = vlan_discard_add(
+				(int)uni,
+				TC_PRIO_VLAN_DISCARD + (unsigned int)i, r);
+			if (err) {
+				OMCI_WARN(
+					"vlan: the discard of C-VID %u refused: %s (%s)",
+					r->match_cvid, strerror(-err),
+					omci_hw_last_extack());
+				omci_hw_reject_add(rejected, r->match_cvid);
+				continue;
+			}
+			sub[n_sub++] = r->match_cvid;
+			if (r->match_has_pri)
+				OMCI_INFO(
+					"vlan: the subscriber's frames of C-VID %u priority %u are discarded in hardware",
+					r->match_cvid, r->match_pri);
+			else
+				OMCI_INFO(
+					"vlan: the subscriber's frames of C-VID %u are discarded in hardware%s",
+					r->match_cvid,
+					r->keep_pri ?
+						", but for the priorities earlier rules take" :
+						"");
 			continue;
 		}
 
@@ -3225,6 +3259,8 @@ static void bridge_remove(void)
 		if (pon)
 			(void)tc_filter_del(pon, prio);
 	}
+	for (unsigned int k = 0; uni && k < OMCI_HW_VLAN_MAX_RULES; k++)
+		(void)tc_filter_del(uni, TC_PRIO_VLAN_DISCARD + k);
 	uni_discard_sync(NULL, 0);
 	if (br && link_delete(br))
 		OMCI_WARN("bridge: %s could not be removed", BRIDGE_IFNAME);
@@ -3297,8 +3333,8 @@ static int g_mc_tx = -1;
  * @icmp_type not negative, of that ICMPv6 type; with @dmac, to that MAC
  * address, compared where @dmask has ones (all of it without @dmask); with
  * @smac, from that address under @smask; with @dip, to that IPv4 address;
- * with @vid, of that VID, for @proto ETH_P_8021Q.
- * @handle 0 lets the kernel choose it.
+ * with @vid, of that VID, for @proto ETH_P_8021Q, and with @has_prio of
+ * priority @prio. @handle 0 lets the kernel choose it.
  */
 struct tc_gact_rule {
 	uint16_t proto;
@@ -3310,6 +3346,8 @@ struct tc_gact_rule {
 	const uint8_t *smask;
 	const uint8_t *dip;
 	uint16_t vid;
+	bool has_prio;
+	uint8_t prio;
 	int action;
 	uint32_t handle;
 };
@@ -3377,6 +3415,9 @@ static int tc_gact_add(int ifindex, unsigned int prio,
 	if (r->vid)
 		off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_ID, &r->vid,
 			      sizeof(r->vid));
+	if (r->has_prio)
+		off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_PRIO, &r->prio,
+			      sizeof(r->prio));
 	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
 
 	acts = off;
@@ -3422,6 +3463,42 @@ static int mcast_traps(int uni, bool on)
 	}
 	if (err)
 		(void)mcast_traps(uni, false);
+	return err;
+}
+
+/*
+ * The discard of a VLAN rule (OMCI_HW_VLAN_DISCARD_VID): a flower drop of the
+ * frames of its VID on sfp's ingress, at @prio of the discards' range, ahead
+ * of the other rules of the UNI, as the VLAN rules take a frame first. The
+ * switch's ACL takes it, and decides for a frame before the classifier
+ * applies the other VLAN rules, whatever their order: so a discard of any
+ * priority that leaves some priorities to earlier rules (@keep_pri) is a drop
+ * for each of the others. On a failure none of its drops is left.
+ */
+static int vlan_discard_add(int uni, unsigned int prio,
+			    const struct omci_hw_vlan_xlate *r)
+{
+	struct tc_gact_rule g = {
+		.proto = ETH_P_8021Q,
+		.icmp_type = -1,
+		.vid = r->match_cvid,
+		.action = TC_ACT_SHOT,
+	};
+	int err = 0;
+
+	if (!r->match_has_pri && !r->keep_pri)
+		return tc_gact_add(uni, prio, &g);
+
+	g.has_prio = true;
+	for (unsigned int p = 0; p < 8u && !err; p++) {
+		if (r->match_has_pri ? p != r->match_pri :
+				       (r->keep_pri >> p) & 1u)
+			continue;
+		g.prio = (uint8_t)p;
+		err = tc_gact_add(uni, prio, &g);
+	}
+	if (err)
+		(void)tc_filter_del(uni, prio);
 	return err;
 }
 
