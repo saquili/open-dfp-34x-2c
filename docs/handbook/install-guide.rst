@@ -275,8 +275,10 @@ The panel has a button for the same copy, which has not been tried on a stick
 yet: under System, tab Software, type root's password into "Root password" and
 press "Copy the whole flash". It is made to say "Reading the flash, about a
 minute…" and then "The copy of the flash is saved.", and to have the browser
-save ``buchos-gpon-flash-<version>.bin`` of 8388608 bytes. Check the size, and
-the digest against the stick's as above, before you rely on such a copy.
+save ``buchos-gpon-flash-<version>.bin`` of 8388608 bytes. The name begins
+with the product name the panel shows, BuchOS unless another was set under
+System, tab Settings, card "Device", "Product name". Check the size, and the
+digest against the stick's as above, before you rely on such a copy.
 
 The copy holds the unit's registration identity, its MAC address and this
 system's secrets: keep it private, off shared storage and out of any report.
@@ -360,8 +362,9 @@ The button shows while the other bank holds a whole system of this project.
 Both systems read the same settings, in the partition ``config``. An update
 writes over the bank that does not run, so the version of before is gone after
 the next update: "Download the current software" saves the running system
-first, as an update file, ``buchos-gpon-<version>.bin``, which "Upload new
-software" takes back like ``update.bin``.
+first, as an update file, ``buchos-gpon-<version>.bin`` (named after the
+product name, as the copy of the flash is), which "Upload new software"
+takes back like ``update.bin``.
 
 To the shipped firmware
 -----------------------

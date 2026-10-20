@@ -317,6 +317,14 @@ who do not see it. The browser keeps them (``localStorage``);
 without it a choice lasts the visit. A setting of the stick never stands
 there: those are pages, kept on the stick (System, Settings).
 
+The product name, BuchOS unless the stick names another, is a setting of
+the stick too (System, Settings, "Product name"), though the panel's own
+places show it: the bar over every page, the heading of the menu, the
+sign-in and the browser's tab, each followed by " – GPON". The browser keeps
+the last name it read only so that the sign-in and the tab show it before
+the stick can be asked. The heading of the menu cuts a name too long for it
+with an ellipsis, and holds it whole in its tip.
+
 The theme is the system's colour scheme until the reader chooses Light or
 Dark. The choice is on the page before its first paint, so that a dark page
 never flashes light: ``src/theme-boot.js`` puts it there, a script of its own

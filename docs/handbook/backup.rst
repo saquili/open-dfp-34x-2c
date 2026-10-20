@@ -104,7 +104,11 @@ Software tab has "Copy the whole flash", which needs root's password in "Root
 password" and is made to download the eight partitions in order as one file,
 ``buchos-gpon-flash-<version>.bin`` of 8388608 bytes
 (``GET /api/firmware/backup``, ``onu-update backup`` on the stick;
-``pond/README.rst``). It is tested on the build machine only
+``pond/README.rst``). The file's name begins with the product name the
+panel shows, in lower case with a hyphen for each gap: BuchOS's, unless
+another name was set under System, tab Settings
+(``fibre-box-gpon-flash-<version>.bin`` for "Fibre Box"). It is tested on the
+build machine only
 (``onu-utils/tests/test_onu_update.sh``): check the size of what it saved,
 and its digest against the stick's as above, before you rely on it. Keep it
 private: it holds the unit's registration identity and this system's secrets.

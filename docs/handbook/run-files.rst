@@ -130,9 +130,10 @@ Shared by two components
        ``PREF`` and ``DATA_ADDRESS``.
    * - ``/run/onu-system``
      - ``onu-config``
-     - the boot script, ``onu-run``, ``onu-lane``
+     - the boot script, ``onu-run``, ``onu-lane``, ``pond``
      - The stick's own settings, ``NAME=value``: ``HOSTNAME``, ``MGMT_VLAN``,
-       ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER``, ``LOG_SERVER``.
+       ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER``, ``LOG_SERVER``,
+       ``PRODUCT_NAME`` (``pond``, which takes ``BuchOS`` without it).
    * - ``/run/onu-auth``
      - ``onu-config``
      - ``onu-config``, ``onu-run``, ``onu-mgmt``, the console's profile
