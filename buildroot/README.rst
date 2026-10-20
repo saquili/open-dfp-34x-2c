@@ -11,10 +11,10 @@ Buildroot itself is not committed here. This directory pins one Buildroot
 release by hash and holds the script that turns the pin into a tree ready to
 build, so that every build starts from the same bytes. The tree is made in
 ``build/buildroot`` and is never committed. The patches we carry against the
-release are in ``patches/``: four, which add the MIPS I variant that this core
-needs, keep the shared C library from an atomic operation the core cannot run,
-take the licence text of the kernel this distribution builds, and offer the
-libraries of netifd to the MIPS I variant.
+release are in ``patches/``: three, which add the MIPS I variant that this core
+needs, take the licence text of the kernel this distribution builds, and take
+the libraries of netifd at newer commits, with json-c built without
+thread-local storage.
 
 What is here
 ============
@@ -29,8 +29,7 @@ What is here
     The script that makes the pinned release ready to build (below).
 ``patches/``
     The patches applied to the release, in name order: the MIPS I variant,
-    the C library's exit handlers, the kernel's licence text and the
-    libraries of netifd (below).
+    the kernel's licence text and the libraries of netifd (below).
 ``tests/``
     The self-tests of ``fetch``.
 
@@ -75,17 +74,19 @@ Debian::
 The MIPS I patch
 ================
 
-Buildroot's MIPS menu offers MIPS32 and later, MIPS IV and MIPS64; a MIPS I entry
-is not there (``grep BR2_mips_ arch/Config.in.mips`` in the unpacked release
-lists the variants). The core of the RTL9602C, a Lexra LX5281, is a big-endian
-MIPS I design: it runs no MIPS32 instruction, has no floating-point unit, and
-although it executes the load-linked instruction it never completes a
-store-conditional, so an atomic sequence retries for ever
-(``tools/isa-gate/README.rst``). Every entry that is offered makes the compiler
-and the C library produce code for a later architecture.
+Buildroot's MIPS menu offers MIPS32 and later, MIPS IV and MIPS64; a MIPS I
+entry is not there (``grep BR2_mips_ arch/Config.in.mips`` in the unpacked
+release lists the variants). The core of the RTL9602C, a Lexra LX5281, is a big-endian
+MIPS I design with no floating-point unit. Of the later instructions it runs
+``ll``, ``sc`` and ``sync``, and it traps on or runs wrongly the others that
+were tried; it has no thread pointer (M,
+``linux/Documentation/arch/mips/rtl9602c.rst``, "Instructions beyond MIPS I";
+``docs/adr/0021-atomic-operations-use-the-cores-ll-and-sc.rst``). Every entry
+that is offered makes the compiler and the C library produce code for a later
+architecture.
 
-``patches/0001-arch-mips-add-a-MIPS-I-variant.patch`` adds the entry, in 11 hunks
-of 7 files: 35 insertions and 1 deletion (``git apply --stat``). Its header says
+``patches/0001-arch-mips-add-a-MIPS-I-variant.patch`` adds the entry, in 9 hunks
+of 6 files: 34 insertions and 1 deletion (``git apply --stat``). Its header says
 what each hunk is for; in short:
 
 * ``BR2_mips_1`` is the variant, for the big-endian architecture only. It sets
@@ -94,12 +95,16 @@ what each hunk is for; in short:
   included, is MIPS I with no flag on a command line. Soft-float is not an
   option for it.
 * gcc is also configured with ``--with-divide=breaks`` (a division by zero is
-  checked with ``break``; the trap instruction is MIPS II), ``--without-llsc``
-  and ``--without-synci``, so the compiler's defaults agree with the core.
-* The atomic builtins are not claimed (``BR2_TOOLCHAIN_HAS_SYNC_1``, ``_2`` and
-  ``_4`` stay unset), so the packages that depend on them are not offered. The
-  thread libraries of uClibc-ng are not offered either, since both rely on
-  atomic operations; without threads there is no ``BR2_TOOLCHAIN_HAS_ATOMIC``.
+  checked with ``break``; the trap instruction ``teq`` is MIPS II, and the core
+  traps on it), ``--with-llsc`` (atomic operations as ``ll``/``sc`` sequences,
+  which the core runs) and ``--without-synci``, so the compiler's defaults
+  agree with the core.
+* The atomic builtins are claimed as the build system claims them for MIPS
+  (``BR2_TOOLCHAIN_HAS_SYNC_1``, ``_2`` and ``_4``), so the packages that
+  depend on them are offered. The thread libraries of uClibc-ng are not:
+  NPTL reaches its storage through the thread pointer, which the core does not
+  have, and linuxthreads is not kept up. Without threads the build system
+  builds no libatomic, and there is no ``BR2_TOOLCHAIN_HAS_ATOMIC``.
 * glibc and musl are not offered; uClibc-ng is the C library of this core. Its
   MIPS prefetch routines, which use a MIPS IV instruction, are switched off.
 
@@ -107,36 +112,16 @@ C only and no multilib are not part of the patch: Buildroot's defaults already
 build the C compiler alone, with no multilib, and ``BR2_MIPS_SOFT_FLOAT``
 already defaults to on.
 
-The exit-handler patch
-======================
-
-``patches/0002-package-uclibc-claim-__cxa_atexit-entries-without-atomics.patch``
-adds a patch of uClibc-ng to the build system's own patches of the C library,
-``package/uclibc/0005-stdlib-claim-__cxa_atexit-entries-without-atomics.patch``,
-which the build system applies whenever it builds uClibc-ng.
-
-``__cxa_finalize()`` marks an entry of the exit-handler table as run with a
-compare-and-exchange: a load-linked and store-conditional pair, which on this
-core retries for ever. Every shared C library holds the function, and the
-start files of each shared object call it when the object is unloaded, so a
-program linked against the shared C library can reach it at exit. Without
-threads, the only configuration that the MIPS I variant offers, the patch
-claims the entry with a plain test and store; in a program with one thread
-nothing comes between the two. With threads the function is as it was.
-
-The C library's other function of this kind, ``_test_and_set()`` of
-``<sys/tas.h>``, is left alone. It promises atomicity to processes that share
-memory, which a plain test and store does not keep, and no program of the image
-calls it; the cut of the shared C library to what the programs use leaves it out
-(``tools/lib-trim/README.rst``), and the instruction-set gate would refuse an
-image that brought it back.
+uClibc-ng carries no patch of this tree: its atomic operations, such as the
+compare-and-exchange with which ``__cxa_finalize()`` claims an entry of the
+exit-handler table, are ``ll``/``sc`` sequences that the core runs.
 
 The kernel's licence text
 =========================
 
 ``patches/0003-linux-take-the-GPL-2.0-text-of-Linux-6.18.patch`` changes one
-line of ``linux/linux.hash``, to which ``package/linux-headers/linux-headers.hash``
-links. The build system checks the licence files of the kernel and of its
+line of ``linux/linux.hash``, to which
+``package/linux-headers/linux-headers.hash`` links. The build system checks the licence files of the kernel and of its
 headers against those hashes whatever the kernel's version, and ``make
 legal-info`` stops at a file whose hash differs. The hashes are of the GPL-2.0
 text of the kernels of this release; Linux 6.18 replaced the Free Software
@@ -146,39 +131,26 @@ address, so the patch gives that file the hash of 6.18's text.
 The libraries of netifd
 =======================
 
-``patches/0004-package-libubox-ubus-json-c-build-them-for-the-MIPS-I-variant.patch``
-changes four recipes and adds a patch of libubox, so that the build system
-builds the libraries of netifd (``netifd/``) for this core: libubox, ubus and
-json-c. Without it json-c and ubus are not offered, as the MIPS I variant claims
-no atomic builtins, and libubox holds code the core cannot run.
+``patches/0004-*.patch``, whose subject names libubox, ubus and json-c, changes
+five files of the three recipes of the libraries of netifd (``netifd/``). The
+build system offers all three to the MIPS I variant as it is, since the variant
+claims the atomic builtins that json-c and ubus depend on.
 
-* json-c uses one compare-and-swap, to set the seed of its hash tables once, and
-  only where the compiler defines ``__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4``;
-  otherwise it stores the seed plainly. Its atomic reference counts are compiled
-  only with ``ENABLE_THREADING``, which the build system leaves off. The compiler
-  of the MIPS I variant defines no such macro (``gcc -dM -E`` lists none), so
-  ``package/json-c/Config.in`` offers json-c to the variant too, and
-  ``package/ubus/Config.in`` ubus, which depends on the builtins only because of
-  json-c.
-* json-c also keeps one value per thread, the format of the numbers it writes.
-  The variant has no threads and emulates thread-local storage with
+* libubox and ubus are taken at OpenWrt's commits of 2026-10-08 and 2026-09-25
+  (``da2d205``, ``414c60a``) instead of the release's (``3868f47``,
+  ``afa57cc``): procd needs the newer event loop, and netifd and procd are
+  taken at their current commits too. The archives' hashes are computed locally. libubox is
+  built as OpenWrt builds it, with the client side of udebug, a ring buffer
+  that processes share and update with atomic operations, which the compiler
+  makes in place.
+* json-c keeps one value per thread, the format of the numbers it writes. The
+  variant has no threads and emulates thread-local storage with
   ``__emutls_get_address()`` of libgcc_s, which json-c would be the only
   library to load, and so keep in the image. ``package/json-c/json-c.mk``
   builds json-c without thread-local storage on a toolchain without threads
   (``BR2_TOOLCHAIN_HAS_THREADS`` unset); the value is then the process's.
-* libubox builds udebug, a ring buffer that processes share and update with
-  ``__atomic_fetch_or``, ``__atomic_exchange_n`` and ``__sync_synchronize``; the
-  compiler of the variant turns them into calls to library functions that no
-  library provides. ``package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch``
-  gives libubox an option to leave udebug out, and ``package/libubox/libubox.mk``
-  leaves it out on a toolchain without atomics (``BR2_TOOLCHAIN_HAS_ATOMIC``
-  unset). ``ulog()`` then writes to its other channels only; netifd, as forked
-  here, does not use udebug.
-
-* libubox and ubus are taken at OpenWrt's commits of 2026-10-08 and 2026-09-25
-  (``da2d205``, ``414c60a``) instead of the release's (``3868f47``, ``afa57cc``):
-  procd needs the newer event loop, and netifd and procd are taken at their
-  current commits too. The archives' hashes are computed locally.
+  json-c sets the seed of its hash tables once with a compare-and-swap, which
+  the compiler makes in place too.
 
 The instruction-set gate checks what the libraries became, as it checks every
 file of the image.
