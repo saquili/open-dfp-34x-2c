@@ -20,6 +20,10 @@ PROCD_LICENSE_FILES = signal.c rcS.c
 PROCD_DEPENDENCIES = json-c libubox ubus
 PROCD_MAKE_OPTS = procd setlbf
 
+# procd also logs to udebug, which the image does not carry: neither
+# OpenWrt's libudebug nor the daemon that collects the buffers.
+PROCD_CONF_OPTS += -DUDEBUG=OFF
+
 define PROCD_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/procd $(TARGET_DIR)/sbin/procd
 	$(INSTALL) -D -m 0755 $(@D)/libsetlbf.so $(TARGET_DIR)/usr/lib/procd/libsetlbf.so
