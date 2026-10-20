@@ -121,3 +121,6 @@ The index
    * - 0020
      - Build the images with a pinned toolchain release
      - Accepted
+   * - 0021
+     - Use the core's ll and sc for atomic operations, without threads
+     - Accepted
