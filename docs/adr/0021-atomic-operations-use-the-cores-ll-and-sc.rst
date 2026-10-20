@@ -101,7 +101,7 @@ Decision
   ``BR2_TOOLCHAIN_HAS_ATOMIC``.
 * uClibc-ng carries no patch of this tree: ``__cxa_finalize`` claims an entry
   of the exit-handler table with its compare-and-exchange. The patch of the
-  libraries of netifd (``buildroot/patches/0004``) keeps only the newer libubox
+  libraries of netifd (``buildroot/patches/0003``) keeps only the newer libubox
   and ubus and json-c without thread-local storage; json-c and ubus are offered
   to the variant as to any MIPS target, and libubox is built whole, with its
   own udebug code.

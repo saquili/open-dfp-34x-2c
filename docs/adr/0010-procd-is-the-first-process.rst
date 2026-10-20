@@ -28,7 +28,7 @@ the next boot, and a crash of omcid leaves it without the OLT's
 provisioning.
 
 The image takes OpenWrt's network layer, netifd and ubus (``netifd/``,
-``buildroot/patches/0004``). A project that writes for mainline would not
+``buildroot/patches/0003``). A project that writes for mainline would not
 write a supervisor of its own, nor add a second init system unrelated to
 the rest: it takes the one that comes with that network layer and fixes it
 where the device needs it. That is procd, OpenWrt's first process, built

@@ -321,7 +321,7 @@ The network layer of OpenWrt
     and ``ubusd``, the message bus it answers on, with the libraries they load:
     libubox, libubus, libuci, libblobmsg_json and json-c; libnl-tiny is linked
     into ``netifd``. Buildroot builds them with
-    ``buildroot/patches/0004-*.patch`` (``buildroot/README.rst``). The
+    ``buildroot/patches/0003-*.patch`` (``buildroot/README.rst``). The
     command-line tools of these packages are not in the image: the post-build
     script takes ``uci`` and ``jshn`` out, and sets ``ubus`` aside for the RAM
     image. procd starts both;
