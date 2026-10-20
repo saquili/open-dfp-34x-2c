@@ -782,9 +782,10 @@ int main(void)
 				 OMCI_OK);
 		});
 
-		CHECK(strstr(log,
-			     "me171: C-VID 410<->1900 conflicts with the existing 410<->1410 rule") !=
-		      NULL);
+		static const char conflict[] =
+			"me171: C-VID 410<->1900 conflicts with the existing 410<->1410 rule";
+
+		CHECK(strstr(log, conflict) != NULL);
 		{
 			unsigned int said = 0;
 			const char *at = log;
