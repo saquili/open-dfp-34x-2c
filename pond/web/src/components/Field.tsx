@@ -6,8 +6,9 @@
 import { Check, CircleAlert, Eye, EyeOff } from "lucide-react";
 import type { JSX } from "preact";
 import { forwardRef, type InputHTMLAttributes, type ReactNode, useState } from "react";
-import { type ApiError, OfflineError } from "../api/client";
+import { OfflineError } from "../api/client";
 import { useI18n } from "../i18n";
+import { reason } from "../lib/read";
 
 /* The input type that hides what is typed. */
 const MASKED = "password";
@@ -161,9 +162,7 @@ export function useChangeState(change: {
       message:
         change.error instanceof OfflineError
           ? t("connection.offline")
-          : t("internet.failed", {
-              reason: (change.error as ApiError).detail ?? change.error.message,
-            }),
+          : t("internet.failed", { reason: reason(t, change.error) }),
     };
   return { state: "idle" };
 }

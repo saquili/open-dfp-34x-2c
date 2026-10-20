@@ -360,7 +360,15 @@ function TrialBar() {
       className={`alert alert-soft mb-4 text-base-content ${offline ? "alert-warning" : "alert-info"}`}
     >
       <ShieldCheck className={`size-5 ${offline ? "text-warning" : "text-info"}`} />
-      <span>{text}</span>
+      <span className="grid gap-1">
+        <span>{text}</span>
+        {/* A confirmation refused: why; it is sent again at the next fresh reading. */}
+        {confirm.isError && !offline && (
+          <span className="text-error">
+            {t("connection.trialFailed", { reason: reason(t, confirm.error) })}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -456,6 +464,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
               <li>
                 <button
                   type="button"
+                  disabled={signOut.isPending}
                   onClick={() =>
                     signOut.mutate(undefined, { onSettled: () => navigate({ to: "/login" }) })
                   }

@@ -12,7 +12,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   Check,
   CircleAlert,
@@ -62,6 +62,7 @@ import {
   uploading,
 } from "../lib/firmware";
 import { bytes, day, decimal, duration, percent } from "../lib/format";
+import { reason } from "../lib/read";
 import { z } from "../lib/schemas";
 import { memory, type Tone } from "../lib/state";
 
@@ -854,7 +855,10 @@ function SettingsTab() {
   const banks = useBanks();
   const restart = useRestart();
   const signOut = useSignOut();
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
+  /* Why the last report could not be made, or null. */
+  const [reportFailed, setReportFailed] = useState<unknown>(null);
   const store = live?.settings.store ? STORE[live.settings.store] : undefined;
   const bank = banks.data?.rootfs.bank;
 
@@ -899,7 +903,14 @@ function SettingsTab() {
             <KeyRound className="size-4" />
             {t("nav.changePassword")}
           </Link>
-          <button type="button" className="btn btn-sm" onClick={() => signOut.mutate()}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={signOut.isPending}
+            onClick={() =>
+              signOut.mutate(undefined, { onSettled: () => navigate({ to: "/login" }) })
+            }
+          >
             <LogOut className="size-4" />
             {t("nav.signOut")}
           </button>
@@ -915,8 +926,11 @@ function SettingsTab() {
             disabled={busy}
             onClick={async () => {
               setBusy(true);
+              setReportFailed(null);
               try {
                 await report();
+              } catch (e) {
+                setReportFailed(e);
               } finally {
                 setBusy(false);
               }
@@ -940,7 +954,17 @@ function SettingsTab() {
           </button>
         </div>
         <p className="text-xs text-base-content/70">{t("system.reportHint")}</p>
+        {reportFailed != null && (
+          <p role="alert" className="text-sm text-error">
+            {t("system.notReported", { reason: reason(t, reportFailed) })}
+          </p>
+        )}
         {restart.isSuccess && <p className="text-sm">{t("system.restarting")}</p>}
+        {restart.isError && (
+          <p role="alert" className="text-sm text-error">
+            {t("internet.failed", { reason: reason(t, restart.error) })}
+          </p>
+        )}
       </Card>
     </div>
   );

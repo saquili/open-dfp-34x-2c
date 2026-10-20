@@ -62,6 +62,8 @@ export const pl: Dictionary = {
     trialConfirming: "Zmiana zastosowana. Panel ma połączenie z wkładką, więc ją zachowuje…",
     trialWaiting:
       "Zmiana działa na próbę. Jeśli panel nie połączy się ponownie z wkładką, za {left}\u00a0s wkładka wróci do poprzednich ustawień.",
+    trialFailed:
+      "Panel nie zdołał zachować zmiany: {reason}. Poprosi ponownie przy następnym odczycie.",
     trialElsewhere:
       "Nowy adres zarządzania {address} czeka na potwierdzenie z panelu otwartego pod tym adresem. Bez tego wkładka wróci do starego adresu.",
   },
@@ -1072,6 +1074,7 @@ export const pl: Dictionary = {
       "Kopia całego flasha, 8 MiB, zawiera dane rejestracji wkładki i jej hasła: trzymaj ją u siebie. Zrób ją, zanim aktualizacja nadpisze oryginalne firmware.",
     copying: "Czytanie flasha, około minuty…",
     copied: "Kopia flasha zapisana.",
+    notReported: "Brak raportu: {reason}",
     notCopied: "Brak kopii: {reason}",
     trialNow: "System {letter} działa na próbę i zostanie zachowany, gdy wkładka w pełni wstanie.",
     failedNote:

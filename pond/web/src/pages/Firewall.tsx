@@ -493,6 +493,7 @@ function RuleCard({
 }) {
   const { t } = useI18n();
   const change = useRuleChange();
+  const state = useChangeState(change);
   const ends = `${endText(t, readEnd(r.from), nets, devices)} → ${endText(t, readEnd(r.to), nets, devices)}`;
   const name = r.name || ends;
   const move = (dir: "up" | "down") => change.mutate({ ID: String(r.id), MOVE: dir });
@@ -548,6 +549,7 @@ function RuleCard({
           <Dot tone={r.on ? "good" : "neutral"} />
           {r.on ? t("fw.on") : t("fw.off")}
         </span>
+        {state.state === "bad" && <p className="text-xs text-error">{state.message}</p>}
       </Cell>
       <Acts>
         <button

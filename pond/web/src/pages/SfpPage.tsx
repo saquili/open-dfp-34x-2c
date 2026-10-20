@@ -140,10 +140,11 @@ function LaneCard() {
               left: left ?? "…",
             })}
           </span>
-          <span className="flex gap-2">
+          <span className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               className="btn btn-sm btn-primary"
+              disabled={change.isPending}
               onClick={() => change.mutate({ KEEP: "1" })}
             >
               <Check className="size-4" />
@@ -152,11 +153,13 @@ function LaneCard() {
             <button
               type="button"
               className="btn btn-sm"
+              disabled={change.isPending}
               onClick={() => change.mutate({ REVERT: "1" })}
             >
               <Undo2 className="size-4" />
               {t("sfp.revert")}
             </button>
+            <SaveState {...state} />
           </span>
         </div>
       ) : (
@@ -287,6 +290,7 @@ function MgmtCard() {
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
+                disabled={change.isPending}
                 onClick={() => change.mutate({ COMMIT: "1" })}
               >
                 <Check className="size-4" />
@@ -306,11 +310,13 @@ function MgmtCard() {
             <button
               type="button"
               className="btn btn-sm"
+              disabled={change.isPending}
               onClick={() => change.mutate({ CANCEL: "1" })}
             >
               <Undo2 className="size-4" />
               {t("sfp.mgmtCancel")}
             </button>
+            <SaveState {...state} />
           </span>
         </div>
       ) : (

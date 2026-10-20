@@ -60,6 +60,8 @@ export const en = {
     trialConfirming: "The change is applied. The panel reaches the stick, so it keeps the change…",
     trialWaiting:
       "The change is on trial. Unless the panel reaches the stick again, the stick goes back to the settings of before in {left}\u00a0s.",
+    trialFailed:
+      "The panel could not keep the change: {reason}. It asks again at the next reading.",
     trialElsewhere:
       "The new management address {address} waits to be confirmed by a panel opened at it; without that the stick goes back to the old one.",
   },
@@ -1075,6 +1077,7 @@ export const en = {
     copying: "Reading the flash, about a minute…",
     copied: "The copy of the flash is saved.",
     notCopied: "No copy: {reason}",
+    notReported: "No report: {reason}",
     trialNow: "System {letter} runs on trial and is kept once the stick is fully up.",
     failedNote:
       "The last trial of system {letter} did not come up, so the stick went back to the other system.",

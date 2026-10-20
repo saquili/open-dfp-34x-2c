@@ -491,6 +491,7 @@ function ForwardCard({
 }) {
   const { t } = useI18n();
   const change = useForwardChange();
+  const state = useChangeState(change);
   const p = nets.find((n) => n.lan.id === f.lan);
   const d = devices.find((x) => x.lan === f.lan && x.mac === f.mac);
   const name = f.name || t("nat.unnamed", { ports: ports(f.ext_from, f.ext_to) });
@@ -524,6 +525,7 @@ function ForwardCard({
           <Dot tone={f.on ? "good" : "neutral"} />
           {f.on ? t("nat.on") : t("nat.off")}
         </span>
+        {state.state === "bad" && <p className="text-xs text-error">{state.message}</p>}
       </Cell>
       <Acts>
         <button
