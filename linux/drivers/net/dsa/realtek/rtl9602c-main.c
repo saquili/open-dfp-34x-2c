@@ -459,6 +459,10 @@ static const struct {
  * 1000BaseX gets the analog values of 2500BaseX, and traffic crosses a
  * 1000BaseX link with them (measured on this board).
  *
+ * The negotiation word is written last, after the lane has restarted, and a
+ * change of it reaches the lane only at the lane's next park and restart:
+ * rtl9602c_sds_set() re-latches the lane after the sequence.
+ *
  * The sequence takes the link down, so it runs only when the lane's setting
  * changes (rtl9602c_sds_set()).
  */
@@ -533,10 +537,10 @@ void rtl9602c_serdes_init(struct rtl9602c_priv *p, u32 sds_mode)
 /*
  * Re-latch the lane in its programmed mode: stop its clock, park it, wait,
  * then write back the saved control word with the clock running, and give
- * the lane time to settle. It runs on every link-down of port 0, and with it
- * the link has come back after every host-side bounce tried; that a lane
- * whose peer restarted stays unsynchronised without it is not verified.
- * Sleeps.
+ * the lane time to settle. It runs after every bring-up of a setting
+ * (rtl9602c_sds_set()) and on every link-down of port 0, and with it the link
+ * has come back after every host-side bounce tried; that a lane whose peer
+ * restarted stays unsynchronised without it is not verified. Sleeps.
  */
 static void rtl9602c_serdes_resync(struct rtl9602c_priv *p)
 {
@@ -552,10 +556,13 @@ static void rtl9602c_serdes_resync(struct rtl9602c_priv *p)
 }
 
 /*
- * Bring the lane up with setting @try of rtl9602c_sds_tries[]. In-band
- * negotiation, which the bring-up turns off, is turned on by clearing the
- * lane's FORCE bit and pulsing its restart, and reaches the lane with a
- * re-latch. Under sds_lock; sleeps.
+ * Bring the lane up with setting @try of rtl9602c_sds_tries[], then re-latch
+ * it. In-band negotiation, which the bring-up turns off, is turned on by
+ * clearing the lane's FORCE bit and pulsing its restart. Either way the
+ * negotiation word reaches the lane only with the re-latch, as the bring-up
+ * writes it after restarting the lane: brought up in 1000BaseX without
+ * negotiation straight after 1000BaseX with it, and not re-latched, the lane
+ * went on negotiating (measured on this board). Under sds_lock; sleeps.
  */
 static void rtl9602c_sds_set(struct rtl9602c_priv *p, unsigned int try)
 {
@@ -571,18 +578,50 @@ static void rtl9602c_sds_set(struct rtl9602c_priv *p, unsigned int try)
 			     FIELD_PREP(RTL9602C_SERDES_AN_CTRL_RESTART, lane));
 		rtl9602c_rmw(p, RTL9602C_SERDES_AN_CTRL,
 			     RTL9602C_SERDES_AN_CTRL_RESTART, 0);
-		rtl9602c_serdes_resync(p);
 	}
+	rtl9602c_serdes_resync(p);
 	p->sds_an = rtl9602c_sds_tries[try].an;
 	p->sds_try = try;
 }
 
+/* What one check of the lane does (rtl9602c_sds_step()). */
+enum rtl9602c_sds_act {
+	RTL9602C_SDS_KEEP,
+	RTL9602C_SDS_FOUND,
+	RTL9602C_SDS_LOST,
+	RTL9602C_SDS_NEXT,
+};
+
 /*
- * Once a second: while the lane's receiver has synchronised, nothing to do;
- * when it has just lost the host, wait one more period in the same setting,
- * as the host may be restarting its end; otherwise go on to the next setting
- * that may be tried.
+ * One check of the search, from the settings @tries allows, the setting @cur
+ * the lane runs in, whether its receiver has synchronised (@up) and whether
+ * it had at the last check (@found): FOUND when it has just synchronised;
+ * LOST when it has just lost the host, so that the lane waits one more check
+ * in its setting, as the host may be restarting its end; NEXT, with the next
+ * setting after @cur that @tries allows in *@next, in the order of
+ * rtl9602c_sds_tries[], when it has not synchronised and another setting may
+ * be tried; KEEP otherwise.
  */
+static enum rtl9602c_sds_act rtl9602c_sds_step(u8 tries, unsigned int cur,
+					       bool up, bool found,
+					       unsigned int *next)
+{
+	unsigned int try = cur;
+
+	if (up)
+		return found ? RTL9602C_SDS_KEEP : RTL9602C_SDS_FOUND;
+	if (found)
+		return RTL9602C_SDS_LOST;
+	do {
+		try = (try + 1) % ARRAY_SIZE(rtl9602c_sds_tries);
+	} while (try != cur && !(tries & BIT(try)));
+	if (try == cur)
+		return RTL9602C_SDS_KEEP;
+	*next = try;
+	return RTL9602C_SDS_NEXT;
+}
+
+/* Once a second, one check of the search (rtl9602c_sds_step()). */
 static void rtl9602c_sds_work(struct work_struct *w)
 {
 	struct rtl9602c_priv *p =
@@ -592,19 +631,21 @@ static void rtl9602c_sds_work(struct work_struct *w)
 
 	mutex_lock(&p->sds_lock);
 	up = rtl9602c_r(p, RTL9602C_SERDES_CTRL) & RTL9602C_SERDES_CTRL_LINK_UP;
-	if (up && !p->sds_found) {
+	switch (rtl9602c_sds_step(p->sds_tries, p->sds_try, up, p->sds_found,
+				  &try)) {
+	case RTL9602C_SDS_FOUND:
 		p->sds_found = true;
 		pr_info("SFP lane up in %s\n", rtl9602c_sds_tries[p->sds_try].name);
-	} else if (!up && p->sds_found) {
+		break;
+	case RTL9602C_SDS_LOST:
 		p->sds_found = false;
 		pr_info("SFP lane lost the host\n");
-	} else if (!up) {
-		try = p->sds_try;
-		do {
-			try = (try + 1) % ARRAY_SIZE(rtl9602c_sds_tries);
-		} while (!(p->sds_tries & BIT(try)));
-		if (try != p->sds_try)
-			rtl9602c_sds_set(p, try);
+		break;
+	case RTL9602C_SDS_NEXT:
+		rtl9602c_sds_set(p, try);
+		break;
+	case RTL9602C_SDS_KEEP:
+		break;
 	}
 	mutex_unlock(&p->sds_lock);
 	schedule_delayed_work(&p->sds_work,
@@ -2589,4 +2630,8 @@ static void rtl9602c_debugfs_exit(struct rtl9602c_priv *p)
 #else
 static void rtl9602c_debugfs_init(struct rtl9602c_priv *p) { }
 static void rtl9602c_debugfs_exit(struct rtl9602c_priv *p) { }
+#endif
+
+#if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_KUNIT_TEST)
+#include "rtl9602c-main-test.c"
 #endif

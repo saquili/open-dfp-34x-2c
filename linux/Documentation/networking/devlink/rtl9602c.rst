@@ -816,33 +816,50 @@ To keep the lane in 1000BaseX with negotiation, and to let it look again::
    * - Fact
      - Tag
      - Checked by
-   * - Setting one name brings the lane up in that setting at once, unless it
-       already runs in it, and the host's link follows within the time the host
-       takes to synchronise.
-     - I
-     - Read from the code. A host that switches between 2500BaseX and
-       1000BaseX on the bench, with ``sfp_lane_now`` and the link read after
-       each set, would confirm it.
+   * - Setting one name brings the lane up in that setting, unless it already
+       runs in it, and with the host in the same setting the link comes up
+       and carries traffic both ways: so for each of ``2500basex``,
+       ``2500basex-an``, ``1000basex-an`` and ``1000basex``, the last of
+       which had not been seen to link before. With a driver that re-latched
+       only the settings with negotiation, ``1000basex`` set straight after
+       ``1000basex-an`` went on negotiating until the host's change dropped
+       the link (*dsa* page, "In-band auto-negotiation"); that it is in force
+       at once with the re-latch after every setting is not yet measured.
+     - M, I
+     - M: on the bench, the host's port set to each setting in turn and
+       ``sfp_lane`` to the same: the host's link up, 200 of 200 pings from
+       the host 50 ms apart, and 1000 of 1000 frames sent upstream 1 ms
+       apart, each with a marker and a number, counted on both sides. I: the
+       *dsa* page's "Open questions".
    * - ``auto`` leaves a synchronised lane as it is.
-     - I
-     - Read from the code; the link staying up across the set would confirm
-       it.
+     - M
+     - With the lane set to ``1000basex-an`` and synchronised, ``auto``
+       changed nothing on either side for 30 s; with ``2500basex``,
+       ``sfp_lane_now`` read ``2500basex`` and the carrier 1 at each of the
+       10 s after the set.
    * - ``sfp_lane_now`` reads ``searching`` from the set that changes the
        setting until the lane synchronises in the new one.
-     - I
-     - Read from the code; ``sfp_lane_now`` read once a second across a set
-       would confirm it.
+     - M
+     - Read across the sets of ``2500basex-an`` and ``1000basex-an``:
+       ``searching`` and ``/sys/class/net/sfp/carrier`` 0 until the kernel
+       log's ``SFP lane up in``; after the set of ``1000basex`` the lane was
+       up 0.8 s later, and ``sfp_lane_now`` read ``1000basex`` at 2 s.
    * - ``2500basex-an`` brings the lane up in 2500BaseX with in-band
        negotiation. Against a host at 2500BaseX without negotiation the lane's
-       receiver does not synchronise: ``sfp_lane_now`` stays ``searching`` and
-       the stick's side of the link down, while the host keeps its carrier.
+       receiver did not synchronise in one run: ``sfp_lane_now`` stayed
+       ``searching`` and the stick's side of the link down, while the host
+       kept its carrier. In another it came up about 10 s after the set, and
+       stayed up when the host then turned negotiation on; what brought it
+       up is not known (*dsa* page, "In-band auto-negotiation").
      - M
      - On the bench, against a host port at 2500BaseX without negotiation:
        "SFP lane set to 2500BaseX with in-band negotiation", ``searching``,
        ``/sys/class/net/sfp/carrier`` 0, the host's carrier 1 throughout;
        the trial of onu-lane ending 90 s later brought it back to
-       ``2500basex``, up at 2.5 Gb/s. Against a host that negotiates at
-       2500BaseX it is not measured.
+       ``2500basex``, up at 2.5 Gb/s. In the second run ``SFP lane up in
+       2500BaseX with in-band negotiation`` and ``sfp: Link is Up -
+       2.5Gbps/Full`` came 10.4 s after the set. Against a host that
+       negotiates at 2500BaseX from the start it is not measured.
 
 PTP transparent clock
 ---------------------

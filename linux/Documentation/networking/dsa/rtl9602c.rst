@@ -810,9 +810,11 @@ Port 0 has one SerDes lane, wired to the SFP edge connector. The host sees
 carrier from this side's transmitter alone; the lane's own receiver has to
 synchronise separately, and ``RTL9602C_SERDES_CTRL_LINK_UP`` says that it has.
 The driver brings the lane up in a mode, 2500BaseX or 1000BaseX, with a fixed
-sequence (``rtl9602c_serdes_init()``). The sequence runs at setup and again
-when phylink asks for another mode, and it takes the link down. When the host
-restarts its end, the lane is re-latched from phylink's link-down callback.
+sequence (``rtl9602c_serdes_init()``), and re-latches it after the sequence
+(``rtl9602c_serdes_resync()``), so that the setting's in-band negotiation is
+in force. Both run at setup and whenever the lane's setting changes (see
+"phylink and the lane"), and they take the link down. When the host restarts
+its end, the lane is re-latched again from phylink's link-down callback.
 
 Registers and modes
 -------------------
@@ -884,7 +886,10 @@ The ten steps of ``rtl9602c_serdes_init()``, in order:
 9. Last, write ``RTL9602C_SERDES_AN_CTRL`` (``0x021808``) with
    ``RTL9602C_SERDES_AN_CTRL_INIT`` (``0x71e0``). Purpose: turn in-band
    auto-negotiation off on the SFP lane; without it the lane transmits and its
-   receiver never synchronises. (M)
+   receiver never synchronises. The word is written after step 4 has
+   restarted the lane, so on a lane that was running, the negotiation of the
+   setting before can stay in force until the re-latch that follows the
+   sequence (see "In-band auto-negotiation"). (M)
 10. Remember the mode as the programmed one (``sds_mode``). Purpose: phylink's
     state and the check for a no-op ``mac_config`` read it. (T)
 
@@ -999,12 +1004,58 @@ In-band auto-negotiation
      - M
      - The bench host's port in 1000BaseX with negotiation, against the lane
        in 1000BaseX with and without it; ssh over the link with it on.
+   * - The bring-up's own park and restart, which come before step 9, do not
+       put the word of step 9 in force: with a driver that re-latched the lane
+       only for a setting with negotiation, the lane in 1000BaseX with
+       negotiation, synchronised with a host negotiating at 1000BaseX, was set
+       to 1000BaseX without negotiation, and logged ``SFP lane up in
+       1000BaseX`` 0.8 s after the set, with the host still negotiating and
+       phylink's link not dropping. A lane without negotiation does not
+       synchronise with such a host (the row above), so the lane went on
+       negotiating. When the host then turned negotiation off, the link
+       dropped, phylink's link-down callback re-latched the lane, and it came
+       back in 1000BaseX: ``SFP lane up in 1000BaseX`` 16 s after ``SFP lane
+       lost the host``, the host reporting carrier about 9 s after its change.
+     - M
+     - ``sfp_lane`` set to ``1000basex`` (see the *devlink* page) with a
+       Linux host's port at 1000BASE-X with in-band negotiation, then without:
+       ``SFP lane set to 1000BaseX`` and ``SFP lane up in 1000BaseX`` in the
+       kernel log with no ``sfp: Link is Down`` between them; then ``SFP lane
+       lost the host``, ``Link is Down`` and ``Link is Up - 1Gbps/Full``.
+   * - So every setting ends with the re-latch of "Link-down resync"
+       (``rtl9602c_sds_set()``), with its negotiation word already written,
+       and a setting without negotiation that follows one with it runs
+       without, as a park and restart puts the word in force (the third row
+       of this table). The search's third setting, 1000BaseX without
+       negotiation, always follows the second, with it, in the same mode
+       ("phylink and the lane").
+     - I
+     - Not yet measured with the re-latch. ``sfp_lane`` set to
+       ``1000basex-an`` and then ``1000basex`` against a host that negotiates
+       at 1000BaseX: ``sfp_lane_now`` should stay ``searching``; and the
+       search finding a host at 1000BaseX without negotiation (``SFP lane up
+       in 1000BaseX``).
+   * - Against a host at 2500BaseX without negotiation, the lane in 2500BaseX
+       with negotiation stayed unsynchronised for 90 s in one run, and in
+       another came up about 10 s after the set (``SFP lane up in 2500BaseX
+       with in-band negotiation``) and stayed up when the host then turned
+       negotiation on. What brought it up is not known; a host that restores
+       its saved link settings after a loss of carrier, as a Linux host's
+       network manager may about 6 s after it, would change what the lane
+       sees. The search does not depend on it: it gives a setting a second.
+     - M, I
+     - M: ``sfp_lane`` set to ``2500basex-an`` from ``2500basex``, with
+       ``sfp_lane_now``, ``/sys/class/net/sfp/carrier`` and the kernel log
+       read; the 90 s run is the *devlink* page's. I: what brought it up; the
+       run repeated with the host's network manager kept from resetting the
+       port would narrow it.
 
 Link-down resync
 ----------------
 
 ``rtl9602c_serdes_resync()`` runs from phylink's link-down callback on port 0,
-where sleeping is allowed:
+and after every bring-up of a setting (``rtl9602c_sds_set()``), where sleeping
+is allowed:
 
 1. Save ``RTL9602C_SERDES_CTRL``. Purpose: the word to restore. (T)
 2. Write it back with ``RTL9602C_SERDES_CTRL_CLK_STOP`` set. Purpose: stop the
@@ -1056,11 +1107,16 @@ and a work item, ``rtl9602c_sds_work()``, checks the lane once a second
 2. It has just lost the host: wait one more second in the same setting,
    logging ``SFP lane lost the host``. Purpose: a host restarting its end comes
    back in the setting it had. (M)
-3. Otherwise bring the lane up in the next setting that may be tried. A setting
-   with in-band negotiation clears the lane's FORCE bit after the bring-up,
-   pulses its restart and re-latches the lane. Purpose: the host's setting is
-   found within the three seconds the settings take. (M)
+3. Otherwise bring the lane up in the next setting that may be tried, and
+   re-latch it (``rtl9602c_sds_set()``); a setting with in-band negotiation
+   clears the lane's FORCE bit and pulses its restart before the re-latch.
+   Purpose: the host's setting is found within the three seconds the settings
+   take, each with its own negotiation in force. (M; the re-latch of a setting
+   without negotiation I, see "In-band auto-negotiation")
 
+The decision of a check is ``rtl9602c_sds_step()``, a pure function, which the
+KUnit cases ``rtl9602c_test_sds_*`` of ``rtl9602c-main-test.c`` check: the
+order of the settings, the wait after a loss and a single setting left alone.
 The devlink parameter ``sfp_lane`` narrows the settings tried (see the
 *devlink* page). phylink's ``mac_config`` leaves the lane alone: the interface it passes is the
 device tree's ``phy-mode``, which says nothing about the host.
@@ -1116,6 +1172,28 @@ device tree's ``phy-mode``, which says nothing about the host.
      - M
      - Three runs, each way, with the host's port taken off its network manager
        for the change; the stick's management traffic rides the lane.
+   * - A driver that re-latched only the settings with negotiation did not
+       find a host at 1000BaseX without negotiation: with the host taken there
+       from 2500BaseX, the stick logged ``SFP lane lost the host`` and then
+       read ``searching`` for the whole of a 55 to 58 s window, and the host
+       never saw carrier; with the host back at 2500BaseX, ``SFP lane up in
+       2500BaseX`` came within about 6 s. Its third setting ran with the
+       negotiation of the second (see "In-band auto-negotiation"). Each of the
+       three settings, set alone, links with a host in the same setting (see
+       the *devlink* page).
+     - M
+     - ``sfp_lane`` at ``auto``; ``sfp_lane_now`` and
+       ``/sys/class/net/sfp/carrier`` read every half second, the kernel log,
+       and the host's carrier; the host's network manager kept from resetting
+       the port.
+   * - Re-latched after its bring-up, the lane in 1000BaseX without
+       negotiation synchronises with a host at 1000BaseX without negotiation
+       within the second the search gives it, so that the search finds such a
+       host within the three seconds of its settings.
+     - I
+     - Not yet measured. The re-test of the row above with this driver: ``SFP
+       lane up in 1000BaseX`` within a few seconds of ``SFP lane lost the
+       host``, ``sfp_lane_now`` reading ``1000basex``, and the host's carrier.
    * - ``mac_config`` (``rtl9602c_mac_config()``) does nothing. For port 0
        phylink passes the device tree's ``phy-mode``, ``2500base-x``, whenever
        the port starts; following it would take a lane found in 1000BaseX
@@ -2047,9 +2125,14 @@ Known limitations
   without sending pause frames.
 - The lane finds a host's setting by trying three in turn, a second each, so it
   takes up to three seconds after the host has changed or come back, and while
-  no host is there the lane changes setting every second. Of the three,
-  1000BaseX without in-band negotiation has not been seen to link: the bench
-  host cannot run it.
+  no host is there the lane changes setting every second. The search has not
+  yet been seen to find 1000BaseX without in-band negotiation: set alone, that
+  setting links with a host that runs it, but the search of a driver that did
+  not re-latch every setting never found it, and the search with the re-latch
+  is not yet measured (see "phylink and the lane").
+- Without in-band negotiation nothing tells one side of the lane that the
+  other has synchronised: the host sees carrier from the lane's transmitter
+  alone, so the link can be up on one side and down on the other.
 
 Open questions
 ==============
@@ -2069,9 +2152,16 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - A host that runs 1000BaseX without in-band negotiation links with the
-       lane's third setting ("phylink and the lane").
-     - Such a host port, and the stick's log naming the setting found.
+   * - The re-latch after every bring-up puts a setting without in-band
+       negotiation in force after one with it, and the search finds a host
+       at 1000BaseX without negotiation in its third setting within the
+       second it gives the setting ("In-band auto-negotiation"; "phylink and
+       the lane").
+     - The search with the host taken from 2500BaseX to 1000BaseX without
+       negotiation, its network manager kept from resetting the port, and the
+       stick's log naming the setting found; ``1000basex-an`` then
+       ``1000basex`` set against a host that negotiates, ``sfp_lane_now``
+       staying ``searching``.
    * - The counter offsets tagged I are what their names say ("Per-port
        counters").
      - Sending a known burst for each (broadcast, multicast, frames of one
@@ -2098,6 +2188,11 @@ Questions the code does not depend on
    * - Whether the override of ``RTL9602C_SHAPE_2G5_CFG`` lets port 0 carry more
        than 1 Gb/s ("Forced MAC ability").
      - A flow above 1 Gb/s from the host through port 0.
+   * - What brings a lane negotiating in band up against a host that does not
+       negotiate, which it did once about 10 s after the set and once not in
+       90 s ("In-band auto-negotiation").
+     - The run repeated with the host's network manager kept from resetting
+       the port, and the host's link settings read before and after.
    * - Whether a lane whose peer restarted stays unsynchronised without the
        link-down resync ("Link-down resync").
      - Removing the resync and bouncing the host port: ``LINK_UP`` should stay
