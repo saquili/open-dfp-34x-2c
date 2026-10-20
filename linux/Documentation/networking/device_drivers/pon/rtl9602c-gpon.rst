@@ -3223,9 +3223,10 @@ carries the ONU's side of the key exchange: on Request_Key it makes a new key,
 sends it to the OLT and writes it into the MAC as the next key, holding back a
 switch set up for the key before; on Key_Switching_Time it writes the
 superframe from which that key applies; on Encrypted_Port-ID it marks the flow
-bound to that Port-ID for decryption. It zeroes both keys at bring-up and when
-the ONU gives up its ONU-ID. What it leaves out is under "Known limitations",
-and the rows here state what the driver does and what is assumed.
+bound to that Port-ID for decryption, and reports the Port-IDs it has marked to
+the PON class. It zeroes both keys at bring-up and when the ONU gives up its
+ONU-ID. What it leaves out is under "Known limitations", and the rows here
+state what the driver does and what is assumed.
 
 Upstream FEC is asked for in the bandwidth map: the OLT sets the Use FEC flag of
 the ONU's allocations, and the ONU then adds the parity of RS(255,239) to its
@@ -3414,6 +3415,21 @@ into the next key, then into the active key.
        clear, 20 of 20 test frames were counted in ``rx_crc_errors`` of the
        ``pon`` port, with ``RTL9602C_GEM_DS_MC_FILTER_FCS_CHECK`` set and, in
        a test build, clear; none reached the CPU.
+   * - The Port-IDs the driver records as encrypted go to the PON class with
+       the rest of the status while the PON is up, as ``encrypted-port-id``:
+       in ascending order, the OMCC's among them, the lowest 128 of more
+       (``rtl9602c_gpon_aes_list()``). A mark or an unmark is announced by the
+       worker, whose comparison of the report finds it within
+       ``RTL9602C_GPON_POLL_MS`` (50 ms), and not from the PLOAM dispatch,
+       which has 750 us for a message. With the record emptied when the ONU
+       gives up its ONU-ID, the list is empty then too.
+     - T, I
+     - T: ``rtl9602c_test_aes_list`` (KUnit): none; Port-IDs 0, 300 and 4095
+       in that order; the lowest that fit. I: not run on the board. Marking
+       through ``ploaminject`` a data Port-ID, not the OMCC's, which would
+       stop OMCI (octets ``01 08 03 10 00`` and seven of 0 for Port-ID 256 of
+       ONU-ID 1), then reading ``encrypted-port-id`` and unmarking it again
+       (octet 3 ``02``), would settle it.
 
 Reporting: the PON class and devlink
 ====================================

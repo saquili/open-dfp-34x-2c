@@ -5,8 +5,9 @@
  * number and the password, the length of a burst's overhead, the split of the
  * equalization delay, the transmit power level modes, the units of a queue's
  * rates, the numbering of T-CONTs and their queues, the queues a T-CONT's GEM
- * ports send through, the names of the PLOAM messages, and the state
- * Disable_Serial_Number leaves the ONU in.
+ * ports send through, the names of the PLOAM messages, the state
+ * Disable_Serial_Number leaves the ONU in, and the list of the Port-IDs the OLT
+ * has encrypted.
  */
 
 #include <kunit/test.h>
@@ -520,6 +521,49 @@ static void rtl9602c_test_disable_sn(struct kunit *test)
 	}
 }
 
+/*
+ * The Port-IDs the OLT has encrypted with Encrypted_Port-ID (G.984.3
+ * clause 9.2.3.8), as the PON class gets them: ascending, Port-ID 0 and the
+ * highest, 4095, among them, and the lowest that fit when there is no room
+ * for all.
+ */
+static void rtl9602c_test_aes_list(struct kunit *test)
+{
+	unsigned long *ports;
+	u16 list[PON_MAX_ENCRYPTED_PORT_IDS];
+	unsigned int i;
+
+	ports = kunit_kcalloc(test, BITS_TO_LONGS(RTL9602C_GPON_NUM_PORTID),
+			      sizeof(*ports), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, ports);
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_aes_list(ports, list, ARRAY_SIZE(list)),
+			0);
+
+	__set_bit(4095, ports);
+	__set_bit(300, ports);
+	__set_bit(0, ports);
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_aes_list(ports, list, ARRAY_SIZE(list)),
+			3);
+	KUNIT_EXPECT_EQ(test, list[0], 0);
+	KUNIT_EXPECT_EQ(test, list[1], 300);
+	KUNIT_EXPECT_EQ(test, list[2], 4095);
+
+	/* No room: nothing is written. Room for two: the two lowest. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_aes_list(ports, list, 0), 0);
+	list[2] = 0;
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_aes_list(ports, list, 2), 2);
+	KUNIT_EXPECT_EQ(test, list[1], 300);
+	KUNIT_EXPECT_EQ(test, list[2], 0);
+
+	/* Every Port-ID: the report takes the lowest 128. */
+	bitmap_fill(ports, RTL9602C_GPON_NUM_PORTID);
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_aes_list(ports, list, ARRAY_SIZE(list)),
+			PON_MAX_ENCRYPTED_PORT_IDS);
+	for (i = 0; i < ARRAY_SIZE(list); i++)
+		KUNIT_EXPECT_EQ(test, list[i], i);
+}
+
 static struct kunit_case rtl9602c_pon_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_sn_parse),
 	KUNIT_CASE(rtl9602c_test_sn_parse_refuses),
@@ -537,6 +581,7 @@ static struct kunit_case rtl9602c_pon_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_tcont_qmap),
 	KUNIT_CASE(rtl9602c_test_ploam_names),
 	KUNIT_CASE(rtl9602c_test_disable_sn),
+	KUNIT_CASE(rtl9602c_test_aes_list),
 	{ }
 };
 

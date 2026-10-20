@@ -1010,10 +1010,11 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p)
  * there is no state, alarm or count to report, and absent is not zero: the
  * activation state, whose numbers 1 to 5 are the class's O1 to O5; the ONU-ID
  * unless unassigned; the OMCC's Port-ID while it is bound; the Alloc-IDs of
- * T-CONTs 0 to 15 in use, the default Alloc-ID not among them; the counter
- * totals, brought up to date; the transmit power level the optics are at, as
- * Serial_Number_ONU carries it; how long the ONU has been in its state; in O5,
- * the equalization delay of Ranging_Time; and the alarms.
+ * T-CONTs 0 to 15 in use, the default Alloc-ID not among them; the Port-IDs
+ * the OLT has encrypted, the OMCC's among them, none without an ONU-ID; the
+ * counter totals, brought up to date; the transmit power level the optics are
+ * at, as Serial_Number_ONU carries it; how long the ONU has been in its state;
+ * in O5, the equalization delay of Ranging_Time; and the alarms.
  *
  * The alarms are the levels in RTL9602C_GTC_DS_IRQ_STAT, the conditions present
  * now: loss of signal, loss of frame, and the MAC's LOM bit, reported as loss
@@ -1053,6 +1054,9 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_pon *p,
 	for (i = 0; i < RTL9602C_GPON_DEFAULT_TCONT_IDX; i++)
 		if (p->gpon_tcont_used & BIT(i))
 			st->alloc_id[st->num_alloc_ids++] = p->gpon_alloc[i];
+	st->num_encrypted_port_ids =
+		rtl9602c_gpon_aes_list(p->gpon_aes_ports, st->encrypted_port_id,
+				       ARRAY_SIZE(st->encrypted_port_id));
 
 	rtl9602c_gpon_cntr_sync(p);
 	st->stats = p->gpon_stats;
@@ -1084,11 +1088,16 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_pon *p,
 /*
  * Send the PON class the ONU's status when it differs from the last one sent,
  * counters and the time in the state left out of the comparison: counters
- * moving and time passing are no change, and a steady O5 sends nothing.
+ * moving and time passing are no change, and a steady O5 sends nothing. The
+ * two are set aside while the report is compared, rather than compared in a
+ * second copy, which with the encrypted Port-IDs would make the stack frame
+ * twice the report's size.
  */
 static void rtl9602c_gpon_notify(struct rtl9602c_pon *p)
 {
-	struct pon_dev_status st, key;
+	struct pon_dev_status st;
+	struct pon_dev_stats stats;
+	u64 state_ms;
 
 	lockdep_assert_held(&p->gpon_lock);
 
@@ -1097,13 +1106,16 @@ static void rtl9602c_gpon_notify(struct rtl9602c_pon *p)
 
 	rtl9602c_gpon_fill_status(p, &st);
 
-	key = st;
-	memset(&key.stats, 0, sizeof(key.stats));
-	key.onu_state_ms = 0;
-	if (!memcmp(&key, &p->gpon_status, sizeof(key)))
+	stats = st.stats;
+	state_ms = st.onu_state_ms;
+	memset(&st.stats, 0, sizeof(st.stats));
+	st.onu_state_ms = 0;
+	if (!memcmp(&st, &p->gpon_status, sizeof(st)))
 		return;
 
-	p->gpon_status = key;
+	p->gpon_status = st;
+	st.stats = stats;
+	st.onu_state_ms = state_ms;
 	pon_device_notify(p->pon, &st);
 }
 

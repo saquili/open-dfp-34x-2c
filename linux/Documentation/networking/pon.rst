@@ -2632,6 +2632,15 @@ PON is brought down and up again; ``dev-get`` reads the same report at any time.
      - A listener on ``monitor`` across ``ip link set pon down`` and ``up``
        saw: O1; a report with neither state nor alarms; O2; O3; O4 with the
        ONU-ID; O5; O5 with the Alloc-ID and the OMCC Port-ID.
+   * - While the PON is up, ``encrypted-port-id`` lists the Port-IDs that
+       Encrypted_Port-ID marked, the OMCC's among them, from the driver's
+       record, which also sets the decryption of the flows; the record goes
+       with the ONU-ID. A mark or an unmark reaches ``monitor`` through the
+       poll work's comparison, within 50 ms.
+     - T, I
+     - T: the list's KUnit test. I: not run on the board (see "FEC and
+       encryption" in
+       Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst).
 
 T-CONTs and counters
 --------------------

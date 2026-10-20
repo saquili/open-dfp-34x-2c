@@ -473,6 +473,8 @@ bool rtl9602c_gpon_power_sn_step(u32 *answered, u8 *mode);
 const char *rtl9602c_ploam_ds_name(u8 id);
 const char *rtl9602c_ploam_us_name(u8 id);
 u8 rtl9602c_gpon_disable_sn(u8 state, u8 ctrl, bool mine);
+unsigned int rtl9602c_gpon_aes_list(const unsigned long *ports, u16 *list,
+				    unsigned int max);
 void rtl9602c_gem_rate_units(u64 cir, u64 pir, bool limited, u32 *cir_u,
 			     u32 *pir_u);
 u32 rtl9602c_gem_tcont_qmap(const struct pon_gem_config *cfg,

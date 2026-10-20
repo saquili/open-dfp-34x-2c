@@ -6,7 +6,8 @@
  * serial number and the password, the length of a burst's overhead, the
  * split of the equalization delay, the transmit power level modes, the units
  * of a queue's rates, the queues a T-CONT's GEM ports send through, the names
- * of the PLOAM messages, and the state Disable_Serial_Number leaves the ONU in.
+ * of the PLOAM messages, the state Disable_Serial_Number leaves the ONU in, and
+ * the list of the Port-IDs the OLT has encrypted.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
@@ -339,6 +340,28 @@ u8 rtl9602c_gpon_disable_sn(u8 state, u8 ctrl, bool mine)
 	    (ctrl == RTL9602C_PLOAM_DISABLE_SN_ENABLE && mine))
 		return RTL9602C_ONU_O2_STANDBY;
 	return state;
+}
+
+/**
+ * rtl9602c_gpon_aes_list() - list the Port-IDs the OLT has encrypted
+ * @ports: the driver's record, a bit for each of the 4096 Port-IDs, set by
+ *	   Encrypted_Port-ID (G.984.3 clause 9.2.3.8)
+ * @list: where the Port-IDs go, in ascending order
+ * @max: the room in @list
+ *
+ * Return: how many were written: all, or the lowest @max of more.
+ */
+unsigned int rtl9602c_gpon_aes_list(const unsigned long *ports, u16 *list,
+				    unsigned int max)
+{
+	unsigned int port, n = 0;
+
+	for_each_set_bit(port, ports, RTL9602C_GPON_NUM_PORTID) {
+		if (n == max)
+			break;
+		list[n++] = port;
+	}
+	return n;
 }
 
 #if IS_ENABLED(CONFIG_PON_RTL9602C_KUNIT_TEST)
