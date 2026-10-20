@@ -7,10 +7,10 @@
 # release is pinned, and the image's build makes its own toolchain from source.
 # br2-external/toolchain/fetch reads this file (br2-external/README.rst,
 # "The toolchain of a release").
-TAG=
+TAG=toolchain-2026.10.20-0748
 TARBALL=open-dfp-34x-2c-toolchain.tar.gz
-TARBALL_SIZE=
-TARBALL_SHA256=
-SOURCES=
-SOURCES_SIZE=
-SOURCES_SHA256=
+TARBALL_SIZE=77628904
+TARBALL_SHA256=c9307ac2e0f6a839eebf5ace3db5fd768fbc93dc76c23135fa0699a64c6ebc79
+SOURCES=open-dfp-34x-2c-toolchain-2026.10.20-0748-sources.tar
+SOURCES_SIZE=290703360
+SOURCES_SHA256=efda9ab1d266b605ea484c90c251ff4633d8e9a555c78d130269034758c9d1dd
