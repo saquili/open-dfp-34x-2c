@@ -45,9 +45,9 @@ Building and installing
         the loader's countdown and prompt, a bank that does not come up, a
         lost password, the way back to the shipped firmware.
     ``toolchain.rst``
-        The cross toolchain: compiling for the core, what a program must not
-        do, checking one with the instruction-set gate, and running the test
-        programs.
+        The cross toolchain: the release it comes from, compiling for the
+        core, what a program must not do, checking one with the
+        instruction-set gate, and running the test programs.
 
 Developing the kernel
     ``kernel-series.rst``

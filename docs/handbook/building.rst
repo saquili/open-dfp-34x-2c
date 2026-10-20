@@ -11,8 +11,10 @@ toolchain is described in ``toolchain.rst``, the flash layout in
 ``boot-contract.rst``, and the bench commands that write the flash in
 ``flashing.rst``; this page uses all three. The build system and its external
 tree are described in ``buildroot/README.rst`` and ``br2-external/README.rst``,
-and the decision that the programs share one C library, cut to what they use,
-in ``docs/adr/0008-target-executables-share-one-cut-c-library.rst``.
+the decision that the programs share one C library, cut to what they use, in
+``docs/adr/0008-target-executables-share-one-cut-c-library.rst``, and the one
+that the images are built with a pinned release of the toolchain in
+``docs/adr/0020-images-are-built-with-a-pinned-toolchain-release.rst``.
 
 What the build makes
 ====================
@@ -27,9 +29,9 @@ What the build makes
      - What it is
      - Size and budget
    * - ``k0.uImage``
-     - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``, as
-       the legacy U-Boot image that the boot loader takes for bank 0: MIPS, Linux,
-       kernel, LZMA, load address ``0x80100000``.
+     - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``,
+       as the legacy U-Boot image that the boot loader takes for bank 0: MIPS,
+       Linux, kernel, LZMA, load address ``0x80100000``.
      - About 1.7 MB (see "Sizes and budgets").
    * - ``r0.squashfs``
      - The root filesystem for bank 0: a SquashFS image (xz, 64 KiB blocks,
@@ -134,8 +136,9 @@ then, in the container::
 
 The packages are those of ``br2-external/README.rst`` and the two the kernel
 needs for its configuration tools (``bison`` and ``flex``). The build needs
-``umask 022``, 9 GB of disk for an output directory, and network access to the
-hosts that serve the sources, which Buildroot checks against the hashes it carries.
+``umask 022``, 9 GB of disk for an output directory, and network access to
+the hosts that serve the sources, which Buildroot checks against the hashes it
+carries, and to GitHub, for the toolchain's release.
 
 Building
 ========
@@ -146,19 +149,42 @@ Building
 
 fetches the pinned Buildroot release and applies the carried patches (``make
 buildroot``), archives the committed ``linux/`` tree
-(``tools/kernel-archive``), configures ``odi_dfp_34x_2c3_defconfig`` in
-``build/image``, builds, and then judges the result (``make image-check``). With
-the sources in the download directory, a build from a fresh clone takes about
-eight minutes on 12 CPUs. The first build downloads the sources of the packages
-of the defconfig besides the toolchain's (``br2-external/README.rst``); each is
-checked against the hash that the build system carries, and a file that does not
-match is refused. The programs of this tree (``omcid``, ``onu-utils``,
-``pppoed``, ``dhcp6d``, ``pond``, ``netifd``) are built from the working tree,
-not downloaded. ``make``
-makes the cross toolchain first, with shared libraries only, then the kernel
-with it, then the programs of the image, and the host tools the images need
-(``mksquashfs``, ``mkimage``, the LZMA compressor; ``mksquashfs`` brings
-``cmake`` with it, which takes a minute and a half to build).
+(``tools/kernel-archive``), takes the cross toolchain of the release that
+``br2-external/toolchain/PIN`` names (below), configures
+``odi_dfp_34x_2c3_defconfig`` in ``build/image`` with that toolchain, builds,
+and then judges the result (``make image-check``). The first build downloads
+the toolchain's tarball and the sources of the packages of the defconfig;
+each is checked against the size and SHA-256 that the pin gives or the hash
+that the build system carries, and a file that does not match is refused. The
+programs of this tree (``omcid``, ``onu-utils``, ``pppoed``, ``dhcp6d``,
+``pond``, ``netifd``) are built from the working tree, not downloaded.
+``make`` builds the kernel with the toolchain, then the programs of the image,
+and the host tools the images need (``mksquashfs``, ``mkimage``, the LZMA
+compressor; ``mksquashfs`` brings ``cmake`` with it, which takes a minute and
+a half to build).
+
+The toolchain
+-------------
+
+The toolchain is released on its own, and the repository pins the release
+it builds the images with (ADR 0020). ``make`` fetches the release's tarball
+into the download directory, refuses it unless its size and SHA-256 are the
+pinned ones, and unpacks it into ``build/toolchain-release``, once: a later
+build finds it there and needs neither the tarball nor the network.
+``br2-external/README.rst``, "The toolchain of a release", says what the
+release holds, how the build takes it, and how a new one is made and pinned.
+
+``make TOOLCHAIN=source`` builds the toolchain from source instead, first, as
+the board's defconfig says, with shared libraries only; so does ``make`` when
+the pin names no release. An output directory is built with one toolchain:
+``.toolchain`` in it records which, and a build with another stops;
+``make clean``, or another ``IMAGE_OUT``, starts afresh.
+
+The release is fetched from the GitHub repository of the checkout's remote
+``origin``, at its public download address. The releases of a private
+repository need a token that may read the repository: with ``GH_TOKEN`` or
+``GITHUB_TOKEN`` set, the files are fetched through GitHub's API with it. The
+workflows give the build their job's own token.
 
 These variables can be set on the command line or in the environment:
 
@@ -166,8 +192,20 @@ These variables can be set on the command line or in the environment:
     The output directory (default ``build/image``). Two builds in two
     directories give the same images (see "Reproducibility").
 ``BR2_DL_DIR``, ``BUILDROOT_DL``
-    Where the sources and the build system's tarball are kept (default
-    ``build/dl``).
+    Where the sources, the toolchain's files and the build system's tarball
+    are kept (default ``build/dl``).
+``TOOLCHAIN``
+    ``release``, the default: the toolchain of the release that the pin
+    names. ``source``: a toolchain the build makes from source.
+``TOOLCHAIN_RELEASE_OUT``
+    Where the release's toolchain is unpacked (default
+    ``build/toolchain-release``), as ``<tag>/open-dfp-34x-2c-toolchain``.
+``GH_TOKEN``, ``GITHUB_TOKEN``
+    A token with which the release's files are fetched through GitHub's API,
+    which a private repository needs.
+``TOOLCHAIN_REPOSITORY``
+    The GitHub repository whose release the pin names, as ``owner/name``,
+    when it is not the one of the remote ``origin``.
 ``IMAGE_ENFORCE``
     The images that must fit their partition for the build to pass (default
     ``k0 r0``; empty, the sizes are reported and fail nothing).
@@ -175,9 +213,28 @@ These variables can be set on the command line or in the environment:
     A directory of the files of one bench, laid over the root filesystem image
     (below).
 
-``make sdk`` builds the cross toolchain of ``toolchain_defconfig`` as a
-relocatable tarball in ``build/toolchain/images``; ``toolchain.rst`` describes
-how to use it.
+``make sdk`` builds the cross toolchain of ``toolchain_defconfig`` as the
+relocatable tarball that a release carries,
+``build/toolchain/images/open-dfp-34x-2c-toolchain.tar.gz``; ``toolchain.rst``
+describes how to use it.
+
+How long a build takes
+----------------------
+
+On 2026-10-20, on a host with 18 CPUs (M):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 60 40
+
+   * - Build
+     - Time
+   * - ``make sdk``, the toolchain alone
+     - 284 s
+   * - ``make``, with the toolchain of a release
+     - 262 s
+   * - ``make TOOLCHAIN=source``, with a toolchain of its own
+     - 461 s
 
 What ``make`` judges
 --------------------
@@ -456,8 +513,8 @@ Known limitations
 Files of one bench
 ------------------
 
-An image that a bench uses needs its ssh key and perhaps its own addresses, which
-do not belong in the repository. ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` names a
+An image that a bench uses needs its ssh key and perhaps its own addresses,
+which do not belong in the repository. ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` names a
 directory whose files the post-image script lays over a copy of the root
 filesystem tree before it packs ``r0.squashfs``::
 
@@ -564,9 +621,9 @@ build takes about half a minute with eight jobs)::
     make -C linux O=$PWD/build/linux ARCH=mips CROSS_COMPILE=mips-linux-gnu- olddefconfig
     make -C linux O=$PWD/build/linux ARCH=mips CROSS_COMPILE=mips-linux-gnu- -j8 uImage
 
-The size of the compressed image from the baseline of 1783910 bytes, with one group
-off at a time (the baseline varies by about 20 bytes between two builds, because
-the banner holds the build time and host):
+The size of the compressed image from the baseline of 1783910 bytes, with one
+group off at a time (the baseline varies by about 20 bytes between two builds,
+because the banner holds the build time and host):
 
 .. list-table::
    :header-rows: 1
@@ -662,13 +719,14 @@ Reproducibility
 
 ``BR2_REPRODUCIBLE`` is on: the build writes no time of its own. The kernel
 builds as ``buildroot@buildroot`` at the time the build system's release was
-made, ``mkimage`` writes the same time into the image header, and the post-image
-script gives it to ``mksquashfs`` for every file.
-Two builds from clean, each from a fresh clone of the repository in a container
-of the pinned image, in directories whose paths are 21 and 60 characters long,
-gave the same ``k0.uImage``, ``r0.squashfs`` and ``SHA256SUMS``, byte for byte,
-and the same root filesystem tree: 138 entries with the same modes, sizes,
-SHA-256 digests and link targets. The comparison is::
+made, ``mkimage`` writes the same time into the image header, and the
+post-image script gives it to ``mksquashfs`` for every file. Two builds from
+clean, each with a toolchain of its own, from a fresh clone of the repository
+in a container of the pinned image, in directories whose paths are 21 and 60
+characters long, gave the same ``k0.uImage``, ``r0.squashfs`` and
+``SHA256SUMS``, byte for byte, and the same root filesystem tree: 138 entries
+with the same modes, sizes, SHA-256 digests and link targets. The comparison
+is::
 
     cmp build/image-a/images/k0.uImage build/image-b/images/k0.uImage
     cmp build/image-a/images/r0.squashfs build/image-b/images/r0.squashfs
@@ -676,11 +734,24 @@ SHA-256 digests and link targets. The comparison is::
     br2-external/tests/image/tree-digest build/image-b/target > b.txt
     diff a.txt b.txt
 
-The ``image`` workflow makes it (``.github/workflows/README.rst``). The host
-directory of a build (``build/image/host``) is not compared: the programs that
-run on the build machine record the directory they were built in, as
-``br2-external/README.rst`` says of the toolchain, and none of them is in an
-image.
+Two builds in different output directories with the same unpacked toolchain
+of a release are identical in the same way. The ``image`` workflow compares
+two such builds in two directories of one runner, and the ``release``
+workflow two on two runners (``.github/workflows/README.rst``).
+
+An image built with the toolchain of a release and one built with its own
+toolchain (``TOOLCHAIN=source``) differ only in the kernel's vDSO, in its
+debugging strings, which hold the path of the compiler's include directory,
+and so of the toolchain. On 2026-10-20 the two kernels differed in those
+strings alone, and the two root filesystem trees in nothing but ``ldd``, which
+the toolchain then installed for the target and ``toolchain_defconfig`` now
+leaves out (M). As the kernel holds the path of a release's toolchain, two
+builds with it that are compared take it from the same path (I).
+
+The host directory of a build (``build/image/host``) is not compared: the
+programs that run on the build machine record the directory they were built
+in, as ``br2-external/README.rst`` says of the toolchain, and none of them is
+in an image.
 
 The licence information
 =======================
@@ -708,9 +779,19 @@ build, into ``build/image/legal-info``:
     build wrote them (``pond/web/licences.ts``); the image carries the same file
     beside the panel, ``/usr/share/pond/www/licenses.txt``. This is why the
     command wants a built image.
+``toolchain/``
+    With the toolchain of a release, that release's sources and licences of
+    everything in the toolchain, gcc, binutils, uClibc-ng and the rest, as
+    the one archive ``open-dfp-34x-2c-toolchain-<version>-sources.tar``,
+    taken from the download directory or from the release and checked against
+    the pin (``br2-external/README.rst``, "The toolchain of a release"). The
+    image holds the toolchain's C library, so a release of the firmware hands
+    them on as well. A build with a toolchain of its own collects the
+    toolchain's packages with the rest, and has no such directory.
 
-A build from scratch collects 383 MB, nearly all of it sources. Buildroot's own
-source is not saved; its release is the one pinned in ``buildroot/VERSION``.
+A build with a toolchain of its own collected 383 MB, nearly all of it
+sources. Buildroot's own source is not saved; its release is the one pinned in
+``buildroot/VERSION``.
 
 Putting the images on the board
 ===============================
@@ -762,11 +843,12 @@ a one-shot trial")::
     make flash IMAGE=build/image/images/k0.uImage TARGET=kernel ARGS=--arm
 
 The markers of a good boot on the console are the loader's lines for the image
-(``Image Type: MIPS Linux Kernel Image (lzma compressed)``, ``Load Address:
-80100000``), ``Starting kernel ...``, the kernel's banner ``Linux version 6.18.48``,
+(``Image Type: MIPS Linux Kernel Image (lzma compressed)``,
+``Load Address: 80100000``), ``Starting kernel ...``, the kernel's banner
+``Linux version 6.18.48``,
 ``VFS: Mounted root (squashfs filesystem) readonly on device 31:5.``, and last
-the lines of the boot script, ending with ``open-dfp-34x-2c: ready``. What
-to check then, over ssh with the key above or on the console, after a login as
+the lines of the boot script, ending with ``open-dfp-34x-2c: ready``. What to
+check then, over ssh with the key above or on the console, after a login as
 root::
 
     uname -r                 # 6.18.48
