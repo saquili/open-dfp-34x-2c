@@ -30,8 +30,8 @@ Each change is a commit of this repository, whose message gives the reason
 and how it was measured:
 
 * ucode, udebug and the shell helpers of the protocols are left out: the stick
-  runs no ucode, udebug's buffers need atomic operations that the stick's
-  processor lacks, and its protocols are programs in C.
+  runs no ucode, has no udebug daemon to read udebug's ring buffers, and its
+  protocols are programs in C.
 * It takes the network as it finds it at start: a device keeps its state, and a
   VLAN device or a bridge that exists already is adopted, so that a restart of
   the daemon does not cut the management VLAN off.
