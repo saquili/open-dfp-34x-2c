@@ -7,7 +7,15 @@
  * it, and the live figures show the result at the next poll.
  */
 
-import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  mutationOptions,
+  type QueryClient,
+  type QueryKey,
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { ApiError, lines, OfflineError, request } from "./client";
 import type {
   Banks,
@@ -114,30 +122,75 @@ export function useIdentity() {
   return useQuery(identityQuery);
 }
 
-/** A change of one of pond's writable values, then a fresh read of what it touches. */
-function useChange(id: string, refresh: string[][]) {
-  const qc = useQueryClient();
-  return useMutation({
+/*
+ * What each change makes stale: the reads the panel does again once pond has
+ * taken it, and no others. The data path's settings are part of the live
+ * figures, so every change of them refreshes those, its trial with them. A
+ * connection or a network adds or takes away interfaces, addresses and
+ * VLANs, which the switch's network and bridge show, and a connection or a
+ * network removed takes its devices' leases along. A new management pair is
+ * a trial and an address beside the old one, with a certificate of its own.
+ * An update, a start of the other bank and the way back change what the
+ * banks hold and what starts next. A restart changes nothing the panel
+ * reads that the stick's coming back does not show by itself.
+ */
+export const REFRESH = {
+  session: [["live"], ["leases"], ["switch"]],
+  ipoe: [["live"], ["leases"], ["switch"]],
+  lan: [["live"], ["leases"], ["switch"]],
+  /* CONFIRM=1 keeps the changes on trial, REVERT=1 takes back all of them. */
+  changes: [["live"], ["sfp_lane"], ["mgmt"], ["leases"], ["switch"]],
+  fixed: [["live"]],
+  forward: [["live"]],
+  dmz: [["live"]],
+  rule: [["live"]],
+  fw: [["live"]],
+  sfp_lane: [["sfp_lane"], ["live"]],
+  mgmt: [["mgmt"], ["live"], ["switch"], ["tls"]],
+  hostname: [["live"]],
+  identity: [["identity"], ["live"]],
+  upload: [["firmware"], ["banks"]],
+  try: [["firmware"], ["banks"]],
+  return: [["firmware"], ["banks"]],
+  restart: [],
+} as const satisfies Record<string, readonly QueryKey[]>;
+
+export type Change = keyof typeof REFRESH;
+
+/*
+ * Read again what @change made stale: the reads on screen at once, the
+ * others when they are shown. A change is done when pond has taken it, not
+ * when the reads are back, so that a slow read does not hold its form.
+ */
+export function refresh(qc: QueryClient, change: Change) {
+  return Promise.all(
+    REFRESH[change].map((queryKey) => qc.invalidateQueries({ queryKey: [...queryKey] })),
+  );
+}
+
+/** A change of pond's writable value @id: KEY=VALUE lines, then a fresh read of what it touches. */
+export function changeOptions(qc: QueryClient, id: Change) {
+  return mutationOptions({
+    mutationKey: ["set", id],
     mutationFn: (values: Record<string, string | undefined>) =>
       request<{ id: string; ok: boolean }>(`/api/set/${id}`, lines(values)),
-    onSuccess: () => {
-      for (const key of refresh) qc.invalidateQueries({ queryKey: key });
-    },
+    onSuccess: () => void refresh(qc, id),
   });
 }
 
+const useChange = (id: Change) => useMutation(changeOptions(useQueryClient(), id));
+
 /* A session, a connection or a network removed takes its networks' devices with it. */
-export const useSessionChange = () => useChange("session", [["live"], ["leases"]]);
+export const useSessionChange = () => useChange("session");
 /** CONFIRM=1 keeps the changes on trial, REVERT=1 takes them all back. */
-export const useChanges = () =>
-  useChange("changes", [["live"], ["sfp_lane"], ["mgmt"], ["leases"]]);
-export const useIpoeChange = () => useChange("ipoe", [["live"], ["leases"]]);
-export const useLanChange = () => useChange("lan", [["live"], ["leases"]]);
-export const useFixedChange = () => useChange("fixed", [["live"]]);
-export const useForwardChange = () => useChange("forward", [["live"]]);
-export const useDmzChange = () => useChange("dmz", [["live"]]);
-export const useRuleChange = () => useChange("rule", [["live"]]);
-export const useFwChange = () => useChange("fw", [["live"]]);
+export const useChanges = () => useChange("changes");
+export const useIpoeChange = () => useChange("ipoe");
+export const useLanChange = () => useChange("lan");
+export const useFixedChange = () => useChange("fixed");
+export const useForwardChange = () => useChange("forward");
+export const useDmzChange = () => useChange("dmz");
+export const useRuleChange = () => useChange("rule");
+export const useFwChange = () => useChange("fw");
 
 /* The SFP lane and the management address: read often while a change waits. */
 const waiting = (q: { state: { data?: { trial?: unknown; pending?: unknown } } }) =>
@@ -157,14 +210,20 @@ export const useMgmt = () =>
     refetchInterval: waiting,
     retry: false,
   });
-export const useLaneChange = () => useChange("sfp_lane", [["sfp_lane"], ["live"]]);
-export const useMgmtChange = () => useChange("mgmt", [["mgmt"]]);
-export const useHostnameChange = () => useChange("hostname", [["live"]]);
-export const useIdentityChange = () => useChange("identity", [["identity"], ["live"]]);
+export const useLaneChange = () => useChange("sfp_lane");
+export const useMgmtChange = () => useChange("mgmt");
+export const useHostnameChange = () => useChange("hostname");
+export const useIdentityChange = () => useChange("identity");
 
-export function useRestart() {
-  return useMutation({ mutationFn: () => request<{ ok: boolean }>("/api/system/restart", {}) });
+export function restartOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["system", "restart"],
+    mutationFn: () => request<{ ok: boolean }>("/api/system/restart", {}),
+    onSuccess: () => void refresh(qc, "restart"),
+  });
 }
+
+export const useRestart = () => useMutation(restartOptions(useQueryClient()));
 
 /* The banks: read often while an upload runs, rarely otherwise. */
 export const firmwareQuery = queryOptions({
@@ -189,24 +248,32 @@ const PASSWORD_HEADER = "X-Pond-Password";
 const passwordHeader = (secret: string) => ({ [PASSWORD_HEADER]: encodeURIComponent(secret) });
 
 /** Start a bank once, the other one without @bank: pond arms it and restarts. */
-export function useTryBank() {
-  return useMutation({
+export function tryOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["firmware", "try"],
     mutationFn: ({ bank, secret }: { bank?: number; secret: string }) =>
       request<{ ok: boolean }>(
         "/api/firmware/try",
         bank === undefined ? "" : String(bank),
         passwordHeader(secret),
       ),
+    onSuccess: () => void refresh(qc, "try"),
   });
 }
 
+export const useTryBank = () => useMutation(tryOptions(useQueryClient()));
+
 /** Go back to the shipped firmware of @bank for good: pond keeps it and restarts. */
-export function useReturnBank() {
-  return useMutation({
+export function returnOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["firmware", "return"],
     mutationFn: ({ bank, secret }: { bank: number; secret: string }) =>
       request<{ ok: boolean }>("/api/firmware/return", String(bank), passwordHeader(secret)),
+    onSuccess: () => void refresh(qc, "return"),
   });
 }
+
+export const useReturnBank = () => useMutation(returnOptions(useQueryClient()));
 
 /*
  * A copy of the whole flash, as a file the browser saves. It needs root's

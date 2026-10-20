@@ -31,6 +31,7 @@ import { useSignOut } from "../api/auth";
 import { ApiError, request } from "../api/client";
 import {
   downloadFlash,
+  refresh,
   uploadFirmware,
   useBanks,
   useClock,
@@ -372,7 +373,7 @@ function Updates() {
         setPhase("failed");
       }
     } finally {
-      qc.invalidateQueries({ queryKey: ["firmware"] });
+      void refresh(qc, "upload");
       if (input.current) input.current.value = "";
     }
     if (ok && startAfter && target !== null) tryBank.mutate({ bank: target, secret: password });
