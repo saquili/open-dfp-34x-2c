@@ -426,12 +426,14 @@ int rtl9602c_pon_queue_add(struct rtl9602c_pon *p, unsigned int tcont,
 			   unsigned int queue);
 int rtl9602c_pon_queue_del(struct rtl9602c_pon *p, unsigned int tcont,
 			   unsigned int queue);
+int rtl9602c_pon_tcont_clear(struct rtl9602c_pon *p, unsigned int tcont);
 void rtl9602c_ponq_stream_queue_set(struct rtl9602c_pon *p, unsigned int sid,
 				    unsigned int queue);
 int rtl9602c_gem_setup(struct rtl9602c_pon *p);
 void rtl9602c_gem_teardown(struct rtl9602c_pon *p);
 void rtl9602c_gem_restore(struct rtl9602c_pon *p);
 void rtl9602c_gem_tcont_ready(struct rtl9602c_pon *p, u32 tcont);
+void rtl9602c_gem_tcont_gone(struct rtl9602c_pon *p, u32 tcont);
 int rtl9602c_gpon_tod_set(struct rtl9602c_pon *p, u32 superframe,
 			  const struct timespec64 *tstamp,
 			  struct netlink_ext_ack *extack);

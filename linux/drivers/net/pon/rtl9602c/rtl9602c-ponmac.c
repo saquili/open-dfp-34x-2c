@@ -357,6 +357,42 @@ int rtl9602c_pon_queue_del(struct rtl9602c_pon *p, unsigned int tcont,
 	return 0;
 }
 
+/**
+ * rtl9602c_pon_tcont_clear() - detach every queue of a T-CONT
+ * @p: the switch
+ * @tcont: the T-CONT, 0 to 15
+ *
+ * rtl9602c_pon_queue_del() for each queue in the T-CONT's map, the lowest
+ * first, so that the T-CONT is switched off with its last queue. The first
+ * queue whose drain does not complete ends it, and that queue and the ones
+ * after it stay: whether a drain completes is taken to depend on the state of
+ * the GPON MAC, not on the queue (see rtl9602c_pon_drain()), so each of them
+ * would be likely to take the whole wait again. A T-CONT left on with an
+ * empty map, as a failed attach leaves one, is switched off. Called only with
+ * the block's gate open.
+ *
+ * Return: 0, or -ETIMEDOUT when a drain does not complete.
+ */
+int rtl9602c_pon_tcont_clear(struct rtl9602c_pon *p, unsigned int tcont)
+{
+	unsigned long qmap;
+	unsigned int q;
+	int err;
+
+	if (WARN_ON_ONCE(tcont >= RTL9602C_GPON_DEFAULT_TCONT_IDX))
+		return -EINVAL;
+
+	qmap = rtl9602c_pon_r(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont));
+	for_each_set_bit(q, &qmap, 32) {
+		err = rtl9602c_pon_queue_del(p, tcont, q);
+		if (err)
+			return err;
+	}
+	if (!qmap)
+		rtl9602c_pon_rmw(p, RTL9602C_PONSCH_TCONT_EN, BIT(tcont), 0);
+	return 0;
+}
+
 /*
  * Build the packet buffer. Each half keeps frames in pages, in its on-chip
  * SRAM first and then in its DRAM region; the driver sets the halves up for

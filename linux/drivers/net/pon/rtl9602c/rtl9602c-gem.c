@@ -632,6 +632,43 @@ void rtl9602c_gem_tcont_ready(struct rtl9602c_pon *p, u32 tcont)
 	}
 }
 
+/**
+ * rtl9602c_gem_tcont_gone() - stop the upstream of the GEM ports on a T-CONT
+ * @p: the switch
+ * @tcont: the PON class's T-CONT whose Alloc-ID has just been unbound
+ *
+ * Called when the Alloc-ID of @tcont is unbound: the OLT took it back with
+ * Assign_Alloc-ID, management mapped it to another T-CONT, or the ONU gave
+ * back its ONU-ID and the Alloc-IDs with it. The T-CONT is granted nothing
+ * from then on, so the stream of every upstream GEM port on @tcont is
+ * parked, as before the Alloc-ID came, and logged as "upstream parked"; then
+ * every queue of the T-CONT is detached, which switches the T-CONT off
+ * (rtl9602c_pon_tcont_clear()). rtl9602c_gem_tcont_ready() starts the ports
+ * again when an Alloc-ID is bound to @tcont. Nothing is done before the PON
+ * MAC is built.
+ *
+ * Context: gpon_lock held.
+ */
+void rtl9602c_gem_tcont_gone(struct rtl9602c_pon *p, u32 tcont)
+{
+	unsigned int f;
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	if (!p->ponmac_up || tcont >= RTL9602C_GEM_NUM_TCONT)
+		return;
+
+	for_each_set_bit(f, p->gem_flows, RTL9602C_PON_NUM_SID) {
+		if (p->gem_cfg[f].tcont != tcont ||
+		    !(p->gem_cfg[f].direction & IFLA_GEM_DIR_UPSTREAM))
+			continue;
+		rtl9602c_gem_park(p, f);
+		pr_info("<GEM> port %u: upstream parked, T-CONT %u lost its Alloc-ID\n",
+			p->gem_cfg[f].port_id, tcont);
+	}
+	rtl9602c_pon_tcont_clear(p, rtl9602c_gem_tcont(tcont));
+}
+
 /*
  * Straight to the conduit, on its queue for the PON port, which names the
  * port the frame leaves by. The conduit writes the flow from the frame's

@@ -1694,8 +1694,9 @@ static bool rtl9602c_gpon_alloc_mapped(struct rtl9602c_pon *p, u16 alloc)
  * names: the one that holds it already, else the lowest that is free, so that
  * upstream traffic flows before the mappings come, or without them. Bindings
  * that change are cleared before any is written, so that no Alloc-ID sits in
- * two entries; the GEM ports of each T-CONT that gains an Alloc-ID then get
- * their upstream (rtl9602c_gem_tcont_ready()). The driver keeps its own
+ * two entries, and the GEM ports of each T-CONT that loses its Alloc-ID stop
+ * their upstream (rtl9602c_gem_tcont_gone()); those of each T-CONT that gains
+ * one then get theirs (rtl9602c_gem_tcont_ready()). The driver keeps its own
  * record of what each T-CONT holds, since the table keeps its entries through
  * a reset and so tells what was written, not what the OLT still assigns.
  */
@@ -1745,6 +1746,7 @@ static void rtl9602c_gpon_tcont_sync(struct rtl9602c_pon *p)
 				     RTL9602C_GPON_TBL_CMD_OP_CLEAR, t, 0);
 		p->gpon_tcont_used &= ~BIT(t);
 		pr_debug("<GPON> Alloc-ID %u out of T-CONT %u\n", have, t);
+		rtl9602c_gem_tcont_gone(p, n);
 	}
 
 	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
@@ -1853,19 +1855,24 @@ out:
 
 /*
  * Unbind what the OLT assigned after the ONU-ID: the Alloc-IDs in T-CONTs 0 to
- * 15, and the OMCC.
+ * 15, after which the GEM ports of each T-CONT that held one stop their
+ * upstream (rtl9602c_gem_tcont_gone()), and the OMCC.
  */
 static void rtl9602c_gpon_o5_teardown(struct rtl9602c_pon *p)
 {
+	unsigned long used = p->gpon_tcont_used;
 	unsigned int i;
 
 	for (i = 0; i < RTL9602C_GPON_DEFAULT_TCONT_IDX; i++)
-		if (p->gpon_tcont_used & BIT(i))
+		if (used & BIT(i))
 			rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
 					     RTL9602C_ALLOCID_TBL_WDATA,
 					     RTL9602C_GPON_TBL_CMD_OP_CLEAR, i, 0);
 	p->gpon_tcont_used = 0;
 	bitmap_zero(p->gpon_assigned, RTL9602C_GPON_NUM_ALLOC);
+	for (i = 0; i < RTL9602C_GEM_NUM_TCONT; i++)
+		if (used & BIT(rtl9602c_gem_tcont(i)))
+			rtl9602c_gem_tcont_gone(p, i);
 	if (p->gpon_omcc_bound)
 		rtl9602c_gpon_omcc_unbind(p);
 }

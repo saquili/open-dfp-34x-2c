@@ -1645,7 +1645,9 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
      - The ONU-ID
      - O4, O5
      - Assigns an Alloc-ID to the ONU or takes it back, which binds or
-       unbinds it where the T-CONT mappings say; acknowledged.
+       unbinds it where the T-CONT mappings say; acknowledged. A T-CONT that
+       loses its Alloc-ID stops the upstream of its GEM ports
+       (Documentation/networking/device_drivers/pon/rtl9602c.rst).
    * - Configure_Port-ID (14)
      - The ONU-ID
      - O4, O5
