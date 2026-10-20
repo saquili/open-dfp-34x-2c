@@ -59,11 +59,12 @@ class ContentScanner:
     """Runs the content gates over one file or one commit message at a time."""
 
     def __init__(self, denylist: Optional[DenyList] = None, gates: Iterable[str] = GATES,
-                 size_cap: int = DEFAULT_SIZE_CAP) -> None:
+                 size_cap: int = DEFAULT_SIZE_CAP, rules: Iterable[Rule] = ()) -> None:
+        """``rules`` adds rules to the committed ones: the lab's (see lab.py)."""
         self.denylist = denylist
         self.gates = set(gates)
         self.size_cap = size_cap
-        self.rules = [rule for rule in ALL_RULES if rule.gate in self.gates]
+        self.rules = [rule for rule in (*ALL_RULES, *rules) if rule.gate in self.gates]
 
     # -- bytes ---------------------------------------------------------------
 

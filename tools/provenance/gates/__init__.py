@@ -5,7 +5,9 @@
 The gates enforce docs/policy/provenance.rst: a hashed deny-list over
 identifier-like tokens, plain regular expressions for forbidden words and
 unit identifiers, a binaries-and-size check, a commit-message lint and the
-one-component-per-commit rule. Everything is Python standard library.
+one-component-per-commit rule. Everything is Python standard library. The
+deny-list and the patterns of the lab's own paths are kept in the project's
+local lab and loaded from there (lab.py).
 """
 
 import sys

@@ -9,15 +9,14 @@ import os
 import sys
 import unittest
 
-from . import GATES, gitio
+from . import GATES, gitio, lab as labdir
 from .allowlist import Allowlist, AllowlistError
 from .content import DEFAULT_SIZE_CAP, ContentScanner
-from .denylist import DenyList, DenyListError
+from .denylist import DenyListError
 from .findings import Report
 from .scan import RepoScanner
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_DENYLIST = os.path.join(HERE, "denylist.sha256")
 DEFAULT_ALLOWLIST = os.path.join(HERE, "allowlist.toml")
 
 EPILOG = """\
@@ -41,8 +40,12 @@ commands:
                                 what is staged
   selftest                      run the gates' own tests
 
+the lab directory (--lab DIR, or $%s) holds the
+deny-list and the patterns of the lab-path rule; without it those two are
+skipped and every other gate runs
+
 exit status: 0 no findings, 1 findings, 2 usage or configuration error
-"""
+""" % labdir.ENV
 
 
 def _default_repo() -> str:
@@ -55,7 +58,10 @@ def _parser() -> argparse.ArgumentParser:
         description="Run the provenance gates of docs/policy/provenance.rst.",
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", help="repository to check (default: the current one)")
-    parser.add_argument("--denylist", default=DEFAULT_DENYLIST, help="hashed deny-list file")
+    parser.add_argument("--lab", metavar="DIR",
+                        help="the lab directory (default: $%s)" % labdir.ENV)
+    parser.add_argument("--denylist", metavar="FILE",
+                        help="hashed deny-list file (default: the lab directory's)")
     parser.add_argument("--allowlist", default=DEFAULT_ALLOWLIST, help="allowlist file")
     parser.add_argument("--gates", default=",".join(GATES),
                         help="comma-separated gates to run (default: all)")
@@ -103,14 +109,17 @@ def main(argv=None) -> int:
         print("unknown gates: %s" % ", ".join(sorted(unknown)), file=sys.stderr)
         return 2
     try:
-        denylist = DenyList.load(args.denylist) if "denylist" in gates else None
+        lab = labdir.load(gates, args.lab, args.denylist)
         allowlist = Allowlist.load(args.allowlist) if os.path.exists(args.allowlist) else None
-    except (DenyListError, AllowlistError, OSError) as exc:
+    except (labdir.LabError, DenyListError, AllowlistError, OSError) as exc:
         print("tools/provenance: %s" % exc, file=sys.stderr)
         return 2
+    notice = lab.notice()
+    if notice:
+        print(notice, file=sys.stderr)
 
     report = Report(allowlist)
-    content = ContentScanner(denylist, gates, args.size_cap)
+    content = ContentScanner(lab.denylist, gates, args.size_cap, lab.rules)
     try:
         if command == "tree" and args.dir:
             RepoScanner(os.path.abspath(args.dir), content, report).directory(args.dir)

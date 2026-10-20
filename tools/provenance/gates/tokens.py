@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 """Tokeniser and hashing for the deny-list gate.
 
-The same functions produce the deny-list (on the laboratory side) and check
-against it (here), so the normalisation below is part of the deny-list
-format: changing it means regenerating the list.
+The same functions make the deny-list (in the lab) and check against it, so
+the normalisation below is part of the deny-list format: changing it means
+making the list again.
 
 A token is one of:
 

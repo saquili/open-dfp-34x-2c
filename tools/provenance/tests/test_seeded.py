@@ -3,18 +3,19 @@
 """Seeded violations: every gate fails when its violation is planted.
 
 Each test starts from a fixture repository that passes every gate, plants one
-violation, and runs the command line exactly as continuous integration does.
-The deny-list here is made by the test, with a fresh identifier standing in
-for another firmware's symbol and another for a register name from
-non-public tables; test_denylist_committed.py proves the committed list
-itself.
+violation, and runs the command line as the maintainer's machine does, with
+a lab directory. The lab here is made by the test: a deny-list with a fresh
+identifier standing in for another program's symbol and another for a
+register name that is not of this project's naming, and a synthetic pattern
+of the lab's own paths. test_lab.py shows what runs without a lab.
 """
 
 from __future__ import annotations
 
 import os
 
-from .support import Repo, Seeds, TempDirTestCase, make_denylist, pairs, run_check, word
+from .support import (LAB_PATH, LAB_PATTERN, Repo, Seeds, TempDirTestCase, make_lab, pairs,
+                      run_check, word)
 
 
 class SeededViolations(TempDirTestCase):
@@ -24,9 +25,9 @@ class SeededViolations(TempDirTestCase):
         self.seeds = Seeds()
         self.symbol = self.seeds.identifier()
         self.register = self.seeds.identifier().upper()
-        self.denylist = os.path.join(self.tmp, "denylist.sha256")
-        make_denylist(self.denylist, [(self.symbol, "token", "symbol"),
-                                      (self.register, "part", "register")])
+        self.lab = make_lab(os.path.join(self.tmp, "lab"),
+                            [(self.symbol, "token", "symbol"), (self.register, "part", "register")],
+                            [LAB_PATTERN])
         self.repo = Repo(os.path.join(self.tmp, "repo"))
         self.repo.write("tools/demo/README.rst", "A demonstration tool.\n")
         self.repo.write("tools/demo/demo.c", "/* Count the frames. */\nint frames;\n")
@@ -34,7 +35,7 @@ class SeededViolations(TempDirTestCase):
                                      "Count frames, so that the gates have something to read.")
 
     def check(self, *argv: str, allowlist=None) -> tuple[int, dict]:
-        return run_check(*argv, repo=self.repo.path, denylist=self.denylist, allowlist=allowlist)
+        return run_check(*argv, repo=self.repo.path, lab=self.lab, allowlist=allowlist)
 
     def plant(self, text: str, path: str = "tools/demo/demo.c") -> tuple[int, dict]:
         """Add ``text`` to a file, commit it, and check the tree and the new commit."""
@@ -60,12 +61,12 @@ class SeededViolations(TempDirTestCase):
 
     # -- the plan's list, one by one ----------------------------------------------
 
-    def test_a_symbol_of_other_firmware(self) -> None:
+    def test_a_symbol_of_other_software(self) -> None:
         found = self.assertFails(self.plant("/* see %s() */\n" % self.symbol), "denylist", "symbol")
         self.assertEqual(found[0]["kind"], "comment")
         self.assertEqual(found[0]["path"], "tools/demo/demo.c")
 
-    def test_a_register_name_from_nonpublic_tables(self) -> None:
+    def test_a_register_name_not_of_our_naming(self) -> None:
         macro = "RTL9602C_%s_CTRL" % self.register
         found = self.assertFails(self.plant("#define %s 0x0400\n" % macro), "denylist", "register")
         self.assertEqual(found[0]["text"], macro)
@@ -149,10 +150,15 @@ class SeededViolations(TempDirTestCase):
         self.assertFails(self.plant("Its address is %s.\n" % self.seeds.mac(),
                                     "tools/demo/README.rst"), "unit-ids", "mac-address")
 
-    def test_a_laboratory_path(self) -> None:
+    def test_a_path_on_a_persons_machine(self) -> None:
         path = "/" + word("Us", "ers") + "/someone/notes"
         self.assertFails(self.plant("See %s.\n" % path, "tools/demo/README.rst"),
-                         "forbidden-words", "lab-path")
+                         "forbidden-words", "local-path")
+
+    def test_a_path_of_the_lab(self) -> None:
+        found = self.assertFails(self.plant("See %s.\n" % LAB_PATH, "tools/demo/README.rst"),
+                                 "forbidden-words", "lab-path")
+        self.assertEqual(found[0]["text"], "lab-only/n")  # what the pattern takes in
 
     # -- the allowlist ---------------------------------------------------------------
 

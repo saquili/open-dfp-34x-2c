@@ -6,6 +6,10 @@ The seeds these tests plant -- forbidden words, unit identifiers, names on a
 deny-list -- are assembled at run time from fragments or drawn at random, so
 that no file of the repository contains one and the repository passes the
 gates it tests.
+
+The lab's deny-list and path patterns are not in this repository, and no
+test reads them unless it says so: a check runs against a lab directory
+made by the test, with a list under a test salt and synthetic patterns.
 """
 
 from __future__ import annotations
@@ -20,15 +24,24 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from typing import Optional
+from typing import Iterable, Optional
+from unittest import mock
 
 from gates.content import ContentScanner
 from gates.denylist import format_denylist
+from gates.lab import DENYLIST_FILE, ENV, LAB_PATHS_FILE
 from gates.tokens import Hasher, normalize_ident
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMMITTED_DENYLIST = os.path.join(HERE, "denylist.sha256")
 COMMITTED_ALLOWLIST = os.path.join(HERE, "allowlist.toml")
+
+TEST_SALT = b"test-salt"
+# A synthetic pattern of the lab's own paths, and a path it matches.
+LAB_PATTERN = r"\blab-only/[\w.-]"
+LAB_PATH = "lab-only/notes"
+# run_check(lab=NO_LAB): no --lab option, and no lab directory in the
+# environment unless the test puts one there.
+NO_LAB = "<no lab>"
 
 AUTHOR_NAME = "Ada Tester"
 AUTHOR_EMAIL = "ada@example.org"
@@ -79,7 +92,7 @@ class Seeds:
         return bytes(self.rng.randrange(256) for _ in range(64)) + b"\0" + b"\x01\x02"
 
 
-def make_denylist(path: str, names: list[tuple[str, str, str]], salt: bytes = b"test-salt") -> None:
+def make_denylist(path: str, names: list[tuple[str, str, str]], salt: bytes = TEST_SALT) -> None:
     """Write a deny-list of ``(name, match, category)`` entries to ``path``."""
     hasher = Hasher(salt)
     entries = [(hasher(normalize_ident(name)), match, category) for name, match, category in names]
@@ -87,18 +100,32 @@ def make_denylist(path: str, names: list[tuple[str, str, str]], salt: bytes = b"
         handle.write(format_denylist(salt, entries, ["a deny-list made by a test"]))
 
 
-_EMPTY_DENYLIST: list[str] = []
+def make_lab(directory: str, names: list[tuple[str, str, str]] = (),
+             patterns: Iterable[str] = (), salt: bytes = TEST_SALT) -> str:
+    """Make a lab directory: a deny-list of ``names`` and the path ``patterns``."""
+    os.makedirs(directory, exist_ok=True)
+    make_denylist(os.path.join(directory, DENYLIST_FILE), list(names), salt)
+    with open(os.path.join(directory, LAB_PATHS_FILE), "w", encoding="utf-8") as handle:
+        handle.write("# patterns made by a test\n")
+        handle.writelines(pattern + "\n" for pattern in patterns)
+    return directory
+
+
+_EMPTY_LAB: list[str] = []
+
+
+def empty_lab() -> str:
+    """A lab with an empty list and no patterns, so that no test reads the real one."""
+    if not _EMPTY_LAB:
+        tmp = tempfile.mkdtemp()
+        atexit.register(shutil.rmtree, tmp, ignore_errors=True)
+        _EMPTY_LAB.append(make_lab(os.path.join(tmp, "lab")))
+    return _EMPTY_LAB[0]
 
 
 def empty_denylist() -> str:
-    """A deny-list without entries, so that a test does not depend on the committed one."""
-    if not _EMPTY_DENYLIST:
-        tmp = tempfile.mkdtemp()
-        atexit.register(shutil.rmtree, tmp, ignore_errors=True)
-        path = os.path.join(tmp, "empty.sha256")
-        make_denylist(path, [])
-        _EMPTY_DENYLIST.append(path)
-    return _EMPTY_DENYLIST[0]
+    """The empty lab's deny-list."""
+    return os.path.join(empty_lab(), DENYLIST_FILE)
 
 
 def git_env() -> dict[str, str]:
@@ -184,16 +211,30 @@ class Repo:
 
 
 def run_check(*argv: str, repo: Optional[str] = None, denylist: Optional[str] = None,
-              allowlist: Optional[str] = None) -> tuple[int, dict]:
-    """Run tools/provenance/check in-process; return its exit status and JSON report."""
+              lab: Optional[str] = None, allowlist: Optional[str] = None,
+              environ: Optional[dict[str, str]] = None) -> tuple[int, dict]:
+    """Run tools/provenance/check in-process; return its exit status and JSON report.
+
+    ``lab`` is the lab directory (default: an empty one; NO_LAB for none).
+    The lab variable of the environment is cleared for the run, and
+    ``environ`` adds variables to it.
+    """
     from gates import cli  # imported here: the rule tests need no command line
 
-    args = ["--format", "json", "--denylist", denylist or empty_denylist(),
-            "--allowlist", allowlist or os.devnull]
+    args = ["--format", "json", "--allowlist", allowlist or os.devnull]
+    if lab is None:
+        lab = empty_lab()
+    if lab is not NO_LAB:
+        args += ["--lab", lab]
+    if denylist:
+        args += ["--denylist", denylist]
     if repo:
         args += ["--repo", repo]
+    env = {key: value for key, value in os.environ.items() if key != ENV}
+    env.update(environ or {})
     out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out), \
+            contextlib.redirect_stderr(err):
         code = cli.main(args + list(argv))
     text = out.getvalue()
     report = json.loads(text) if text.strip().startswith("{") else {"text": text}
@@ -206,9 +247,9 @@ def pairs(report: dict) -> set[tuple[str, str]]:
     return {(f["gate"], f["rule"]) for f in report.get("findings", [])}
 
 
-def scan(text: str, path: str = "notes.txt", denylist=None) -> set[tuple[str, str]]:
-    """(gate, rule) pairs the text gates find in one text."""
-    scanner = ContentScanner(denylist)
+def scan(text: str, path: str = "notes.txt", denylist=None, rules=()) -> set[tuple[str, str]]:
+    """(gate, rule) pairs the text gates find in one text (``rules``: the lab's)."""
+    scanner = ContentScanner(denylist, rules=rules)
     return {(f.gate, f.rule) for f in scanner.scan_text(path, text)}
 
 

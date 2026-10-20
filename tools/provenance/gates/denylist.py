@@ -2,6 +2,10 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 """The hashed deny-list: file format, loading and lookup.
 
+The list is kept in the project's local lab, not in this repository; lab.py
+says where the gates find it. This module and its tests are all that live
+here.
+
 The file is plain text. Comment lines start with ``#``. The directives are::
 
     format rtl9601d-provenance-denylist 1
@@ -37,14 +41,14 @@ MATCHES = (MATCH_TOKEN, MATCH_PART)
 
 # What each category stands for, as printed in a report.
 CATEGORIES = {
-    "symbol": "a function or data symbol of other firmware",
-    "source-file": "a source-file name of other firmware",
-    "module": "a module, library or program name of other firmware",
-    "address": "a code address inside other firmware",
-    "me-table": "a name from another implementation's managed-entity tables",
-    "register": "a register name from non-public tables",
-    "field": "a register-field name from non-public tables",
-    "internal": "an internal laboratory name",
+    "symbol": "a function or data symbol of other software",
+    "source-file": "a source-file name of other software",
+    "module": "a module, library or program name of other software",
+    "address": "a code address inside other software",
+    "me-table": "a managed-entity name of another implementation",
+    "register": "a register name that is not of this project's naming",
+    "field": "a register-field name that is not of this project's naming",
+    "internal": "an internal name of the lab",
     "test": "a test entry",
 }
 
@@ -57,7 +61,7 @@ _HEX64 = re.compile(r"[0-9a-f]{64}")
 def canary(salt: bytes) -> str:
     """The test token every generated list carries, derived from its salt.
 
-    It names nothing. The self-test seeds it to prove that the committed list,
+    It names nothing. The self-test seeds it to prove that the lab's list,
     its salt and the committed tokeniser agree end to end.
     """
     return "denylist_canary_" + hashlib.sha256(b"canary:" + salt).hexdigest()[:16]

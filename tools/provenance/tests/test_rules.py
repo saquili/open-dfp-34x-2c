@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import unittest
 
-from .support import Seeds, scan, word
+from gates.rules import lab_path_rule
+
+from .support import LAB_PATH, LAB_PATTERN, Seeds, scan, word
 
 NARRATIVE = word("ven", "dor")
 KIT = word("S", "DK")
@@ -97,19 +99,26 @@ class ForbiddenWords(unittest.TestCase):
         self.quiet("0x8012345 has seven digits; 0x801234567 has nine")
 
     def test_issue_references(self) -> None:
-        for text in (word("see ", "#", "203"), word("(", "#", "145)"), word("(", "#", "194/", "#202)"),
-                     word("G", "H-12")):
+        for text in (word("see ", "#", "1234"), word("(", "#", "4321)"),
+                     word("(", "#", "1111/", "#2222)"), word("G", "H-12")):
             self.fires(text, "issue-reference")
         self.quiet('fill="#000000"; color: #333333; &#123; https://example.org/page#12')
         self.quiet("Issue a CCTL operation; the driver issues 3 reads.")
         self.quiet("\tmov r0, #1\n\tadd sp, sp,#16\n", "entry.S")
 
-    def test_lab_paths(self) -> None:
+    def test_local_paths(self) -> None:
         for text in ("/" + word("Us", "ers/someone"), word("/ho", "me/someone/git/tree"),
-                     word("~/", "git/tree"),
-                     "/" + word("private/", "tmp/x"), "/" + word("Vol", "umes/Lab")):
-            self.fires(text, "lab-path")
+                     word("~/", "git/tree"), "/" + word("private/", "tmp/x"),
+                     "/" + word("Vol", "umes/Data")):
+            self.fires(text, "local-path")
         self.quiet("the overlay installs /home/ftp and /root")
+
+    def test_lab_paths_come_from_the_lab(self) -> None:
+        rules = (lab_path_rule([LAB_PATTERN, r"(?i:\bscratch-notes\b)"]),)
+        for text in ("see %s" % LAB_PATH, "kept in Scratch-Notes.txt"):
+            self.assertIn(("forbidden-words", "lab-path"), scan(text, rules=rules), text)
+            self.quiet(text)  # without the lab's patterns, no rule knows them
+        self.assertEqual(scan("a lab-only setting", rules=rules), set())
 
     def test_internal_references(self) -> None:
         self.fires(word("the sibling ", "repo"), "internal-reference")

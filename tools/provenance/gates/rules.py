@@ -4,7 +4,8 @@
 
 These patterns are generic words and shapes, so they may live in the
 repository (docs/policy/provenance.rst, "Gates"). Names of particular parties
-never appear here: those are hashed into the deny-list.
+never appear here: those are hashed into the deny-list. Nor do the lab's own
+paths: the lab-path rule is built from patterns kept in the lab (lab.py).
 
 Every rule has an id (used in reports and in the allowlist), a pattern and,
 where the shape alone is not enough, a check that looks at the match and
@@ -24,7 +25,7 @@ import ipaddress
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from . import GATE_FORBIDDEN, GATE_UNIT_IDS
 from .lexer import CODE
@@ -195,11 +196,11 @@ FORBIDDEN_RULES = (
     _rule(GATE_FORBIDDEN, "issue-reference",
           r"(?<![\w&/#\"'=:.])#\d{1,5}(?![\w-])|\bGH-\d+\b",
           "a reference to an issue of a private tracker", check=_issue),
-    _rule(GATE_FORBIDDEN, "lab-path",
+    _rule(GATE_FORBIDDEN, "local-path",
           r"/Users/[A-Za-z0-9._-]+"
           r"|/home/[A-Za-z0-9._-]+/(?:git|src|work|projects?|code|dev|Documents|Downloads|Desktop)\b"
           r"|/Volumes/[A-Za-z0-9._-]+|/private/(?:tmp|var)/|~/git/",
-          "a laboratory path"),
+          "a path on a person's own machine"),
     _rule(GATE_FORBIDDEN, "internal-reference",
           r"\bsibling[ \t]+(?:repo\w*|session|project|checkout)\b|\blab[ \t]+session\b",
           "a reference to the laboratory's working context", re.I),
@@ -430,3 +431,13 @@ UNIT_ID_RULES = (
 )
 
 ALL_RULES = FORBIDDEN_RULES + UNIT_ID_RULES
+
+
+def lab_path_rule(patterns: Sequence[str]) -> Rule:
+    """The lab-path rule, made from the patterns of the lab's own paths.
+
+    The patterns are kept in the lab (lab.py), never here. They are joined
+    into one alternation, in their order.
+    """
+    return _rule(GATE_FORBIDDEN, "lab-path", "|".join("(?:%s)" % p for p in patterns),
+                 "a path of the lab's own")

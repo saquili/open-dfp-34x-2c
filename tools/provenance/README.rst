@@ -10,9 +10,10 @@ hashed deny-list, forbidden words, unit identifiers, binaries and size, a
 commit-message lint and the one-component-per-commit rule. They need Python
 3.11 or later and nothing outside its standard library.
 
-This repository holds only hashes and generic patterns. The plaintext name
-lists, the generator of ``denylist.sha256`` and the plaintext audit stay on
-the laboratory side.
+This repository holds the gates' code, their tests and generic patterns
+only. The deny-list and the patterns of the lab's own paths are kept in the
+project's local lab and read from there on the maintainer's machine (see
+`The lab directory`_); continuous integration runs every other gate.
 
 Running
 =======
@@ -30,16 +31,43 @@ Running
 
 Options come before the command: ``--repo DIR`` (default: the current
 repository), ``--gates g1,g2`` (default: all), ``--size-cap BYTES``,
-``--denylist FILE``, ``--allowlist FILE``, ``--format json`` and ``-v``,
-which also lists what the allowlist let through and which entries matched
-nothing. The exit status is 0 without findings, 1 with findings and 2 for a
-usage or configuration error.
+``--lab DIR`` (default: ``$OPEN_DFP_34X_2C_PROVENANCE_LAB``),
+``--denylist FILE`` (default: the lab directory's), ``--allowlist FILE``,
+``--format json`` and ``-v``, which also lists what the allowlist let
+through and which entries matched nothing. The exit status is 0 without
+findings, 1 with findings and 2 for a usage or configuration error.
 
 To check each message as it is written, install the command as a
 ``commit-msg`` hook::
 
     printf '#!/bin/sh\nexec tools/provenance/check message "$1"\n' \
         > .git/hooks/commit-msg && chmod +x .git/hooks/commit-msg
+
+The lab directory
+-----------------
+
+The deny-list and the patterns of the lab-path rule are kept in the
+project's local lab, never in this repository. The gates read them from the
+directory that the environment variable ``OPEN_DFP_34X_2C_PROVENANCE_LAB``
+names, or ``--lab DIR``:
+
+``denylist.sha256``
+    The hashed deny-list of the ``denylist`` gate (see `The gates`_).
+``lab-paths``
+    One Python regular expression per line, matched case-sensitively; blank
+    lines and lines that start with ``#`` are left out, and so is the white
+    space around a pattern. The patterns are joined into one alternation, in
+    their order, so a pattern that needs a flag uses a scoped one such as
+    ``(?i:...)``.
+
+With the directory, every gate runs. The maintainer sets the variable and
+runs ``make check`` (or ``check all``) before every push. Without it -- as in
+continuous integration -- the deny-list gate and the lab-path rule are
+skipped, the command says so in one line on stderr, and every other gate
+runs as before. A directory that is named but missing, or that lacks one of
+its two files, is a configuration error (exit status 2), so that a mistyped
+name cannot skip a gate in silence. ``--denylist FILE`` reads another list
+in place of the lab's.
 
 What each command reads
 -----------------------
@@ -80,25 +108,24 @@ Every file and message is split into tokens:
   kernel-segment address is written without its ``0x``.
 
 Each token is hashed -- SHA-256 over the list's salt followed by the token --
-and looked up in ``denylist.sha256``. An entry of kind ``token`` matches a
-whole token; an entry of kind ``part`` also matches any run of whole
-``_``-separated components inside an identifier, so that a name embedded in
-a longer macro name is found too. The report says which category of name was
-hit -- ``symbol``, ``source-file``, ``module``, ``address``, ``me-table``,
+and looked up in the lab's ``denylist.sha256`` (its format is described in
+``gates/denylist.py``). An entry of kind ``token`` matches a whole token; an
+entry of kind ``part`` also matches any run of whole ``_``-separated
+components inside an identifier, so that a name embedded in a longer macro
+name is found too. The report says which category of name was hit --
+``symbol``, ``source-file``, ``module``, ``address``, ``me-table``,
 ``register``, ``field`` or ``internal`` -- and never the name.
 
-The list is generated on the laboratory side from the non-public name tables
-the policy excludes. Tokens that also occur in the pristine upstream kernel,
-in the vocabularies of the public standards the project uses, or in a
-dictionary are left out, so that ordinary words and kernel identifiers cannot
-trip the gate; the laboratory's plaintext audit still sees them. Before a new
-list is written, every token already in this repository is looked up in it,
-and the generator refuses to write a list this repository would fail. Never
-edit the list by hand.
+The list is made in the lab. Tokens that also occur in the pristine upstream
+kernel, in the vocabularies of the public standards the project uses, or in
+a dictionary are left out, so that ordinary words and kernel identifiers
+cannot trip the gate. Before a new list is written, every token already in
+this repository is looked up in it, and the generator refuses to write a
+list this repository would fail. Never edit the list by hand.
 
 The one entry of category ``test`` is a canary derived from the salt
 (``gates.denylist.canary``). It names nothing; the self-test plants it to
-prove that the committed list, its salt and the committed tokeniser agree.
+prove that the lab's list, its salt and the committed tokeniser agree.
 
 ``forbidden-words``
 -------------------
@@ -147,9 +174,12 @@ exceptions that depend on where a word appears belong in the allowlist.
    * - ``issue-reference``
      - a hash sign, or ``GH-``, followed by a number
      - colours, HTML entities, URL fragments, assembler immediates
+   * - ``local-path``
+     - home-directory, volume and temporary paths of a person's own machine
+     -
    * - ``lab-path``
-     - home-directory, volume and temporary paths, and the laboratory's own
-       directory and file names
+     - the lab's own directory and file names, by the patterns of the lab
+       directory; skipped without it
      -
    * - ``internal-reference``
      - the laboratory's working context
@@ -198,9 +228,10 @@ exceptions that depend on where a word appears belong in the allowlist.
 Examples use the documentation ranges: 192.0.2.0/24, 198.51.100.0/24 and
 203.0.113.0/24; 2001:db8::/32; MAC addresses 00:00:5e:00:53:00 to
 00:00:5e:00:53:ff; host names under example.com, .example or .test. A host
-name the rules cannot tell from a public one -- the laboratory's own domain,
-say -- belongs in the deny-list, category ``internal``. A standards clause that looks like an address is cited
-with its standard's name ("G.984.3 9.2.3.1") or the word "clause".
+name the rules cannot tell from a public one -- the lab's own domain, say --
+belongs in the deny-list, category ``internal``. A standards clause that
+looks like an address is cited with its standard's name ("G.984.3 9.2.3.1")
+or the word "clause".
 
 ``binaries``
 ------------
@@ -285,5 +316,9 @@ passes, and every exception of a rule has a test that keeps it quiet. The
 seeds -- forbidden words, unit identifiers, deny-listed names -- are
 assembled at run time from fragments or drawn at random, so that no file of
 this repository contains one and the repository passes its own gates.
-Deny-list tests use a list made by the test; the committed list is proven
-with its canary.
+The tests never read the lab's files: they make a lab directory of their
+own, with a small list under a test salt and a synthetic path pattern, and
+show what runs with it and without it. Only when
+``OPEN_DFP_34X_2C_PROVENANCE_LAB`` names the lab directory does the
+self-test also load the lab's files and prove the lab's list with its
+canary; elsewhere those three tests are skipped.

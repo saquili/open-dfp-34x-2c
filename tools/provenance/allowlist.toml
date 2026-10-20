@@ -32,12 +32,13 @@ contain, pointing to the policy; it has to name that vocabulary to do so.
 [[allow]]
 gate = "forbidden-words"
 rules = ["re-tool", "narrative", "dev-kit", "board-package", "nonpublic-material",
-         "source-collection", "lab-path"]
+         "source-collection", "local-path", "lab-path"]
 paths = ["tools/provenance/gates/rules.py", "tools/provenance/README.rst"]
 reason = """
 The gate's own rule definitions and their documentation: the patterns, the
 vocabulary exceptions and the explanation of each rule spell out the words
-the rules refuse.
+the rules refuse. Earlier versions of the rules held the lab's paths too,
+which are kept in the lab now; they remain in the history.
 """
 
 [[allow]]
