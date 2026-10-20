@@ -4738,6 +4738,7 @@ void rtl9602c_l34_fini(struct rtl9602c_priv *p)
 	p->l34_up = false;
 	for (i = 0; i < ARRAY_SIZE(p->l34_nh_mac); i++)
 		rtl9602c_l34_nh_l2_set(p, i, NULL, 0);
+	memset(p->l34_netif_v6, 0, sizeof(p->l34_netif_v6));
 	rtl9602c_rmw(p, RTL9602C_L3_GLOBAL_CTRL, RTL9602C_L3_GLOBAL_CTRL_EN, 0);
 	rtl9602c_l34_tables_reset(p, &done, &busy);
 	rtl9602c_nat_clear(p);
@@ -5807,6 +5808,96 @@ queue:
 	return NOTIFY_DONE;
 }
 
+/*
+ * An on-link IPv6 route of a local network: through no gateway, on a device
+ * over a switch port other than the PON port, which is the WAN side of a
+ * stick with one uplink.
+ */
+static bool rtl9602c_l34_route6_lan(const struct rtl9602c_l34_route6 *r)
+{
+	return r->used && !r->flags && ipv6_addr_any(&r->gw) && r->ifindex > 0 &&
+	       r->port >= 0 && r->port != RTL9602C_PORT_PON;
+}
+
+/*
+ * The L3-interface rows of the local networks' IPv6 side. The engine takes a
+ * frame only on an interface row, matched by its destination MAC and VLAN,
+ * and the row has no IPv6 address of its own: the IPv6 side of an interface
+ * is the on-link route row that names it. So a device that has an on-link
+ * IPv6 route of a local network gets its row whether or not it has an IPv4
+ * address, written with its first IPv4 address or none, and the row is
+ * marked, so that losing the last IPv4 address keeps it. A row that no such
+ * route holds any more is cleared unless an IPv4 address holds it. The IPv4
+ * routes are committed again when a row comes or goes, since a directly
+ * attached route names it. Context: RTNL and flow_lock held.
+ */
+static void rtl9602c_l34_netif6_sync(struct rtl9602c_priv *p)
+{
+	bool hold[ARRAY_SIZE(p->l34_netif_ifindex)] = {};
+	const struct in_ifaddr *ifa;
+	struct in_device *in_dev;
+	struct net_device *dev;
+	bool changed = false;
+	unsigned int i, j;
+	int row;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_route6); i++) {
+		const struct rtl9602c_l34_route6 *r = &p->l34_route6[i];
+
+		if (!rtl9602c_l34_route6_lan(r))
+			continue;
+		row = rtl9602c_l34_netif_row(p, r->ifindex);
+		if (row >= 0) {
+			hold[row] = true;
+			continue;
+		}
+		dev = __dev_get_by_index(&init_net, r->ifindex);
+		if (!dev)
+			continue;
+		for (j = 0; j < ARRAY_SIZE(p->l34_netif_ifindex); j++)
+			if (!p->l34_netif_ifindex[j])
+				break;
+		if (j == ARRAY_SIZE(p->l34_netif_ifindex)) {
+			pr_warn_once("<l3> no L3 interface row left for %s; its IPv6 hosts will not be routed in hardware\n",
+				     dev->name);
+			continue;
+		}
+		in_dev = __in_dev_get_rtnl(dev);
+		ifa = in_dev ? rtnl_dereference(in_dev->ifa_list) : NULL;
+		if (rtl9602c_l34_netif_set(p, j, dev->dev_addr,
+					   is_vlan_dev(dev) ? vlan_dev_vlan_id(dev) : 0,
+					   ifa ? ifa->ifa_address : 0, dev->mtu)) {
+			pr_warn("<l3> l3if[%u] for %s did not take\n", j, dev->name);
+			continue;
+		}
+		p->l34_netif_ifindex[j] = r->ifindex;
+		hold[j] = true;
+		changed = true;
+		pr_debug("<l3> %s has an on-link IPv6 route of a local network, l3if[%u]\n",
+			 dev->name, j);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_netif_ifindex); i++) {
+		if (p->l34_netif_v6[i] == hold[i])
+			continue;
+		p->l34_netif_v6[i] = hold[i];
+		if (hold[i])
+			continue;
+		dev = __dev_get_by_index(&init_net, p->l34_netif_ifindex[i]);
+		in_dev = dev ? __in_dev_get_rtnl(dev) : NULL;
+		if (in_dev && rtnl_dereference(in_dev->ifa_list))
+			continue;
+		rtl9602c_l34_netif_clear(p, i);
+		p->l34_netif_ifindex[i] = 0;
+		changed = true;
+		pr_debug("<l3> l3if[%u] cleared, no IPv6 route of a local network holds it\n",
+			 i);
+	}
+
+	if (changed)
+		rtl9602c_l34_route_commit(p);
+}
+
 /* Record @ev in the IPv6 shadow, keyed by destination and prefix, and commit. */
 static void rtl9602c_l34_route6_set(struct rtl9602c_priv *p,
 				    const struct rtl9602c_l34_route6 *ev,
@@ -5841,6 +5932,7 @@ static void rtl9602c_l34_route6_set(struct rtl9602c_priv *p,
 	*free = *ev;
 	free->used = true;
 commit:
+	rtl9602c_l34_netif6_sync(p);
 	rtl9602c_l34_route6_commit(p);
 }
 
@@ -6293,7 +6385,9 @@ static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
  * an earlier address, and becomes an external address with the uplink's next
  * hop (rtl9602c_l34_uplink_nh()), where a translated source is looked up. An
  * address removed gives its external-address row back, and rewrites the
- * interface row with one that remains, or clears it.
+ * interface row with one that remains, or without an address while an on-link
+ * IPv6 route of a local network holds it (rtl9602c_l34_netif6_sync()), or
+ * clears it.
  * A later change of the MAC address or the MTU is written by
  * rtl9602c_l34_netdev_event().
  */
@@ -6354,6 +6448,17 @@ static int rtl9602c_l34_inetaddr_event(struct notifier_block *nb,
 			pr_debug("<l3> %s lost %pI4, l3if[%d] now %pI4\n",
 				 dev->name, &ifa->ifa_address, row,
 				 &keep->ifa_address);
+			goto out;
+		}
+
+		/* An on-link IPv6 route of a local network keeps the row. */
+		if (p->l34_netif_v6[row]) {
+			rtl9602c_l34_netif_set(p, row, dev->dev_addr,
+					       is_vlan_dev(dev) ?
+					       vlan_dev_vlan_id(dev) : 0,
+					       0, dev->mtu);
+			pr_debug("<l3> %s lost %pI4, l3if[%d] kept for IPv6\n",
+				 dev->name, &ifa->ifa_address, row);
 			goto out;
 		}
 
@@ -8253,9 +8358,10 @@ static void rtl9602c_l34_q_drain(struct rtl9602c_priv *p)
 /*
  * The netdevice notifier: a device that holds an L3-interface row has the row
  * written again when its MAC address or its MTU changes, with its first IPv4
- * address, so that the engine rewrites routed frames with the device's
- * current MAC address and keeps to its current MTU. A user port whose address
- * changes has its own-address entry moved with it.
+ * address, or none for a row an IPv6 route holds, so that the engine rewrites
+ * routed frames with the device's current MAC address and keeps to its
+ * current MTU. A user port whose address changes has its own-address entry
+ * moved with it.
  */
 static int rtl9602c_l34_netdev_event(struct notifier_block *nb,
 				     unsigned long event, void *ptr)
@@ -8289,17 +8395,18 @@ static int rtl9602c_l34_netdev_event(struct notifier_block *nb,
 
 	in_dev = __in_dev_get_rtnl(dev);
 	ifa = in_dev ? rtnl_dereference(in_dev->ifa_list) : NULL;
-	if (!ifa)
-		return NOTIFY_DONE;
 
 	mutex_lock(&p->flow_lock);
 	for (i = 0; i < ARRAY_SIZE(p->l34_netif_ifindex); i++) {
 		if (p->l34_netif_ifindex[i] != dev->ifindex)
 			continue;
+		/* A row without an IPv4 address is held for IPv6. */
+		if (!ifa && !p->l34_netif_v6[i])
+			continue;
 		if (rtl9602c_l34_netif_set(p, i, dev->dev_addr,
 					   is_vlan_dev(dev) ?
 					   vlan_dev_vlan_id(dev) : 0,
-					   ifa->ifa_address, dev->mtu))
+					   ifa ? ifa->ifa_address : 0, dev->mtu))
 			pr_warn("<l3> l3if[%u] for %s did not take its new %s\n",
 				i, dev->name,
 				event == NETDEV_CHANGEMTU ? "MTU" : "address");

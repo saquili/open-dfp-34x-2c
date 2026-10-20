@@ -2224,10 +2224,12 @@ The address notifier
        where netfilter's translated source will be looked up; a second address
        replaces the first in the row. ``DOWN`` gives back the address's
        external-address row, then rewrites the interface row with an address
-       that remains, or clears it. Then the route table is committed again,
-       since a directly attached route names the row. A netdevice notifier
-       writes the row again, with the device's first address, when its MAC
-       address or its MTU changes (``NETDEV_CHANGEADDR``, ``NETDEV_CHANGEMTU``).
+       that remains, or without one while an on-link IPv6 route of a local
+       network holds the row (see "IPv6 routes"), or clears it. Then the
+       route table is committed again, since a directly attached route names
+       the row. A netdevice notifier writes the row again, with the device's
+       first address, or none in a row held for IPv6, when its MAC address or
+       its MTU changes (``NETDEV_CHANGEADDR``, ``NETDEV_CHANGEMTU``).
      - T, I, M
      - A routing test, and the route rows following ``ip route``: ``ip address
        add`` and ``ip address del`` change the ``l3nat`` L3-interface row of the
@@ -2430,7 +2432,8 @@ warm restart.
        IPv6 default route.
    * - ``l34_netif_ifindex[16]``
      - The netdev of each L3-interface row, by ifindex; 0 for a free row and -1
-       for a row that a PPPoE WAN holds.
+       for a row that a PPPoE WAN holds. ``l34_netif_v6[16]`` marks the rows
+       that an on-link IPv6 route of a local network holds.
    * - ``l34_extip[8]``
      - Each external-address row's address, 0 when free.
    * - ``l34_nh_addr[16]``
@@ -2989,6 +2992,37 @@ routes. ``rtl9602c_l34_route6_set()`` records it in a shadow of 32 routes, and
      - M
      - ``ip -6 rule``, ``l3nat`` and iperf3 through the host behind the stick,
        on the kernel before the change and after it.
+
+A local network with IPv6 alone
+-------------------------------
+
+The engine takes a frame only on an L3-interface row, matched by its
+destination MAC and VLAN, and the address notifier writes a row for an IPv4
+address. So a local network with IPv6 alone gets its row from its on-link
+route, a route through no gateway on a device over a switch port other than
+the PON port: at every IPv6 route event, ``rtl9602c_l34_netif6_sync()`` writes
+a row, without an IPv4 address, for each device that has such a route and no
+row, and marks every row such a route holds (``l34_netif_v6``). Losing the
+last IPv4 address then keeps the row, written without an address, and a row
+that no such route holds any more is cleared unless an IPv4 address holds it.
+The IPv4 routes are committed again when a row comes or goes, since a
+directly attached route names the row. With the row, the frames of the
+network's hosts reach the engine, which routes them by the IPv6 route rows.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A device with an on-link IPv6 route of a local network and no IPv4
+       address has an L3-interface row, without an address, and the engine
+       routes its hosts' frames to the WAN by the IPv6 default route's row.
+     - I
+     - ``ip -6 address add`` on a VLAN device of ``sfp`` with no IPv4
+       address: the ``l3if`` row in ``l3nat``, and a host's IPv6 traffic to
+       the far side of the WAN with the CPU port's counter.
 
 Hit bitmaps, flow statistics and ageing
 =======================================

@@ -1979,6 +1979,12 @@ struct rtl9602c_priv {
 	bool l34_route6_over;
 	/** @l34_route6_warned: as @l34_route_warned, for IPv6 */
 	bool l34_route6_warned;
+	/**
+	 * @l34_netif_v6: the L3-interface rows that an on-link IPv6 route of a
+	 * local network holds, so that the device keeps its row without an
+	 * IPv4 address
+	 */
+	bool l34_netif_v6[16];
 
 	/**
 	 * @flow_lock: serialises the L3/NAT bookkeeping: rows, routes, flows
