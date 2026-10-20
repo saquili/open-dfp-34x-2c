@@ -1239,12 +1239,16 @@ unset, with the optics where they are.
        power follows the set point while the photodiode tracks the laser, and
        the loop settles within the ONU's first answers to serial-number
        requests.
-     - I
-     - Not run on the board. A mode measured through an injected
-       Change_Power_Level in O5, the ONU then taken back to O2 and an
-       Upstream_Overhead naming that mode injected: the transmitted power in O5
-       (hwmon) against the one measured before, and the OLT ranging the ONU at
-       it.
+     - M
+     - Change_Power_Level injected in O5, down, down, up and up: mode 1 at
+       838.3 uW, bias 8.85 mA, set point ``8a``; mode 2 at 415.3 uW, bias
+       10.10 mA, set point ``6a``; mode 1 at 848.4 uW, set point ``8b``; mode
+       0 at 1676.6 uW, bias 7.40 mA, set point ``ab``; about 3.0 dB and 6.1 dB
+       below mode 0, the ONU in O5 throughout (hwmon). Then, each time in O2
+       after an injected Disable_Serial_Number and its enable, an
+       Upstream_Overhead injected naming mode 1, mode 2 and the reserved
+       value: the OLT ranged the ONU to O5 at 843 uW, 408 uW and 1672 uW,
+       against the 848.4 uW and 415.3 uW measured before.
    * - That the extinction ratio stays as it is at modes 1 and 2: scaling the
        modulation with the power keeps it while the light grows linearly with
        the current above the laser's threshold, which is not verified.
@@ -1265,9 +1269,12 @@ unset, with the optics where they are.
        with it, as a restart notifier of the switch driver before the split
        into a driver of its own, ``reboot`` at mode 2 logged ``transmit power
        back at level mode 0 before the restart``, and the next kernel held the
-       modulation at 39.0 mA (``5f80``) and sent 1661 uW. I: the restore as
-       the driver's shutdown, which runs after the restart notifiers, has not
-       been run, nor has the GPON MAC's request for mode 0 below O3 and in O7.
+       modulation at 39.0 mA (``5f80``) and sent 1661 uW. The GPON MAC's
+       request for mode 0: each Disable_Serial_Number injected in O5 at mode
+       1 or 2 logged ``transmit power level mode 0 at set point ab, not
+       measured``, and TO1 in O3 after the ONU's own step to mode 1 put mode
+       0 back as well. I: the restore as the driver's shutdown, which runs
+       after the restart notifiers, has not been run.
 
 Setting a level (``gn25l95_set_power_level()``, called from the GPON MAC's
 work, ``rtl9602c_gpon_power_work()``, which the MAC queues for each request and
@@ -1280,14 +1287,14 @@ which says whether the power can be measured):
    not be put back. (I)
 3. When the power cannot be measured, give up with ``-ENODATA`` for a lower
    mode that has no set point kept, writing nothing. Purpose: no set point is
-   guessed; the optics stay where they are, and the MAC declares that. (I)
+   guessed; the optics stay where they are, and the MAC declares that. (M)
 4. Show the table and check PERSIST as the hold does, giving up with
    ``-EPERM`` when register changes would reach the EEPROM. Purpose: the
    writes stay in registers. (M)
 5. For mode 0, write the module's modulation and then its set point. (M)
 6. For a lower mode when the power cannot be measured, write the scaled
    modulation and then the set point kept for the mode. Purpose: the level the
-   last measurement found, before the ONU is ranged. (I)
+   last measurement found, before the ONU is ranged. (M)
 7. For a lower mode when it can, read the transmitted power while the optics
    are still at mode 0: the module measures the bursts, so the power read is
    that of mode 0 (no power read gives ``-ENODATA``). The target is that power
@@ -1556,12 +1563,6 @@ Assumptions the driver depends on
        1 and 2 ("Transmit power levelling").
      - The eye of the transmitted light at each mode, with an optical
        instrument.
-   * - That a set point kept from a measurement gives the mode's power again
-       when written later without measuring, before the ONU is ranged
-       ("Transmit power levelling").
-     - The transmitted power in O5 after an injected Upstream_Overhead naming
-       a mode measured earlier through Change_Power_Level, against that
-       measurement.
    * - The read-only build still exposes a writable adapter ("The read-only
        build").
      - Checking the image's configuration for ``CONFIG_I2C_CHARDEV`` settles
