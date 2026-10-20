@@ -325,4 +325,176 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 /* The batch that takes the table away, as fw_batch(). */
 size_t fw_batch_clear(char *buf, size_t cap, uint32_t seq, uint32_t *last);
 
+/*
+ * The guard of the stick's own programs, a table of its own, "inet
+ * onu_guard", in every shape of the stick, with local networks or without:
+ * the stick talks to the host over its management VLAN, and what comes in
+ * to the stick itself by any other interface is dropped, but what one of its
+ * programs takes there; and the stick forwards nothing to the management
+ * VLAN nor from it, which is no network it routes. nft would make the table
+ * of
+ *
+ *   table inet onu_guard {
+ *     chain input {
+ *       type filter hook input priority 0; policy drop;
+ *       iifname "lo" accept
+ *       iifname MGMT accept                       for each management interface
+ *       iifname DEV ip daddr ADDR accept          with an address on the host
+ *                                                  link itself
+ *       ct state established,related accept
+ *       icmp type destination-unreachable accept
+ *       icmp type time-exceeded accept
+ *       icmp type parameter-problem accept
+ *       icmpv6 type destination-unreachable accept
+ *       icmpv6 type packet-too-big accept
+ *       icmpv6 type time-exceeded accept
+ *       icmpv6 type parameter-problem accept
+ *       ct state invalid drop
+ *       iifname IF udp dport 546 accept           the sessions': the DHCPv6
+ *       iifname IF icmpv6 type nd-router-advert accept      client's answers
+ *       iifname IF udp dport 68 accept            an IPoE connection's by DHCP
+ *       iifname IF udp dport 67 accept            a link's or a network's with
+ *                                                  a DHCP server
+ *       iifname IF udp dport 547 accept           a link's with the DHCPv6
+ *       iifname IF icmpv6 type nd-router-solicit accept     server
+ *       iifname IF icmpv6 type nd-neighbor-solicit accept   each interface of
+ *       iifname IF icmpv6 type nd-neighbor-advert accept    IPv6
+ *       iifname IF icmp type echo-request accept  where its side's ping is
+ *       iifname IF icmpv6 type echo-request accept         answered
+ *     }
+ *     chain forward {
+ *       type filter hook forward priority -10; policy accept;
+ *       iifname MGMT drop                          for each management interface
+ *       oifname MGMT drop
+ *     }
+ *   }
+ *
+ * The management VLAN brings in whatever it brings: the ssh server, the
+ * status daemon and its panel, and timed's PTP listen there, and nowhere
+ * else. So does the loopback, by which the stick's programs reach each other
+ * and its own addresses. The address on the host link itself, a bench's
+ * (DATA_ADDRESS of the boot script), is a management address too: what
+ * comes in by the host link to it is taken, and nothing else by that link.
+ *
+ * From the other interfaces the stick takes what answers its own traffic,
+ * which the connection tracking knows, such as a time server's answers or a
+ * DHCP server's to a renewal of a lease. An error of ICMP is taken whether
+ * the tracking knows the flow it is about or not, as it forgets one it saw (a
+ * timeout, a full table), and the kernel matches each error to its own
+ * sockets: a path's MTU is learnt all the same (RFC 4890, 4.3.1). What the
+ * tracking finds wrong is dropped, and of what is new, only what a program of
+ * the stick takes on that interface:
+ *
+ *   - the sessions' (pppN): the answers of dhcp6d's DHCPv6 client, which asks
+ *     the multicast address of the servers and is answered from another, so
+ *     that no connection ties the two, and the concentrator's router
+ *     advertisements, from which the kernel may take an address;
+ *   - an IPoE connection's (wanVID): with its address from DHCP, the DHCP
+ *     client's answers, which a relay sends from its own address;
+ *   - a link a session hands its address down by (lanVID, or sfp untagged):
+ *     the requests to udhcpd, the DHCP server of the router behind; where a
+ *     session hands its prefix down, those to dhcp6d's DHCPv6 server and the
+ *     router solicitations, which dhcp6d answers;
+ *   - a local network's (netN, or sfp untagged): with its DHCP server, the
+ *     requests to it;
+ *   - each of them that carries IPv6, a session's, an IPoE connection's or a
+ *     link's: neighbour discovery, which the kernel needs on the link and
+ *     takes only from it (a hop limit of 255);
+ *   - an echo request, where the stick answers a ping of that side: from the
+ *     operator's (the sessions and the IPoE connections), or from the host
+ *     side's networks (the local networks and the links).
+ *
+ * The rest is dropped, every server of the stick's among it. IGMP and MLD
+ * are none of the table's: omcid's multicast agent takes them, and sends its
+ * own, by packet sockets, which see a frame before netfilter does; PPP and
+ * PPPoE's discovery are no IP. The forward chain comes before the one of
+ * "inet onu" (priority 0), so that no flow to or from the management VLAN
+ * reaches that table's flowtable; what else that table does stays as it is.
+ * The guard needs no more than the connection tracking: what a rule names is
+ * an interface, a protocol, a port and a type.
+ *
+ * The interfaces are lines of a file, which onu-apply writes:
+ *
+ *   mgmt IFNAME             an interface of the management VLAN, or with a '*'
+ *                           at its end every one whose name begins so
+ *   data IFNAME ADDR        the address on the host link IFNAME itself
+ *   session IFNAME          the sessions' interfaces, "ppp*"
+ *   ipoe IFNAME [dhcp]      an IPoE connection's interface, with its address
+ *                           from DHCP
+ *   link IFNAME [dhcp] [dhcp6]
+ *                           a link a session hands its address down by, with
+ *                           the DHCP server, and its prefix, with the DHCPv6
+ *                           server
+ *   lan IFNAME [dhcp]       a local network's interface, with its DHCP server
+ *   ping in|lans            a ping answered from the operator's side, or from
+ *                           the host side's networks
+ *
+ * A guard without a management interface is none: it would keep everyone off
+ * the stick.
+ */
+
+/* The interfaces of the guard, by what the stick's programs take there. */
+enum fw_guard_kind {
+	FW_G_SESSION,
+	FW_G_IPOE,
+	FW_G_LINK,
+	FW_G_LAN,
+};
+
+/*
+ * The management interfaces: the one in use and one of a pair on trial, or
+ * a name that stands for both.
+ */
+#define FW_MGMTS_MAX 4
+/* The sessions', each IPoE connection's, a link of each, each network's. */
+#define FW_GUARD_IFS_MAX 32
+
+/**
+ * struct fw_gif - An interface of the guard.
+ * @dev: its name, or the beginning of the names
+ * @kind: %FW_G_SESSION, %FW_G_IPOE, %FW_G_LINK or %FW_G_LAN
+ * @dhcp: with a DHCP server (a link's, a network's) or client (an IPoE
+ *        connection's)
+ * @dhcp6: with the DHCPv6 server (a link's)
+ */
+struct fw_gif {
+	struct fw_out dev;
+	uint8_t kind;
+	bool dhcp;
+	bool dhcp6;
+};
+
+/**
+ * struct fw_guard - What the guard is made of.
+ * @mgmt: the management interfaces, @nmgmt of them
+ * @data_if: the host link, when @data
+ * @data: the address on it, in host order; 0 for none
+ * @gif: the other interfaces whose programs take something, @ngifs of them
+ * @ping_in: a ping answered from the operator's side
+ * @ping_lans: a ping answered from the host side's networks
+ */
+struct fw_guard {
+	struct fw_out mgmt[FW_MGMTS_MAX];
+	int nmgmt;
+	char data_if[FW_IFNAMSIZ];
+	uint32_t data;
+	struct fw_gif gif[FW_GUARD_IFS_MAX];
+	int ngifs;
+	bool ping_in;
+	bool ping_lans;
+};
+
+/* An empty guard: no interface, and no ping answered. */
+void fw_guard_init(struct fw_guard *g);
+
+/* Take a line of the guard's file over @g, as fw_spec_line(). */
+int fw_guard_line(struct fw_guard *g, const char *line, char *err, size_t errcap);
+
+/*
+ * The batch that puts the guard of @g in place of the one there is, as
+ * fw_batch(); 0 as well for a guard without a management interface.
+ */
+size_t fw_guard_batch(const struct fw_guard *g, char *buf, size_t cap, uint32_t seq,
+		      uint32_t *last);
+
 #endif /* ONU_UTILS_FWMSG_H */

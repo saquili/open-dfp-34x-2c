@@ -618,14 +618,76 @@ by its whole path where procd starts it.
 
 ``onu-fw``
    puts the stick's own table of nf_tables, ``inet onu``, in place for the
-   local networks, through netlink, since the image carries no ``nft``, and
-   the firewall's rules into the switch's ACL::
+   local networks, through netlink, since the image carries no ``nft``, the
+   guard of the stick's own programs, ``inet onu_guard``, and the
+   firewall's rules into the switch's ACL::
 
       onu-fw apply FILE
       onu-fw clear
+      onu-fw guard FILE
       onu-fw acl FILE STATUS
       onu-fw acl-show FILE
       onu-fw acl-clear
+
+   The guard is a table of its own, in every shape of the stick: the stick
+   talks to the host over its management VLAN, and takes nothing that comes
+   in by another interface but what one of its programs takes there; and it
+   forwards nothing to the management VLAN nor from it (``src/fwmsg.h``
+   shows it as nft would, and says why each rule is there). Its input chain
+   drops what no rule takes. It takes whole what comes in by the loopback,
+   by the management interfaces, and by the host link to a bench's address
+   on it (``DATA_ADDRESS``); from anywhere, what answers the stick's own
+   traffic and the errors of ICMP and ICMPv6 a path's MTU is learnt by; and
+   on each other interface what its programs take there:
+
+   .. list-table::
+      :header-rows: 1
+      :widths: 20 24 56
+
+      * - Program
+        - Port or type, in
+        - Interface
+      * - ``dhcp6d``, its client
+        - UDP 546
+        - The sessions', ``pppN``, where it asks for a prefix to hand down.
+      * - the kernel
+        - router advertisements
+        - The sessions', which may give an address.
+      * - ``udhcpc``
+        - UDP 68
+        - An IPoE connection's by DHCP, ``wanVID``.
+      * - ``udhcpd``
+        - UDP 67
+        - A link a session hands its address down by (``lanVID``, or
+          ``sfp`` untagged), and a local network's with DHCP (``netN``, or
+          ``sfp``).
+      * - ``dhcp6d``, its server
+        - UDP 547, router solicitations
+        - A link a session hands its prefix down by.
+      * - the kernel
+        - neighbour discovery
+        - Each of IPv6: a session's, an IPoE connection's, a link's.
+      * - the kernel
+        - echo requests
+        - The sessions' and the IPoE connections' with ``ping in``, the
+          links and the local networks' with ``ping lans``.
+
+   The servers the stick runs, ``dropbear``, ``pond`` and ``timed``'s PTP,
+   are on none of these lines: the management VLAN alone reaches them.
+   ``syslogd`` and ``timed``'s NTP only send, and take the answers. omcid's
+   multicast agent takes IGMP and MLD by a packet socket, which sees a
+   frame before netfilter does, and ``pppoed`` speaks PPPoE and PPP, which
+   are no IP: the guard is none of theirs. The file is a line ``mgmt
+   IFNAME`` for each management interface, or ``mgmt mgmt*`` for every one
+   whose name begins so, ``data IFNAME ADDR`` for a bench's address on the
+   host link, ``session IFNAME``, ``ipoe IFNAME [dhcp]``, ``link IFNAME
+   [dhcp] [dhcp6]`` and ``lan IFNAME [dhcp]`` for the others, and ``ping
+   in`` or ``ping lans`` where a ping of that side is answered. A guard
+   without a management interface is refused, as it would keep everyone off
+   the stick. The forward chain comes before the one of ``inet onu``, whose
+   NAT, firewall and flowtable stay as they are. ``tests/test_onu_fw.sh``
+   reads the guard back with nft, and sends packets through it between
+   network namespaces.
 
    The table is the NAT the networks go out through, behind the address of
    the connection each goes out by, a flowtable that hands their TCP and UDP

@@ -19,11 +19,42 @@
 
 #include "fwmsg.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 #define TABLE "onu"
 #define FLOWTABLE "ft"
 #define FORWARD "forward"
 #define POSTROUTING "postrouting"
 #define PREROUTING "prerouting"
+
+/*
+ * The guard's table and its input chain; its forward chain comes before the
+ * one of TABLE, nft's "filter - 10".
+ */
+#define GUARD_TABLE "onu_guard"
+#define INPUT "input"
+#define GUARD_FORWARD_PRIORITY (-10)
+
+/* The ports of DHCP's server and client, and of DHCPv6's (RFC 2131, RFC 8415). */
+#define DHCP_SERVER_PORT 67
+#define DHCP_CLIENT_PORT 68
+#define DHCP6_CLIENT_PORT 546
+#define DHCP6_SERVER_PORT 547
+
+/* The types of ICMP (RFC 792) and of ICMPv6 (RFC 4443, RFC 4861) the guard names. */
+#define ICMP_DEST_UNREACH 3
+#define ICMP_ECHO_REQUEST 8
+#define ICMP_TIME_EXCEEDED 11
+#define ICMP_PARAMETER_PROBLEM 12
+#define ICMP6_DEST_UNREACH 1
+#define ICMP6_PACKET_TOO_BIG 2
+#define ICMP6_TIME_EXCEEDED 3
+#define ICMP6_PARAMETER_PROBLEM 4
+#define ICMP6_ECHO_REQUEST 128
+#define ND_ROUTER_SOLICIT 133
+#define ND_ROUTER_ADVERT 134
+#define ND_NEIGHBOR_SOLICIT 135
+#define ND_NEIGHBOR_ADVERT 136
 
 /* The priorities of the source NAT and the destination NAT, nft's "srcnat" and "dstnat". */
 #define SRCNAT_PRIORITY 100
@@ -366,9 +397,13 @@ int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 	return -1;
 }
 
-/* The batch being made, the number of its next request, and its last one. */
+/*
+ * The batch being made, of the table @table, the number of its next
+ * request, and its last one.
+ */
 struct batch {
 	struct mnl_nlmsg_batch *b;
+	const char *table;
 	uint32_t seq;
 	bool full;
 	struct nlmsghdr *tail;
@@ -586,7 +621,7 @@ static struct nlmsghdr *rule_begin(struct batch *bt, const char *chain,
 {
 	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWRULE, NLM_F_CREATE | NLM_F_APPEND);
 
-	mnl_attr_put_strz(nlh, NFTA_RULE_TABLE, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_RULE_TABLE, bt->table);
 	mnl_attr_put_strz(nlh, NFTA_RULE_CHAIN, chain);
 	*exprs = mnl_attr_nest_start(nlh, NFTA_RULE_EXPRESSIONS);
 	return nlh;
@@ -598,19 +633,20 @@ static void rule_end(struct batch *bt, struct nlmsghdr *nlh, struct nlattr *expr
 	done(bt);
 }
 
+/* A chain of @hook at @priority, of @type, whose verdict is @policy where no rule decides. */
 static void chain(struct batch *bt, const char *name, const char *type,
-		  uint32_t hook, int32_t priority)
+		  uint32_t hook, int32_t priority, uint32_t policy)
 {
 	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWCHAIN, NLM_F_CREATE);
 	struct nlattr *h;
 
-	mnl_attr_put_strz(nlh, NFTA_CHAIN_TABLE, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_CHAIN_TABLE, bt->table);
 	mnl_attr_put_strz(nlh, NFTA_CHAIN_NAME, name);
 	h = mnl_attr_nest_start(nlh, NFTA_CHAIN_HOOK);
 	mnl_attr_put_u32(nlh, NFTA_HOOK_HOOKNUM, htonl(hook));
 	mnl_attr_put_u32(nlh, NFTA_HOOK_PRIORITY, htonl((uint32_t)priority));
 	mnl_attr_nest_end(nlh, h);
-	mnl_attr_put_u32(nlh, NFTA_CHAIN_POLICY, htonl(NF_ACCEPT));
+	mnl_attr_put_u32(nlh, NFTA_CHAIN_POLICY, htonl(policy));
 	mnl_attr_put_strz(nlh, NFTA_CHAIN_TYPE, type);
 	done(bt);
 }
@@ -620,7 +656,7 @@ static void regular_chain(struct batch *bt, const char *name)
 {
 	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWCHAIN, NLM_F_CREATE);
 
-	mnl_attr_put_strz(nlh, NFTA_CHAIN_TABLE, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_CHAIN_TABLE, bt->table);
 	mnl_attr_put_strz(nlh, NFTA_CHAIN_NAME, name);
 	done(bt);
 }
@@ -630,7 +666,7 @@ static void flowtable(struct batch *bt, const struct fw_spec *s)
 	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWFLOWTABLE, NLM_F_CREATE);
 	struct nlattr *h, *devs;
 
-	mnl_attr_put_strz(nlh, NFTA_FLOWTABLE_TABLE, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_FLOWTABLE_TABLE, bt->table);
 	mnl_attr_put_strz(nlh, NFTA_FLOWTABLE_NAME, FLOWTABLE);
 	h = mnl_attr_nest_start(nlh, NFTA_FLOWTABLE_HOOK);
 	mnl_attr_put_u32(nlh, NFTA_FLOWTABLE_HOOK_NUM, htonl(NF_NETDEV_INGRESS));
@@ -650,7 +686,16 @@ static void destroy(struct batch *bt)
 {
 	struct nlmsghdr *nlh = request(bt, NFT_MSG_DESTROYTABLE, 0);
 
-	mnl_attr_put_strz(nlh, NFTA_TABLE_NAME, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_TABLE_NAME, bt->table);
+	done(bt);
+}
+
+/* The table, new. */
+static void table(struct batch *bt)
+{
+	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWTABLE, NLM_F_CREATE);
+
+	mnl_attr_put_strz(nlh, NFTA_TABLE_NAME, bt->table);
 	done(bt);
 }
 
@@ -722,10 +767,11 @@ static void flow_add(struct batch *bt, const struct fw_lan *l, uint32_t key, uin
 	rule_end(bt, nlh, exprs);
 }
 
-static void accept_answers(struct batch *bt)
+/* What answers a connection there is, accepted in @chain. */
+static void accept_answers(struct batch *bt, const char *chain)
 {
 	struct nlattr *exprs;
-	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
+	struct nlmsghdr *nlh = rule_begin(bt, chain, &exprs);
 
 	ct_state_any(nlh, NF_CT_STATE_BIT(IP_CT_ESTABLISHED) | NF_CT_STATE_BIT(IP_CT_RELATED));
 	verdict(nlh, NF_ACCEPT);
@@ -971,7 +1017,7 @@ static void port_map(struct batch *bt, const struct fw_fwd *f, uint32_t id)
 	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWSET, NLM_F_CREATE);
 	struct nlattr *desc;
 
-	mnl_attr_put_strz(nlh, NFTA_SET_TABLE, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_SET_TABLE, bt->table);
 	mnl_attr_put_strz(nlh, NFTA_SET_NAME, MAP_NAME);
 	mnl_attr_put_u32(nlh, NFTA_SET_FLAGS,
 			 htonl(NFT_SET_ANONYMOUS | NFT_SET_CONSTANT | NFT_SET_MAP));
@@ -989,7 +1035,7 @@ static void port_map(struct batch *bt, const struct fw_fwd *f, uint32_t id)
 		struct nlattr *list;
 
 		nlh = request(bt, NFT_MSG_NEWSETELEM, NLM_F_CREATE);
-		mnl_attr_put_strz(nlh, NFTA_SET_ELEM_LIST_TABLE, TABLE);
+		mnl_attr_put_strz(nlh, NFTA_SET_ELEM_LIST_TABLE, bt->table);
 		mnl_attr_put_strz(nlh, NFTA_SET_ELEM_LIST_SET, MAP_NAME);
 		mnl_attr_put_u32(nlh, NFTA_SET_ELEM_LIST_SET_ID, htonl(id));
 		list = mnl_attr_nest_start(nlh, NFTA_SET_ELEM_LIST_ELEMENTS);
@@ -1089,9 +1135,10 @@ static void dmz_rules(struct batch *bt, const struct fw_dmz *z)
 	rule_end(bt, nlh, exprs);
 }
 
-static struct batch begin(char *buf, size_t cap, uint32_t seq)
+static struct batch begin(char *buf, size_t cap, uint32_t seq, const char *table)
 {
-	struct batch bt = { .b = mnl_nlmsg_batch_start(buf, cap / 2), .seq = seq };
+	struct batch bt = { .b = mnl_nlmsg_batch_start(buf, cap / 2), .table = table,
+			    .seq = seq };
 
 	edge(&bt, NFNL_MSG_BATCH_BEGIN);
 	return bt;
@@ -1118,21 +1165,18 @@ static size_t end(struct batch *bt, uint32_t *last)
 size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		uint32_t *last)
 {
-	struct batch bt = begin(buf, cap, seq);
+	struct batch bt = begin(buf, cap, seq, TABLE);
 	bool forwards = s->nfwds || s->ndmzs;
-	struct nlmsghdr *nlh;
 
 	destroy(&bt);
-	nlh = request(&bt, NFT_MSG_NEWTABLE, NLM_F_CREATE);
-	mnl_attr_put_strz(nlh, NFTA_TABLE_NAME, TABLE);
-	done(&bt);
+	table(&bt);
 	if (s->offload)
 		flowtable(&bt, s);
-	chain(&bt, FORWARD, "filter", NF_INET_FORWARD, 0);
-	chain(&bt, POSTROUTING, "nat", NF_INET_POST_ROUTING, SRCNAT_PRIORITY);
+	chain(&bt, FORWARD, "filter", NF_INET_FORWARD, 0, NF_ACCEPT);
+	chain(&bt, POSTROUTING, "nat", NF_INET_POST_ROUTING, SRCNAT_PRIORITY, NF_ACCEPT);
 	/* Without forwards, no packet goes through a chain of them. */
 	if (forwards)
-		chain(&bt, PREROUTING, "nat", NF_INET_PRE_ROUTING, DSTNAT_PRIORITY);
+		chain(&bt, PREROUTING, "nat", NF_INET_PRE_ROUTING, DSTNAT_PRIORITY, NF_ACCEPT);
 	/* A way's chain is there before the rules that jump to it. */
 	for (int w = 0; w < FW_WAYS; w++)
 		if (way_chain(s, w))
@@ -1145,7 +1189,7 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		flow_add(&bt, &s->lan[i], NFT_META_OIFNAME, IPPROTO_TCP);
 		flow_add(&bt, &s->lan[i], NFT_META_OIFNAME, IPPROTO_UDP);
 	}
-	accept_answers(&bt);
+	accept_answers(&bt, FORWARD);
 	if (forwards)
 		accept_forwarded(&bt);
 	guards(&bt, s);
@@ -1169,8 +1213,256 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 
 size_t fw_batch_clear(char *buf, size_t cap, uint32_t seq, uint32_t *last)
 {
-	struct batch bt = begin(buf, cap, seq);
+	struct batch bt = begin(buf, cap, seq, TABLE);
 
 	destroy(&bt);
+	return end(&bt, last);
+}
+
+void fw_guard_init(struct fw_guard *g)
+{
+	memset(g, 0, sizeof(*g));
+}
+
+/* IFNAME, or the beginning of the names with a '*' at its end, into @o. */
+static bool dev_of(char *v, struct fw_out *o)
+{
+	size_t len = strlen(v);
+
+	o->prefix = len > 1 && v[len - 1] == '*';
+	if (o->prefix)
+		v[--len] = '\0';
+	if (!ifname_ok(v))
+		return false;
+	memcpy(o->ifname, v, len + 1);
+	return true;
+}
+
+/* The words after an interface of the guard: what its programs take, each once. */
+static bool takes_of(struct fw_gif *f, const char *a, const char *b)
+{
+	const char *w[2] = { a, b };
+
+	for (int i = 0; i < 2 && *w[i]; i++) {
+		if (!strcmp(w[i], "dhcp") && !f->dhcp && f->kind != FW_G_SESSION)
+			f->dhcp = true;
+		else if (!strcmp(w[i], "dhcp6") && !f->dhcp6 && f->kind == FW_G_LINK)
+			f->dhcp6 = true;
+		else
+			return false;
+	}
+	return true;
+}
+
+int fw_guard_line(struct fw_guard *g, const char *line, char *err, size_t errcap)
+{
+	static const char *const kinds[] = {
+		[FW_G_SESSION] = "session",
+		[FW_G_IPOE] = "ipoe",
+		[FW_G_LINK] = "link",
+		[FW_G_LAN] = "lan",
+	};
+	char word[16], a[64] = "", b[64] = "", c[64] = "", x[2];
+	int n;
+
+	if (!*line || *line == '#')
+		return 0;
+	n = sscanf(line, "%15s %63s %63s %63s %1s", word, a, b, c, x);
+	if (n == 2 && !strcmp(word, "mgmt")) {
+		struct fw_out m;
+
+		if (g->nmgmt == FW_MGMTS_MAX || !dev_of(a, &m)) {
+			snprintf(err, errcap, "%.40s: no management interface of the guard", line);
+			return -1;
+		}
+		g->mgmt[g->nmgmt++] = m;
+		return 0;
+	}
+	if (n == 3 && !strcmp(word, "data")) {
+		uint32_t addr;
+
+		/* One address, of a host. */
+		if (g->data || !ifname_ok(a) || !addr_of(b, &addr) || !addr) {
+			snprintf(err, errcap, "%.40s: no address of the guard", line);
+			return -1;
+		}
+		g->data = addr;
+		memcpy(g->data_if, a, strlen(a) + 1);
+		return 0;
+	}
+	if (n == 2 && !strcmp(word, "ping") && (!strcmp(a, "in") || !strcmp(a, "lans"))) {
+		if (a[0] == 'i')
+			g->ping_in = true;
+		else
+			g->ping_lans = true;
+		return 0;
+	}
+	for (size_t k = 0; n >= 2 && n <= 4 && k < ARRAY_SIZE(kinds); k++) {
+		struct fw_gif f = { .kind = (uint8_t)k };
+
+		if (strcmp(word, kinds[k]))
+			continue;
+		if (g->ngifs == FW_GUARD_IFS_MAX || !dev_of(a, &f.dev) || !takes_of(&f, b, c)) {
+			snprintf(err, errcap, "%.40s: no interface of the guard", line);
+			return -1;
+		}
+		g->gif[g->ngifs++] = f;
+		return 0;
+	}
+	snprintf(err, errcap, "%.40s: no line of the guard", line);
+	return -1;
+}
+
+/* A rule of the guard's @chain, begun: what comes in by @in, or by any interface without it. */
+static struct nlmsghdr *guard_rule(struct batch *bt, const char *chain,
+				   const struct fw_out *in, struct nlattr **exprs)
+{
+	struct nlmsghdr *nlh = rule_begin(bt, chain, exprs);
+
+	if (in)
+		ifname_out(nlh, NFT_META_IIFNAME, in);
+	return nlh;
+}
+
+/* What comes in by @in accepted, all of it. */
+static void take_all(struct batch *bt, const struct fw_out *in)
+{
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = guard_rule(bt, INPUT, in, &exprs);
+
+	verdict(nlh, NF_ACCEPT);
+	rule_end(bt, nlh, exprs);
+}
+
+/*
+ * A message of ICMP, @proto IPPROTO_ICMP, or of ICMPv6, IPPROTO_ICMPV6, of
+ * the type @type, that comes in by @in, or by any interface without it,
+ * accepted: nft's "icmp type" and "icmpv6 type", of their family each.
+ */
+static void take_icmp(struct batch *bt, const struct fw_out *in, uint8_t proto, uint8_t type)
+{
+	const uint8_t family = proto == IPPROTO_ICMP ? NFPROTO_IPV4 : NFPROTO_IPV6;
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = guard_rule(bt, INPUT, in, &exprs);
+
+	meta(nlh, NFT_META_NFPROTO);
+	cmp(nlh, NFT_CMP_EQ, &family, sizeof(family));
+	meta(nlh, NFT_META_L4PROTO);
+	cmp(nlh, NFT_CMP_EQ, &proto, sizeof(proto));
+	payload(nlh, NFT_PAYLOAD_TRANSPORT_HEADER, 0, 1);
+	cmp(nlh, NFT_CMP_EQ, &type, sizeof(type));
+	verdict(nlh, NF_ACCEPT);
+	rule_end(bt, nlh, exprs);
+}
+
+/* A datagram of UDP to the port @port that comes in by @in accepted, of either family. */
+static void take_udp(struct batch *bt, const struct fw_out *in, uint16_t port)
+{
+	static const uint8_t udp = IPPROTO_UDP;
+	uint16_t p = htons(port);
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = guard_rule(bt, INPUT, in, &exprs);
+
+	meta(nlh, NFT_META_L4PROTO);
+	cmp(nlh, NFT_CMP_EQ, &udp, sizeof(udp));
+	payload(nlh, NFT_PAYLOAD_TRANSPORT_HEADER, 2, 2);
+	cmp(nlh, NFT_CMP_EQ, &p, sizeof(p));
+	verdict(nlh, NF_ACCEPT);
+	rule_end(bt, nlh, exprs);
+}
+
+/* What comes in by the host link to the address on it, a bench's, accepted. */
+static void take_data(struct batch *bt, const struct fw_guard *g)
+{
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, INPUT, &exprs);
+
+	to_connection(nlh, g->data_if, g->data);
+	verdict(nlh, NF_ACCEPT);
+	rule_end(bt, nlh, exprs);
+}
+
+/* What the connection tracking finds wrong dropped. */
+static void drop_invalid(struct batch *bt)
+{
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, INPUT, &exprs);
+
+	ct_state_any(nlh, NF_CT_STATE_INVALID_BIT);
+	verdict(nlh, NF_DROP);
+	rule_end(bt, nlh, exprs);
+}
+
+/* What is forwarded from the management interface @m, or to it by @key, dropped. */
+static void keep_off(struct batch *bt, const struct fw_out *m, uint32_t key)
+{
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
+
+	ifname_out(nlh, key, m);
+	verdict(nlh, NF_DROP);
+	rule_end(bt, nlh, exprs);
+}
+
+/* What the stick's programs take on the interface @f, and a ping where its side's is answered. */
+static void take_gif(struct batch *bt, const struct fw_guard *g, const struct fw_gif *f)
+{
+	bool ping = f->kind == FW_G_SESSION || f->kind == FW_G_IPOE ? g->ping_in : g->ping_lans;
+
+	if (f->kind == FW_G_SESSION) {
+		take_udp(bt, &f->dev, DHCP6_CLIENT_PORT);
+		take_icmp(bt, &f->dev, IPPROTO_ICMPV6, ND_ROUTER_ADVERT);
+	}
+	if (f->dhcp)
+		take_udp(bt, &f->dev, f->kind == FW_G_IPOE ? DHCP_CLIENT_PORT : DHCP_SERVER_PORT);
+	if (f->dhcp6) {
+		take_udp(bt, &f->dev, DHCP6_SERVER_PORT);
+		take_icmp(bt, &f->dev, IPPROTO_ICMPV6, ND_ROUTER_SOLICIT);
+	}
+	/* A local network carries no IPv6 of the stick's (onu-apply). */
+	if (f->kind != FW_G_LAN) {
+		take_icmp(bt, &f->dev, IPPROTO_ICMPV6, ND_NEIGHBOR_SOLICIT);
+		take_icmp(bt, &f->dev, IPPROTO_ICMPV6, ND_NEIGHBOR_ADVERT);
+	}
+	if (ping) {
+		take_icmp(bt, &f->dev, IPPROTO_ICMP, ICMP_ECHO_REQUEST);
+		take_icmp(bt, &f->dev, IPPROTO_ICMPV6, ICMP6_ECHO_REQUEST);
+	}
+}
+
+size_t fw_guard_batch(const struct fw_guard *g, char *buf, size_t cap, uint32_t seq,
+		      uint32_t *last)
+{
+	static const uint8_t errors[] = { ICMP_DEST_UNREACH, ICMP_TIME_EXCEEDED,
+					  ICMP_PARAMETER_PROBLEM };
+	static const uint8_t errors6[] = { ICMP6_DEST_UNREACH, ICMP6_PACKET_TOO_BIG,
+					   ICMP6_TIME_EXCEEDED, ICMP6_PARAMETER_PROBLEM };
+	static const struct fw_out lo = { .ifname = "lo" };
+	struct batch bt;
+
+	if (!g->nmgmt)
+		return 0;
+	bt = begin(buf, cap, seq, GUARD_TABLE);
+	destroy(&bt);
+	table(&bt);
+	chain(&bt, INPUT, "filter", NF_INET_LOCAL_IN, 0, NF_DROP);
+	chain(&bt, FORWARD, "filter", NF_INET_FORWARD, GUARD_FORWARD_PRIORITY, NF_ACCEPT);
+	take_all(&bt, &lo);
+	for (int i = 0; i < g->nmgmt; i++)
+		take_all(&bt, &g->mgmt[i]);
+	if (g->data)
+		take_data(&bt, g);
+	accept_answers(&bt, INPUT);
+	for (size_t i = 0; i < ARRAY_SIZE(errors); i++)
+		take_icmp(&bt, NULL, IPPROTO_ICMP, errors[i]);
+	for (size_t i = 0; i < ARRAY_SIZE(errors6); i++)
+		take_icmp(&bt, NULL, IPPROTO_ICMPV6, errors6[i]);
+	drop_invalid(&bt);
+	for (int i = 0; i < g->ngifs; i++)
+		take_gif(&bt, g, &g->gif[i]);
+	for (int i = 0; i < g->nmgmt; i++) {
+		keep_off(&bt, &g->mgmt[i], NFT_META_IIFNAME);
+		keep_off(&bt, &g->mgmt[i], NFT_META_OIFNAME);
+	}
 	return end(&bt, last);
 }

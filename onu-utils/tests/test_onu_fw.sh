@@ -10,8 +10,10 @@
 # flowtable itself needs the stick, and is tried there. Making the
 # interfaces needs root with CAP_NET_ADMIN, as in a container started with
 # --cap-add NET_ADMIN; without that, or without nft, the test says that it
-# skipped. Last, packets go through a table in network namespaces, sent and
-# taken by python3, without which that part says that it skipped.
+# skipped. Then packets go through a table in network namespaces, sent and
+# taken by python3, without which that part says that it skipped. Last, the
+# guard of the stick's own programs, in network namespaces of its own, read
+# back with nft and tried packet by packet.
 
 set -u
 FW=${BUILD:-$(cd "$(dirname "$0")/.." && pwd)/build}/onu-fw
@@ -39,7 +41,7 @@ cleanup() {
 	ip link del wan421 2>/dev/null
 	ip link del sfp 2>/dev/null
 	ip link del gem257 2>/dev/null
-	for ns in onudev onuinet onustick; do
+	for ns in onudev onuinet onustick onug onugmgmt onugppp onugwan onugnet onuglink; do
 		ip netns del $ns 2>/dev/null
 	done
 	rm -rf "$T"
@@ -421,6 +423,324 @@ EOF
 	$I python3 "$T/pkt.py" send 192.168.2.30 7001 allowed
 	wait
 	check '[ "$(cat "$T/d7001")" = allowed ]'
+fi
+
+# The guard, in a namespace of its own: in the test's own it would drop what
+# the container itself takes.
+echo "the guard of the stick's own programs, as nft lists it"
+G="ip netns exec onug"
+if ! ip netns add onug 2>/dev/null; then
+	echo "  skipped: it needs network namespaces"
+else
+	# The guard of the interfaces below and of the lines $1, put in place.
+	guard() {
+		{
+			echo "mgmt mgmt*"
+			echo "data sfp 192.0.2.2"
+			echo "session ppp*"
+			echo "ipoe wan420 dhcp"
+			echo "ipoe wan421"
+			echo "link lan36 dhcp dhcp6"
+			echo "lan net1 dhcp"
+			echo "lan net2"
+			printf '%b' "$1"
+		} >"$T/guard"
+		run_g "$T/guard"
+	}
+	run_g() {
+		$G "$FW" guard "$1" >/dev/null 2>"$T/err"
+		rc=$?
+		err=$(cat "$T/err")
+	}
+	gtable() {
+		$G nft list table inet onu_guard 2>/dev/null
+	}
+	ghas() {
+		gtable | sed 's/^[[:space:]]*//' | grep -qxF -- "$1"
+	}
+	# The rules of a chain of the guard, a line each.
+	gchain() {
+		$G nft list chain inet onu_guard "$1" 2>/dev/null |
+			grep -v '^table\|chain\|^[[:space:]]*}\|type filter' | sed 's/^[[:space:]]*//'
+	}
+	guard ""
+	check '[ $rc -eq 0 ] && [ -z "$err" ]'
+	check 'ghas "type filter hook input priority filter; policy drop;"'
+	check 'ghas "type filter hook forward priority filter - 10; policy accept;"'
+	# The loopback, the management VLAN and the bench's address on the host
+	# link first, whole; then the answers, the errors and the drop of what is
+	# wrong, ahead of what each interface takes.
+	cat >"$T/want" <<'EOF'
+iifname "lo" accept
+iifname "mgmt*" accept
+iifname "sfp" ip daddr 192.0.2.2 accept
+ct state established,related accept
+icmp type destination-unreachable accept
+icmp type time-exceeded accept
+icmp type parameter-problem accept
+icmpv6 type destination-unreachable accept
+icmpv6 type packet-too-big accept
+icmpv6 type time-exceeded accept
+icmpv6 type parameter-problem accept
+ct state invalid drop
+iifname "ppp*" udp dport 546 accept
+iifname "ppp*" icmpv6 type nd-router-advert accept
+iifname "ppp*" icmpv6 type nd-neighbor-solicit accept
+iifname "ppp*" icmpv6 type nd-neighbor-advert accept
+iifname "wan420" udp dport 68 accept
+iifname "wan420" icmpv6 type nd-neighbor-solicit accept
+iifname "wan420" icmpv6 type nd-neighbor-advert accept
+iifname "wan421" icmpv6 type nd-neighbor-solicit accept
+iifname "wan421" icmpv6 type nd-neighbor-advert accept
+iifname "lan36" udp dport 67 accept
+iifname "lan36" udp dport 547 accept
+iifname "lan36" icmpv6 type nd-router-solicit accept
+iifname "lan36" icmpv6 type nd-neighbor-solicit accept
+iifname "lan36" icmpv6 type nd-neighbor-advert accept
+iifname "net1" udp dport 67 accept
+EOF
+	check '[ "$(gchain input)" = "$(cat "$T/want")" ]'
+	# Nothing to or from the management VLAN is forwarded.
+	check '[ "$(gchain forward | tr "\n" ";")" = "iifname \"mgmt*\" drop;oifname \"mgmt*\" drop;" ]'
+
+	echo "a ping answered from either side, as the settings say"
+	guard "ping in\n"
+	check '[ $rc -eq 0 ] && ghas "iifname \"ppp*\" icmp type echo-request accept" &&
+		ghas "iifname \"wan421\" icmpv6 type echo-request accept" &&
+		[ "$(gtable | grep -c "echo-request")" -eq 6 ]'
+	guard "ping lans\n"
+	check '[ $rc -eq 0 ] && ghas "iifname \"lan36\" icmp type echo-request accept" &&
+		ghas "iifname \"net2\" icmpv6 type echo-request accept" &&
+		[ "$(gtable | grep -c "echo-request")" -eq 6 ]'
+
+	echo "the guard as nft itself makes it"
+	guard "ping in\nping lans\n"
+	{
+		echo "table inet ref {"
+		echo "chain input {"
+		echo "type filter hook input priority filter; policy drop;"
+		gchain input
+		echo "}"
+		echo "chain forward {"
+		echo "type filter hook forward priority filter - 10; policy accept;"
+		gchain forward
+		echo "}"
+		echo "}"
+	} >"$T/ref.nft"
+	$G nft -f "$T/ref.nft"
+	# The expressions of the rules of a chain, as the kernel gives them back.
+	gbytecode() {
+		$G nft --debug=netlink list chain inet "$1" "$2" 2>/dev/null | grep '^  \['
+	}
+	check '[ "$(gchain input | wc -l)" -eq 39 ] && [ -n "$(gbytecode ref input)" ] &&
+		[ "$(gbytecode onu_guard input)" = "$(gbytecode ref input)" ]'
+	check '[ -n "$(gbytecode ref forward)" ] &&
+		[ "$(gbytecode onu_guard forward)" = "$(gbytecode ref forward)" ]'
+	$G nft delete table inet ref
+
+	echo "what is no guard changes nothing"
+	printf 'session ppp*\n' >"$T/bad"
+	run_g "$T/bad"
+	check '[ $rc -eq 2 ] && echo "$err" | grep -q "no management interface"'
+	printf 'mgmt mgmt*\nlink lan36 dhcp7\n' >"$T/bad"
+	run_g "$T/bad"
+	check '[ $rc -eq 2 ] && echo "$err" | grep -q "no interface of the guard"'
+	run_g "$T/none"
+	check '[ $rc -eq 2 ]'
+	check 'ghas "iifname \"lan36\" icmp type echo-request accept"'
+	# A guard replaces the one there is, whole, beside the table of the networks.
+	printf 'mgmt mgmt\n' >"$T/guard"
+	run_g "$T/guard"
+	check '[ $rc -eq 0 ] && ghas "iifname \"mgmt\" accept" && ! gtable | grep -q "lan36\|mgmt\*"'
+	printf 'lan net1 192.168.1.0/24\nout ppp*\noffload off\n' >"$T/fw"
+	$G "$FW" apply "$T/fw"
+	check '[ "$($G nft list tables | sort | tr "\n" " ")" = "table inet onu table inet onu_guard " ]'
+	check 'ghas "iifname \"mgmt\" accept"'
+	ip netns del onug
+fi
+
+# Packets, by a namespace for the stick, with the guard, and one for each of
+# its sides: the management VLAN's host, the far end of a session and of an
+# IPoE connection, a device of a local network, and the router on a link a
+# session hands its address down by. The stick has a server on port 22 of
+# every address; the guard decides who reaches it.
+echo "the guard, packet by packet"
+if ! command -v python3 >/dev/null 2>&1 || ! ip netns add onug 2>/dev/null; then
+	echo "  skipped: it needs python3 and network namespaces"
+else
+	cat >"$T/g.py" <<'EOF'
+# tcp DST PORT: open, refused or timeout. hold PORT: a server of TCP on PORT of
+# every address, for a minute. echo DST: whether a ping of DST, IPv4 or IPv6,
+# has an answer. listen PORT: what one datagram to PORT brings, of either
+# family, or none. send DST PORT TEXT.
+import os, socket, struct, sys, time
+m, a = sys.argv[1], sys.argv[2:]
+fam = socket.AF_INET6 if a and ":" in a[0] else socket.AF_INET
+if m == "tcp":
+    s = socket.socket(fam)
+    s.settimeout(2)
+    try:
+        s.connect((a[0], int(a[1])))
+        print("open")
+    except ConnectionRefusedError:
+        print("refused")
+    except OSError:
+        print("timeout")
+elif m == "hold":
+    s = socket.socket(socket.AF_INET6)
+    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("::", int(a[0])))
+    s.listen(16)
+    time.sleep(60)
+elif m == "echo":
+    v6 = fam == socket.AF_INET6
+    s = socket.socket(fam, socket.SOCK_RAW, socket.IPPROTO_ICMPV6 if v6 else socket.IPPROTO_ICMP)
+    s.settimeout(2)
+    ident = os.getpid() & 0xffff
+    body = struct.pack("!BBHHH", 128 if v6 else 8, 0, 0, ident, 1) + b"onu!"
+    if not v6:
+        c = sum(struct.unpack("!6H", body))
+        c = (c >> 16) + (c & 0xffff)
+        c = ~(c + (c >> 16)) & 0xffff
+        body = struct.pack("!BBHHH", 8, 0, c, ident, 1) + b"onu!"
+    s.sendto(body, (a[0], 0))
+    end = time.time() + 2
+    while time.time() < end:
+        try:
+            d, src = s.recvfrom(1500)
+        except socket.timeout:
+            break
+        h = 0 if v6 else (d[0] & 15) * 4
+        if d[h] == (129 if v6 else 0) and struct.unpack("!H", d[h + 4:h + 6])[0] == ident:
+            print("answer")
+            sys.exit(0)
+    print("none")
+elif m == "listen":
+    u = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    u.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    u.bind(("::", int(a[0])))
+    u.settimeout(3)
+    try:
+        print(u.recvfrom(100)[0].decode())
+    except socket.timeout:
+        print("none")
+elif m == "send":
+    u = socket.socket(fam, socket.SOCK_DGRAM)
+    u.sendto(a[2].encode(), (a[0], int(a[1])))
+EOF
+	S="ip netns exec onug"
+	# The stick's interface $1, and its other end, $3, in the namespace $2.
+	pair() {
+		ip netns add "$2" && ip link add "$1" netns onug type veth peer name "$3" netns "$2" &&
+			$S ip link set "$1" up && ip netns exec "$2" ip link set "$3" up &&
+			ip netns exec "$2" ip link set lo up
+	}
+	# The program of g.py in the namespace $1, with the rest of the words.
+	in_ns() {
+		ns=$1
+		shift
+		ip netns exec "$ns" python3 "$T/g.py" "$@"
+	}
+	# What the stick's own program of g.py takes on port $1 while the
+	# namespace $2 sends it $4 to $3, or none.
+	stick_takes() {
+		$S python3 "$T/g.py" listen "$1" >"$T/took" &
+		sleep 0.5
+		in_ns "$2" send "$3" "$1" "$4"
+		wait $!
+		cat "$T/took"
+	}
+	# What the namespace $1 takes on port 5353 while $2 sends it to $3.
+	takes() {
+		in_ns "$1" listen 5353 >"$T/took" &
+		sleep 0.5
+		in_ns "$2" send "$3" 5353 sent
+		wait $!
+		cat "$T/took"
+	}
+	pair mgmt onugmgmt host0 && pair ppp0 onugppp op0 && pair wan420 onugwan op1 &&
+		pair net1 onugnet dev0 && pair lan36 onuglink rtr0 &&
+		$S ip link set lo up &&
+		$S ip addr add 198.51.100.2/30 dev mgmt &&
+		$S ip addr add 192.0.2.10/24 dev ppp0 &&
+		$S ip addr add 2001:db8:10::10/64 dev ppp0 nodad &&
+		$S ip addr add 203.0.113.10/24 dev wan420 &&
+		$S ip addr add 192.168.2.1/24 dev net1 &&
+		$S ip addr add 169.254.0.1/16 dev lan36 &&
+		$S ip addr add 2001:db8:36::1/64 dev lan36 nodad &&
+		ip netns exec onugmgmt ip addr add 198.51.100.1/30 dev host0 &&
+		ip netns exec onugmgmt ip route add default via 198.51.100.2 &&
+		ip netns exec onugppp ip addr add 192.0.2.1/24 dev op0 &&
+		ip netns exec onugppp ip addr add 2001:db8:10::1/64 dev op0 nodad &&
+		ip netns exec onugppp ip route add default via 192.0.2.10 &&
+		ip netns exec onugwan ip addr add 203.0.113.1/24 dev op1 &&
+		ip netns exec onugwan ip route add default via 203.0.113.10 &&
+		ip netns exec onugnet ip addr add 192.168.2.30/24 dev dev0 &&
+		ip netns exec onugnet ip route add default via 192.168.2.1 &&
+		ip netns exec onuglink ip addr add 169.254.7.7/16 dev rtr0 &&
+		ip netns exec onuglink ip addr add 2001:db8:36::2/64 dev rtr0 nodad &&
+		$S sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward' || exit 1
+	$S python3 "$T/g.py" hold 22 &
+	hold=$!
+	sleep 0.5
+	# Without the guard, a session's far end reaches the server by the
+	# management address, and through the stick the host's own address.
+	check '[ "$(in_ns onugppp tcp 198.51.100.2 22)" = open ]'
+	check '[ "$(takes onugmgmt onugppp 198.51.100.1)" = sent ]'
+	printf 'mgmt mgmt*\nsession ppp*\nipoe wan420 dhcp\nlink lan36 dhcp dhcp6\nlan net1 dhcp\n' \
+		>"$T/stick"
+	$S "$FW" guard "$T/stick"
+	# The server answers on the management VLAN, and nobody else, by
+	# whichever address they ask for.
+	check '[ "$(in_ns onugmgmt tcp 198.51.100.2 22)" = open ]'
+	check '[ "$(in_ns onugppp tcp 198.51.100.2 22)" = timeout ] &&
+		[ "$(in_ns onugppp tcp 192.0.2.10 22)" = timeout ] &&
+		[ "$(in_ns onugppp tcp 2001:db8:10::10 22)" = timeout ]'
+	check '[ "$(in_ns onugwan tcp 198.51.100.2 22)" = timeout ] &&
+		[ "$(in_ns onugwan tcp 203.0.113.10 22)" = timeout ]'
+	check '[ "$(in_ns onugnet tcp 198.51.100.2 22)" = timeout ] &&
+		[ "$(in_ns onugnet tcp 192.168.2.1 22)" = timeout ]'
+	check '[ "$(in_ns onuglink tcp 169.254.0.1 22)" = timeout ] &&
+		[ "$(in_ns onuglink tcp 2001:db8:36::1 22)" = timeout ]'
+	# Nothing is forwarded to the management VLAN, nor from it; between the
+	# other sides as before.
+	check '[ "$(takes onugmgmt onugppp 198.51.100.1)" = none ] &&
+		[ "$(takes onugmgmt onugnet 198.51.100.1)" = none ]'
+	check '[ "$(takes onugppp onugmgmt 192.0.2.1)" = none ]'
+	check '[ "$(takes onugppp onugnet 192.0.2.1)" = sent ]'
+	# What each program of the stick takes on its interface: the DHCP
+	# client's answers, the DHCP and DHCPv6 servers' requests, the DHCPv6
+	# client's answers; on another interface, or another port, nothing.
+	check '[ "$(stick_takes 68 onugwan 203.0.113.10 offer)" = offer ]'
+	check '[ "$(stick_takes 68 onugppp 192.0.2.10 offer)" = none ]'
+	check '[ "$(stick_takes 67 onugnet 192.168.2.1 discover)" = discover ]'
+	check '[ "$(stick_takes 547 onuglink 2001:db8:36::1 solicit)" = solicit ]'
+	check '[ "$(stick_takes 546 onugppp 2001:db8:10::10 reply)" = reply ]'
+	check '[ "$(stick_takes 5000 onuglink 169.254.0.1 other)" = none ]'
+	# The answers to the stick's own traffic come back by any side, its
+	# neighbours' of IPv6 among them.
+	check '[ "$($S python3 "$T/g.py" echo 192.0.2.1)" = answer ] &&
+		[ "$($S python3 "$T/g.py" echo 2001:db8:36::2)" = answer ] &&
+		[ "$($S python3 "$T/g.py" echo 2001:db8:10::1)" = answer ]'
+	# A ping is answered on the management VLAN, elsewhere as the settings say.
+	check '[ "$(in_ns onugmgmt echo 198.51.100.2)" = answer ]'
+	check '[ "$(in_ns onugppp echo 192.0.2.10)" = none ] && [ "$(in_ns onugnet echo 192.168.2.1)" = none ] &&
+		[ "$(in_ns onuglink echo 2001:db8:36::1)" = none ]'
+	echo "ping in" >>"$T/stick"
+	$S "$FW" guard "$T/stick"
+	check '[ "$(in_ns onugppp echo 192.0.2.10)" = answer ] &&
+		[ "$(in_ns onugppp echo 2001:db8:10::10)" = answer ] &&
+		[ "$(in_ns onugwan echo 203.0.113.10)" = answer ]'
+	check '[ "$(in_ns onugnet echo 192.168.2.1)" = none ]'
+	echo "ping lans" >>"$T/stick"
+	$S "$FW" guard "$T/stick"
+	check '[ "$(in_ns onugnet echo 192.168.2.1)" = answer ] &&
+		[ "$(in_ns onuglink echo 2001:db8:36::1)" = answer ]'
+	# A ping answered is no way to the servers.
+	check '[ "$(in_ns onugnet tcp 192.168.2.1 22)" = timeout ]'
+	kill "$hold" 2>/dev/null
+	wait
 fi
 
 echo "test_onu_fw: $checks checks, $failures failed"

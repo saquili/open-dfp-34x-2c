@@ -2,12 +2,15 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * onu-fw: the stick's own table of nf_tables, "inet onu" (fwmsg.h), which
- * onu-apply puts in place for the local networks.
+ * onu-fw: the stick's own tables of nf_tables (fwmsg.h): "inet onu", which
+ * onu-apply puts in place for the local networks, and the guard of the
+ * stick's own programs, "inet onu_guard", which it puts in place always.
  *
  *   onu-fw apply FILE   put the table that FILE describes in place of the one
  *                       there is
  *   onu-fw clear        take the table away
+ *   onu-fw guard FILE   put the guard that FILE describes in place of the one
+ *                       there is
  *   onu-fw acl FILE STATUS
  *                       put the firewall's rules that FILE describes into
  *                       the switch's ACL (fwacl.h) in place of those there
@@ -21,7 +24,8 @@
  * the one there was. When the kernel refuses the flowtable, as one whose
  * devices cannot carry flows does, the table is put in place without it, and
  * the CPU carries the flows. Exit status 0, 1 when the kernel refused the
- * table, 2 for a file or a command that is none.
+ * table, 2 for a file or a command that is none. The guard is taken whole or
+ * not at all too, with the same exit status.
  *
  * The rules go into the ACL as flower filters on the ingress of sfp and pon,
  * at the priorities ACL_PREF to ACL_PREF + ACL_PREFS - 1, which no other
@@ -60,7 +64,7 @@ static char g_buf[2 * FW_BATCH_MAX];
 
 static void print_usage(void)
 {
-	fputs("usage: onu-fw apply FILE | clear | acl FILE STATUS | acl-show FILE | acl-clear\n",
+	fputs("usage: onu-fw apply FILE | clear | guard FILE | acl FILE STATUS | acl-show FILE | acl-clear\n",
 	      stderr);
 }
 
@@ -166,6 +170,51 @@ static int apply_file(const char *path)
 	}
 	if (rc) {
 		fprintf(stderr, "onu-fw: the kernel refused the table: %s\n", strerror(-rc));
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * The guard of FILE in place of the one there is, which a guard that fails
+ * leaves: 0, 1 when the kernel refused it, 2 for a file that is none.
+ */
+static int guard_file(const char *path)
+{
+	static struct fw_guard g;
+	char line[256], err[128];
+	uint32_t last;
+	size_t len;
+	FILE *f = fopen(path, "r");
+	int rc;
+
+	if (!f) {
+		fprintf(stderr, "onu-fw: %s: %s\n", path, strerror(errno));
+		return 2;
+	}
+	fw_guard_init(&g);
+	while (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (fw_guard_line(&g, line, err, sizeof(err))) {
+			fprintf(stderr, "onu-fw: %s: %s\n", path, err);
+			fclose(f);
+			return 2;
+		}
+	}
+	fclose(f);
+	if (!g.nmgmt) {
+		fprintf(stderr, "onu-fw: %s: no management interface: the guard would keep everyone off\n",
+			path);
+		return 2;
+	}
+	len = fw_guard_batch(&g, g_buf, sizeof(g_buf), (uint32_t)time(NULL), &last);
+	if (!len) {
+		fputs("onu-fw: the guard does not fit a batch\n", stderr);
+		return 1;
+	}
+	rc = run(len, last);
+	if (rc) {
+		fprintf(stderr, "onu-fw: the kernel refused the guard: %s\n", strerror(-rc));
 		return 1;
 	}
 	return 0;
@@ -506,6 +555,8 @@ int main(int argc, char **argv)
 		return apply_file(argv[2]);
 	if (argc == 2 && !strcmp(argv[1], "clear"))
 		return clear();
+	if (argc == 3 && !strcmp(argv[1], "guard"))
+		return guard_file(argv[2]);
 	if (argc == 4 && !strcmp(argv[1], "acl"))
 		return acl_file(argv[2], argv[3]);
 	if (argc == 3 && !strcmp(argv[1], "acl-show"))

@@ -3,10 +3,12 @@
 
 /* Tests of the stick's own table of nf_tables, as a batch (fwmsg.h). */
 
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <libmnl/libmnl.h>
+#include <linux/netfilter.h>
 #include <linux/netfilter/nf_tables.h>
 #include <linux/netfilter/nfnetlink.h>
 
@@ -647,6 +649,224 @@ static void test_rule_batch(void)
 	printf("  the longest batch, with every rule: %zu bytes\n", len);
 }
 
+static void test_guard_lines(void)
+{
+	static const char *const bad[] = {
+		"mgmt",
+		"mgmt *",
+		"mgmt mgmt**",
+		"mgmt bad/name",
+		"mgmt averyverylongname",
+		"mgmt mgmt x",
+		"data sfp",
+		"data sfp 192.0.2.300",
+		"data sfp 0.0.0.0",
+		"data sfp 2001:db8::2",
+		"data sfp 192.0.2.2/30",
+		"data sfp 192.0.2.2 x",
+		"session",
+		"session ppp* dhcp",
+		"session ppp* dhcp6",
+		"ipoe wan420 dhcp6",
+		"ipoe wan420 dhcp dhcp",
+		"ipoe wan420 dhcp x",
+		"link lan36 dhcp dhcp6 x",
+		"link lan36 dhcp6 dhcp6",
+		"lan net1 dhcp6",
+		"lan averyverylongname dhcp",
+		"ping",
+		"ping out",
+		"ping in x",
+		"route sfp",
+	};
+	struct fw_guard g;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		fw_guard_init(&g);
+		CHECK(fw_guard_line(&g, bad[i], g_err, sizeof(g_err)) == -1 && *g_err);
+		CHECK(!g.nmgmt && !g.ngifs && !g.data && !g.ping_in && !g.ping_lans);
+	}
+	fw_guard_init(&g);
+	CHECK(fw_guard_line(&g, "", g_err, sizeof(g_err)) == 0);
+	CHECK(fw_guard_line(&g, "# the management VLAN", g_err, sizeof(g_err)) == 0);
+	CHECK(!fw_guard_line(&g, "mgmt mgmt*", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "data sfp 192.0.2.2", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "session ppp*", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "ipoe wan420 dhcp", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "ipoe wan421", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "link lan36 dhcp dhcp6", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "link sfp dhcp6", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "lan net1 dhcp", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "lan net2", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "ping lans", g_err, sizeof(g_err)));
+	CHECK(g.nmgmt == 1 && !strcmp(g.mgmt[0].ifname, "mgmt") && g.mgmt[0].prefix);
+	CHECK(!strcmp(g.data_if, "sfp") && g.data == 0xc0000202u);
+	CHECK(g.ngifs == 7 && !g.ping_in && g.ping_lans);
+	CHECK(g.gif[0].kind == FW_G_SESSION && !strcmp(g.gif[0].dev.ifname, "ppp") &&
+	      g.gif[0].dev.prefix && !g.gif[0].dhcp && !g.gif[0].dhcp6);
+	CHECK(g.gif[1].kind == FW_G_IPOE && !strcmp(g.gif[1].dev.ifname, "wan420") &&
+	      !g.gif[1].dev.prefix && g.gif[1].dhcp && !g.gif[1].dhcp6);
+	CHECK(g.gif[2].kind == FW_G_IPOE && !g.gif[2].dhcp);
+	CHECK(g.gif[3].kind == FW_G_LINK && g.gif[3].dhcp && g.gif[3].dhcp6);
+	CHECK(g.gif[4].kind == FW_G_LINK && !strcmp(g.gif[4].dev.ifname, "sfp") &&
+	      !g.gif[4].dhcp && g.gif[4].dhcp6);
+	CHECK(g.gif[5].kind == FW_G_LAN && g.gif[5].dhcp && g.gif[6].kind == FW_G_LAN &&
+	      !g.gif[6].dhcp);
+	/* One address on the host link. */
+	CHECK(fw_guard_line(&g, "data sfp 192.0.2.6", g_err, sizeof(g_err)) == -1 &&
+	      g.data == 0xc0000202u);
+	CHECK(!fw_guard_line(&g, "ping in", g_err, sizeof(g_err)) && g.ping_in);
+
+	/* No more management interfaces, nor others, than the stick has. */
+	fw_guard_init(&g);
+	for (int i = 0; i < FW_MGMTS_MAX; i++)
+		CHECK(!fw_guard_line(&g, "mgmt mgmt", g_err, sizeof(g_err)));
+	CHECK(fw_guard_line(&g, "mgmt mgmt", g_err, sizeof(g_err)) == -1);
+	for (int i = 0; i < FW_GUARD_IFS_MAX; i++)
+		CHECK(!fw_guard_line(&g, "lan net1 dhcp", g_err, sizeof(g_err)));
+	CHECK(fw_guard_line(&g, "lan net1 dhcp", g_err, sizeof(g_err)) == -1);
+}
+
+/*
+ * The chain @name of the batch of @len bytes: its hook's priority and its
+ * policy, the request's attributes; false when the batch has no such chain.
+ */
+struct chain_seen {
+	const char *name;
+	bool found;
+	int32_t priority;
+	uint32_t policy;
+};
+
+static int hook_attr(const struct nlattr *a, void *data)
+{
+	struct chain_seen *c = data;
+
+	if (mnl_attr_get_type(a) == NFTA_HOOK_PRIORITY)
+		c->priority = (int32_t)ntohl(mnl_attr_get_u32(a));
+	return MNL_CB_OK;
+}
+
+static int chain_attr(const struct nlattr *a, void *data)
+{
+	struct chain_seen *c = data;
+
+	switch (mnl_attr_get_type(a)) {
+	case NFTA_CHAIN_NAME:
+		c->found = !strcmp(mnl_attr_get_str(a), c->name);
+		break;
+	case NFTA_CHAIN_POLICY:
+		c->policy = ntohl(mnl_attr_get_u32(a));
+		break;
+	case NFTA_CHAIN_HOOK:
+		mnl_attr_parse_nested(a, hook_attr, c);
+		break;
+	}
+	return MNL_CB_OK;
+}
+
+static bool chain_of(size_t len, const char *name, int32_t *priority, uint32_t *policy)
+{
+	const struct nlmsghdr *nlh = (const struct nlmsghdr *)g_buf;
+	int left = (int)len;
+
+	for (; mnl_nlmsg_ok(nlh, left); nlh = mnl_nlmsg_next(nlh, &left)) {
+		struct chain_seen c = { .name = name };
+
+		if (nlh->nlmsg_type != (NFNL_SUBSYS_NFTABLES << 8 | NFT_MSG_NEWCHAIN))
+			continue;
+		mnl_attr_parse(nlh, sizeof(struct nfgenmsg), chain_attr, &c);
+		if (c.found) {
+			*priority = c.priority;
+			*policy = c.policy;
+			return true;
+		}
+	}
+	return false;
+}
+
+static void test_guard_batch(void)
+{
+	static char k[512];
+	struct fw_guard g;
+	struct fw_spec s;
+	uint32_t last, acked, policy;
+	int32_t priority;
+	size_t len;
+
+	/* No guard without a management interface: it would keep everyone off. */
+	fw_guard_init(&g);
+	CHECK(!fw_guard_line(&g, "session ppp*", g_err, sizeof(g_err)));
+	CHECK(fw_guard_batch(&g, g_buf, sizeof(g_buf), 1, &last) == 0);
+
+	/*
+	 * The management VLAN alone, as in bridge mode: the guard there is
+	 * goes, then the table, its two chains, and the rules: the loopback,
+	 * the management interface, the answers, seven errors of ICMP, the
+	 * drop of what is wrong, and what is forwarded to or from the VLAN.
+	 */
+	fw_guard_init(&g);
+	CHECK(!fw_guard_line(&g, "mgmt mgmt*", g_err, sizeof(g_err)));
+	len = fw_guard_batch(&g, g_buf, sizeof(g_buf), 100, &last);
+	kinds(len, k, sizeof(k), &acked);
+	CHECK(len > 0 && !strcmp(k, "<DTCCRRRRRRRRRRRRR>") && last == acked && last == 100 + 17);
+	CHECK(has_bytes(len, "onu_guard") && has_bytes(len, "input") && has_bytes(len, "forward") &&
+	      has_bytes(len, "lo") && has_bytes(len, "ct") && has_bytes(len, "payload"));
+	/* Input drops what no rule takes; forward lets through, before the table "onu"'s. */
+	CHECK(chain_of(len, "input", &priority, &policy) && priority == 0 && policy == NF_DROP);
+	CHECK(chain_of(len, "forward", &priority, &policy) && priority == -10 &&
+	      policy == NF_ACCEPT);
+	/* The table of the networks keeps its own, as it was. */
+	fw_spec_init(&s);
+	CHECK(!fw_spec_line(&s, "lan net1 192.168.1.0/24", g_err, sizeof(g_err)));
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	CHECK(chain_of(len, "forward", &priority, &policy) && priority == 0 &&
+	      policy == NF_ACCEPT && !has_bytes(len, "onu_guard") && !has_bytes(len, "input"));
+
+	/*
+	 * Passthrough with a session that hands its address and its prefix
+	 * down untagged, a connection by DHCP, and a network with its DHCP
+	 * server: the session's DHCPv6, advertisements and neighbours; the
+	 * connection's DHCP and neighbours; the link's DHCP, DHCPv6,
+	 * solicitations and neighbours; the network's DHCP.
+	 */
+	CHECK(!fw_guard_line(&g, "session ppp*", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "ipoe wan420 dhcp", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "link sfp dhcp dhcp6", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "lan net1 dhcp", g_err, sizeof(g_err)));
+	len = fw_guard_batch(&g, g_buf, sizeof(g_buf), 1, &last);
+	kinds(len, k, sizeof(k), &acked);
+	CHECK(len > 0 && last == acked && last == 1 + 4 + 11 + 4 + 3 + 5 + 1 + 2);
+	CHECK(has_bytes(len, "ppp") && has_bytes(len, "wan420") && has_bytes(len, "sfp") &&
+	      has_bytes(len, "net1"));
+	/* A ping of each side, two rules more on each of its interfaces. */
+	CHECK(!fw_guard_line(&g, "ping in", g_err, sizeof(g_err)));
+	len = fw_guard_batch(&g, g_buf, sizeof(g_buf), 1, &last);
+	CHECK(len > 0 && last == 1 + 4 + 11 + 4 + 3 + 5 + 1 + 2 + 2 * 2);
+	CHECK(!fw_guard_line(&g, "ping lans", g_err, sizeof(g_err)));
+	len = fw_guard_batch(&g, g_buf, sizeof(g_buf), 1, &last);
+	CHECK(len > 0 && last == 1 + 4 + 11 + 4 + 3 + 5 + 1 + 2 + 4 * 2);
+	/* The address on the host link, one rule more. */
+	CHECK(!fw_guard_line(&g, "data sfp 192.0.2.2", g_err, sizeof(g_err)));
+	len = fw_guard_batch(&g, g_buf, sizeof(g_buf), 1, &last);
+	CHECK(len > 0 && last == 1 + 4 + 12 + 4 + 3 + 5 + 1 + 2 + 4 * 2);
+
+	/* The most there may be fits a batch: every interface of the most rules. */
+	fw_guard_init(&g);
+	for (int i = 0; i < FW_MGMTS_MAX; i++)
+		CHECK(!fw_guard_line(&g, "mgmt averylongname1", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "data averylongname1 192.0.2.2", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "ping in", g_err, sizeof(g_err)));
+	CHECK(!fw_guard_line(&g, "ping lans", g_err, sizeof(g_err)));
+	for (int i = 0; i < FW_GUARD_IFS_MAX; i++)
+		CHECK(!fw_guard_line(&g, "link averylongname1 dhcp dhcp6", g_err, sizeof(g_err)));
+	len = fw_guard_batch(&g, g_buf, sizeof(g_buf), 1, &last);
+	CHECK(len > 0 && len <= FW_BATCH_MAX &&
+	      last == 1 + 4 + 1 + FW_MGMTS_MAX + 1 + 1 + 7 + 1 + 7 * FW_GUARD_IFS_MAX +
+			      2 * FW_MGMTS_MAX);
+	printf("  the longest guard: %zu bytes\n", len);
+}
+
 int main(void)
 {
 	test_lines();
@@ -655,6 +875,8 @@ int main(void)
 	test_forward_batch();
 	test_rule_lines();
 	test_rule_batch();
+	test_guard_lines();
+	test_guard_batch();
 	printf("test_fwmsg: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }
