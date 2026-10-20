@@ -15,7 +15,11 @@ every page the change touches.
 The themes' colours are tokens in ``pond/web/src/styles.css``, defined for the
 light and for the dark theme; the shared pieces (a card, a label and its value,
 a state, a figure) are in ``pond/web/src/components/ui.tsx``. A page uses those
-and no colours or sizes of its own.
+and no colours or sizes of its own: no colour of Tailwind's palette
+(``bg-white``, ``text-gray-500``), no colour written out in a style or in a
+drawing. A drawing takes its colours from the tokens too (``var(--color-…)``,
+or ``currentColor`` under a class of the theme), so that every rule here holds
+in both themes.
 
 Where the rules come from
 =========================
@@ -93,6 +97,11 @@ Two colours of text, and a third that carries nothing to read:
      - A field's placeholder and a disabled control, only: what is in it is
        never information.
 
+No shade between them: ``/60`` reads at 4.3:1 against a card of the light
+theme, ``/55`` at 3.7:1 and ``/50`` at 3.2:1, all short of the 4.5:1 that text
+needs; a thing that is off (a rule, a forward) is said in words, and its row
+keeps the secondary colour.
+
 Words are written as a sentence is, a capital for the first word and for names
 only: no title written in capitals.
 
@@ -168,7 +177,49 @@ against a card of the light theme the yellow reads at 2.5:1 and the green at
      - Off, unused, not set, not known yet.
 
 A pill (``Badge``) is not a state: it marks a neutral property of a thing
-(``IPv4 and IPv6``, ``soon``), in the neutral tone.
+(``IPv4 and IPv6``, ``soon``), in the neutral tone. Where a pill does carry a
+state, it is the state's dot and word inside the pill's outline, tinted by the
+state's colour, its word in the main colour.
+
+The same holds wherever a state's colour meets words: a notice over a page or
+a card (``alert-soft``) has its icon in the state's colour and its words in the
+main colour; so has the line under a form that says the change was saved, and
+a figure in a state (light that is weak) stands in the main colour after the
+state's dot. The red of an error is the one exception: an error's words are in
+``error``, which reads at 5.2:1 against a card of the light theme and at 6.5:1
+in the dark one.
+
+.. list-table:: The states' colours as text, against a card
+   :header-rows: 1
+   :widths: 22 26 26 26
+
+   * - Token
+     - Light theme
+     - Dark theme
+     - As words
+   * - ``success``
+     - 4.4:1
+     - 8.5:1
+     - no
+   * - ``warning``
+     - 2.5:1
+     - 9.8:1
+     - no
+   * - ``info``
+     - 3.8:1
+     - 7.6:1
+     - no
+   * - ``error``
+     - 5.2:1
+     - 6.5:1
+     - yes
+   * - ``primary``
+     - 6.0:1
+     - 6.9:1
+     - links and the chosen option
+
+A button in a state's colour is no exception: a page's main action is in the
+accent (``primary``), whatever it does (keep a mode on trial, start a system).
 
 What the stick has no software for yet is not a state of a thing but a gap in
 the stick: the page or form says so in one dashed notice (``NotYet``), titled
@@ -232,8 +283,10 @@ Edges
 
 A card has a border of 1 px (``border-base-300``) and corners of 12 px
 (``rounded-box``); a field, a button and an option have corners of 8 px
-(``rounded-field``). There are no shadows. A free place that can be taken is a
-card with a dashed border.
+(``rounded-field``). There are no shadows, not even under a menu that drops
+down or a tip over a chart: they have a card's border, which holds in the dark
+theme, where a shadow is not seen. A free place that can be taken is a card
+with a dashed border.
 
 Actions
 =======
@@ -252,3 +305,20 @@ answers that each need a sentence is a set of options, one beside another, the
 chosen one bordered in the accent; a choice of a few short words is a row of
 buttons, the chosen one filled. The buttons stand at the form's end, the one
 that saves first.
+
+The panel's own settings
+========================
+
+The theme and the language are settings of the panel in one browser, not of
+the stick: they stand in the bar over every page, at its right, after the time
+and before the user's menu, each a menu behind a small button that shows the
+choice: the language's code, the theme's icon, named ``Theme: Dark`` for those
+who do not see it. The browser keeps them (``localStorage``);
+without it a choice lasts the visit. A setting of the stick never stands
+there: those are pages, kept on the stick (System, Settings).
+
+The theme is the system's colour scheme until the reader chooses Light or
+Dark. The choice is on the page before its first paint, so that a dark page
+never flashes light: ``src/theme-boot.js`` puts it there, a script of its own
+that the page loads before anything else, since pond's
+Content-Security-Policy runs no script written into the page.
