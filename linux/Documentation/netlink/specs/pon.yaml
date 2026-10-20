@@ -371,6 +371,23 @@ attribute-sets:
           know. Its passing is no change of the ONU's status: a MAC sends
           dev-change-ntf for a change of the other attributes, not for this.
         type: uint
+      -
+        name: encrypted-port-id
+        doc: >-
+          A Port-ID whose downstream the OLT encrypts, one attribute each, in
+          ascending order. The OLT marks a Port-ID encrypted, or no longer,
+          with Encrypted_Port-ID (ITU-T G.984.3 clause 9.2.3.8); G-PON
+          encrypts only the downstream GEM payload, with 128-bit AES
+          (clause 12.2). The OMCC's Port-ID is among them when the OLT
+          encrypts the OMCC, and so is a Port-ID that no gem interface
+          carries yet. A MAC that reports onu-state reports these too, so
+          that there a Port-ID not listed is carried in the clear. The marks
+          go with the ONU-ID: an ONU without one has none. A report carries
+          at most 128, the lowest of a MAC that holds more; that an OLT
+          encrypts no more Port-IDs for one ONU than that is an assumption,
+          not verified. A change is announced with dev-change-ntf.
+        type: u32
+        multi-attr: true
   -
     name: tcont
     doc: >-
@@ -475,6 +492,7 @@ operations:
             - power-level
             - eqd
             - onu-state-time
+            - encrypted-port-id
 
       dump:
         reply: *dev-attrs

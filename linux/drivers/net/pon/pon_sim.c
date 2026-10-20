@@ -9,7 +9,9 @@
  * comes back to be read, and everything the class asks of a MAC is answered
  * from a few arrays. The state it reports is set through debugfs, in the
  * directory pon_sim: write a number to "state" to change the activation state,
- * which sends a notification, and a flow to "rx" to receive a frame in it.
+ * a Port-ID and 1 or 0 to "encrypt" to mark it encrypted or not, as the OLT
+ * does with Encrypted_Port-ID, either of which sends a notification, and a
+ * flow to "rx" to receive a frame in it.
  */
 
 #include <linux/debugfs.h>
@@ -32,6 +34,7 @@
 #define PON_SIM_OMCC_PORT_ID	4095
 #define PON_SIM_EQD		12345
 #define PON_SIM_RX_LEN		64
+#define PON_SIM_PORT_IDS	4096
 
 /**
  * struct pon_sim_stats - a GEM port's counters, which gem_xmit and the receive
@@ -63,6 +66,7 @@ struct pon_sim_stats {
  * @stats: the counters of each, by flow
  * @alloc_id: the Alloc-ID of each T-CONT; @bound says which are mapped
  * @bound: the T-CONTs that have an Alloc-ID
+ * @encrypted: the Port-IDs marked encrypted, which go with the ONU-ID
  * @calls: how often each operation was called, for the "calls" file
  * @dbg: the debugfs directory
  */
@@ -81,6 +85,7 @@ struct pon_sim {
 	struct pon_sim_stats stats[PON_SIM_FLOWS];
 	u16 alloc_id[PON_SIM_TCONTS];
 	DECLARE_BITMAP(bound, PON_SIM_TCONTS);
+	DECLARE_BITMAP(encrypted, PON_SIM_PORT_IDS);
 	struct {
 		unsigned int bridge_join;
 		unsigned int bridge_leave;
@@ -279,7 +284,7 @@ static void pon_sim_rx_filter(struct pon_device *pon, unsigned int flow,
 /* What the class asks for: the state the debugfs file last set. */
 static void pon_sim_fill_status(struct pon_sim *sim, struct pon_dev_status *st)
 {
-	unsigned int t, n = 0;
+	unsigned int t, n = 0, port;
 
 	st->type = PON_TYPE_GPON;
 	st->onu_state = sim->state;
@@ -307,6 +312,13 @@ static void pon_sim_fill_status(struct pon_sim *sim, struct pon_dev_status *st)
 	}
 	st->onu_state_ms = jiffies64_to_msecs(get_jiffies_64() - sim->since);
 	st->have_onu_state_time = true;
+	n = 0;
+	for_each_set_bit(port, sim->encrypted, PON_SIM_PORT_IDS) {
+		if (n == PON_MAX_ENCRYPTED_PORT_IDS)
+			break;
+		st->encrypted_port_id[n++] = port;
+	}
+	st->num_encrypted_port_ids = n;
 }
 
 static int pon_sim_dev_status(struct pon_device *pon, struct pon_dev_status *st)
@@ -442,6 +454,9 @@ static ssize_t pon_sim_state_write(struct file *file, const char __user *ubuf,
 	if (sim->state != state)
 		sim->since = get_jiffies_64();
 	sim->state = state;
+	/* Below O4 the stand-in has no ONU-ID, and the marks go with it. */
+	if (state < PON_ONU_STATE_O4)
+		bitmap_zero(sim->encrypted, PON_SIM_PORT_IDS);
 	pon_sim_fill_status(sim, &st);
 	pon_device_notify(sim->pon, &st);
 	mutex_unlock(&sim->lock);
@@ -463,6 +478,50 @@ static const struct file_operations pon_sim_state_fops = {
 	.open	= simple_open,
 	.read	= pon_sim_state_read,
 	.write	= pon_sim_state_write,
+};
+
+/*
+ * debugfs: encrypt (w): "PORT 1" marks Port-ID PORT encrypted, "PORT 0" not,
+ * as Encrypted_Port-ID does (ITU-T G.984.3 clause 9.2.3.8); a change sends a
+ * notification. -ERANGE for a Port-ID above 4095, and -ENXIO below O4, where
+ * the stand-in has no ONU-ID for the OLT to direct the message to.
+ */
+static ssize_t pon_sim_encrypt_write(struct file *file,
+				     const char __user *ubuf, size_t count,
+				     loff_t *ppos)
+{
+	struct pon_sim *sim = file->private_data;
+	struct pon_dev_status st = { .onu_id = -1, .omcc_port_id = -1 };
+	unsigned int port, on;
+	char buf[24];
+	int err = 0;
+
+	if (count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = '\0';
+	if (sscanf(buf, "%u %u", &port, &on) != 2 || on > 1)
+		return -EINVAL;
+	if (port >= PON_SIM_PORT_IDS)
+		return -ERANGE;
+
+	mutex_lock(&sim->lock);
+	if (sim->state < PON_ONU_STATE_O4) {
+		err = -ENXIO;
+	} else if (on != test_bit(port, sim->encrypted)) {
+		assign_bit(port, sim->encrypted, on);
+		pon_sim_fill_status(sim, &st);
+		pon_device_notify(sim->pon, &st);
+	}
+	mutex_unlock(&sim->lock);
+	return err ? err : count;
+}
+
+static const struct file_operations pon_sim_encrypt_fops = {
+	.owner	= THIS_MODULE,
+	.open	= simple_open,
+	.write	= pon_sim_encrypt_write,
 };
 
 /* debugfs: omci_link (w): 0 or 1, the OMCI channel's existence */
@@ -617,6 +676,7 @@ static int __init pon_sim_init(void)
 
 	sim->dbg = debugfs_create_dir("pon_sim", NULL);
 	debugfs_create_file("state", 0600, sim->dbg, sim, &pon_sim_state_fops);
+	debugfs_create_file("encrypt", 0200, sim->dbg, sim, &pon_sim_encrypt_fops);
 	debugfs_create_file("omci_link", 0200, sim->dbg, sim, &pon_sim_omci_link_fops);
 	debugfs_create_file("rx", 0200, sim->dbg, sim, &pon_sim_rx_fops);
 	debugfs_create_file("flows", 0400, sim->dbg, sim, &pon_sim_flows_fops);

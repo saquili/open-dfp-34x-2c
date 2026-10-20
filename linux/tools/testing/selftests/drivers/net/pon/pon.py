@@ -264,6 +264,53 @@ def dev_notify(_cfg) -> None:
     dfs_write("state", 5)
 
 
+def dev_encryption(_cfg) -> None:
+    """encrypted-port-id: the Port-IDs the OLT encrypts, the OMCC's among them."""
+    dfs_write("state", 5)
+    ksft_true("encrypted-port-id" not in SIM.get(), "nothing encrypted")
+
+    # A mark is announced, with the attributes of a get.
+    nf = PonFamily()
+    nf.ntf_subscribe("monitor")
+    dfs_write("encrypt", "300 1")
+    seen = None
+    for msg in nf.poll_ntf(duration=2):
+        if msg["name"] == "dev-change-ntf" and msg["msg"].get("id") == SIM.id:
+            seen = msg["msg"]
+            break
+    ksft_ne(seen, None, "a dev-change-ntf message")
+    ksft_eq(seen.get("encrypted-port-id"), [300])
+
+    # In ascending order, Port-ID 0 and the OMCC's included; a second mark
+    # of a Port-ID changes nothing, and an unmark takes it out.
+    dfs_write("encrypt", f"{OMCC_PORT_ID} 1")
+    dfs_write("encrypt", "0 1")
+    dfs_write("encrypt", "300 1")
+    ksft_eq(SIM.get()["encrypted-port-id"], [0, 300, OMCC_PORT_ID])
+    dfs_write("encrypt", "300 0")
+    ksft_eq(SIM.get()["encrypted-port-id"], [0, OMCC_PORT_ID])
+
+    for val, want in (("4096 1", errno.ERANGE), ("300 2", errno.EINVAL)):
+        try:
+            dfs_write("encrypt", val)
+        except OSError as e:
+            ksft_eq(e.errno, want, comment=val)
+        else:
+            raise AssertionError(f"encrypt {val} was taken")
+
+    # The marks go with the ONU-ID, and without one nothing is marked.
+    dfs_write("state", 3)
+    ksft_true("encrypted-port-id" not in SIM.get(), "nothing encrypted in O3")
+    try:
+        dfs_write("encrypt", "300 1")
+    except OSError as e:
+        ksft_eq(e.errno, errno.ENXIO)
+    else:
+        raise AssertionError("a Port-ID was marked without an ONU-ID")
+    dfs_write("state", 5)
+    ksft_true("encrypted-port-id" not in SIM.get(), "the marks are gone in O5")
+
+
 def tcont_map(_cfg) -> None:
     nf = SIM.nf
     key = {"id": SIM.id}
@@ -543,7 +590,7 @@ def omci_loopback(_cfg) -> None:
 def main() -> None:
     global SIM
     SIM = Sim()
-    ksft_run([dev_dump, dev_get_errors, dev_status, dev_notify, tcont_map,
+    ksft_run([dev_dump, dev_get_errors, dev_status, dev_notify, dev_encryption, tcont_map,
               tod_refused, gem_lifecycle, gem_refused, gem_change, gem_downstream,
               gem_bridge, gem_traffic, omci_loopback], args=(None,))
     ksft_exit()

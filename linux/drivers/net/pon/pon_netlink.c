@@ -166,6 +166,16 @@ static int pon_nl_dev_fill(struct sk_buff *msg, struct pon_device *pon,
 	if (st->have_onu_state_time &&
 	    nla_put_uint(msg, PON_A_DEV_ONU_STATE_TIME, st->onu_state_ms))
 		goto cancel;
+	/*
+	 * Each Port-ID the OLT encrypts, as the MAC listed them. None says that
+	 * nothing is encrypted only beside a state: a MAC that reports
+	 * onu-state lists them all.
+	 */
+	for (i = 0; i < min(st->num_encrypted_port_ids,
+			    PON_MAX_ENCRYPTED_PORT_IDS); i++)
+		if (nla_put_u32(msg, PON_A_DEV_ENCRYPTED_PORT_ID,
+				st->encrypted_port_id[i]))
+			goto cancel;
 
 	/*
 	 * The capacities are always sent, as the data path registered them.

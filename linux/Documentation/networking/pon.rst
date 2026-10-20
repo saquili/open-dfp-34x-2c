@@ -29,8 +29,8 @@ The class gives an ONU four things:
   the OLT's GEM port network CTPs), and they are used like any Ethernet
   interface: they are bridge ports, routing interfaces and tc endpoints.
 - The ``pon`` generic netlink family. It reports the ONU's activation state,
-  the identifiers the OLT assigned to it, its alarms and counters, and its
-  T-CONTs, and it announces changes.
+  the identifiers the OLT assigned to it, the Port-IDs the OLT encrypts, its
+  alarms and counters, and its T-CONTs, and it announces changes.
 
 A MAC driver uses the class through ``include/linux/pon.h``. It registers an
 OMCI port and a data path against its own device, hands the class the OMCI
@@ -1464,6 +1464,12 @@ Attributes of the dev object
      - uint
      - With ``onu-state``, when the MAC knows it. How long the ONU has been
        in that state, in milliseconds.
+   * - ``encrypted-port-id``
+     - 17
+     - u32, repeated
+     - Once for each Port-ID whose downstream the OLT encrypts, in ascending
+       order, at most 128. None with ``onu-state`` means that nothing is
+       encrypted.
 
 The ``dev-stats`` nest holds sixteen counters numbered from 1 in this order:
 ``sn-requests``, ``ranging-requests``, ``ploam-rx``, ``ploam-crc-errors``,
@@ -1512,6 +1518,11 @@ in ``include/uapi/linux/pon.h``; the commands are ``PON_CMD_DEV_GET`` (1),
      - I
      - Design choice; no check on the board reads the nest. A ``dev-get`` with
        ``stats`` decoded against the header would.
+   * - ``encrypted-port-id`` is attribute 17 of the dev object, a ``u32``
+       repeated once for each Port-ID (ABI).
+     - T
+     - ``pon.dev_encryption`` of the selftest, over the stand-in MAC, reads it
+       by the number of the specification.
 
 The family and its permissions
 ------------------------------
@@ -1705,6 +1716,35 @@ claim a MAC in reset cannot make. The counters are the exception: inside the
      - T
      - ``pon.dev_status``: it grows by the time slept, and starts again in a
        new state.
+   * - ``encrypted-port-id`` lists the Port-IDs whose downstream the OLT
+       encrypts, as the MAC gives them in ``encrypted_port_id``: ascending,
+       one attribute each, as ``alloc-id`` is, and at most
+       ``PON_MAX_ENCRYPTED_PORT_IDS`` (128). A MAC that reports ``onu-state``
+       lists them all, so that beside a state a Port-ID not listed is carried
+       in the clear; without a state the absence says nothing. The OMCC's
+       Port-ID is listed when the OLT encrypts the OMCC, although it is never a
+       ``gem`` interface, and so is a Port-ID that the OLT marked before
+       management created its interface: a reader matches them against
+       ``omcc-port-id`` and the ``IFLA_GEM_PORT_ID`` of each interface, as the
+       OMCI daemon does for the encryption state of a GEM port network CTP
+       (managed entity 268). A change of the list is a change of the report,
+       which the MAC announces with ``dev-change-ntf``.
+     - T, I
+     - T: ``pon.dev_encryption`` of the selftest, over the stand-in MAC: none
+       in O5, a mark announced on ``monitor``, Port-IDs 0, 300 and the OMCC's
+       4095 listed in that order, an unmark, and none after O3. I: that a MAC
+       lists them beside its state is a design choice of the class.
+   * - The marks go with the ONU-ID: an ONU without one reports none, and
+       after an activation it reports only the marks of that activation.
+       G.984.3 has an ONU discard its ONU-ID, the OMCC's Port-ID and its
+       Alloc-IDs together, and a mark names a Port-ID of the activation it
+       came in.
+     - P, I
+     - P for what is discarded: ITU-T G.984.3 clause 9.2.1
+       (Deactivate_ONU-ID). I for the marks: design choice; that an OLT marks
+       its Port-IDs again in each activation is an assumption, load-bearing
+       and not verified. ``pon.dev_encryption``: none after O3 over the
+       stand-in MAC.
 
 Dumps
 -----
@@ -1915,6 +1955,20 @@ Identifiers
        and it is never a ``gem`` interface.
      - P
      - ITU-T G.984.3 clauses 9.2.3.14 and 14.1.
+   * - Encrypted_Port-ID, directed to one ONU, marks a Port-ID encrypted or
+       not, at any time in the life of a connection; the ONU acknowledges each
+       copy. G-PON encrypts the downstream only, because only the downstream
+       reaches every ONU, and only the payload of GEM frames, with AES in
+       counter mode and a key of 128 bits that the ONU makes on Request_Key.
+     - P
+     - ITU-T G.984.3 clauses 9.2.3.8, 12.1, 12.2 and 12.3.
+   * - ``encrypted-port-id`` repeats up to 128 times in a report
+       (``PON_MAX_ENCRYPTED_PORT_IDS``), as many as the RTL9602C has flows, the
+       OMCC's among them; a MAC that holds more marks reports the lowest 128.
+       An OLT marks only Port-IDs it gave the ONU.
+     - I
+     - Assumption about the OLT, not verified: an OLT that marks more than
+       128 Port-IDs of one ONU would exercise it.
    * - ``serial-number`` is 8 bytes (``PON_SERIAL_NUMBER_LEN``): 4 bytes of
        Vendor_ID in ASCII, then 4 bytes of vendor-specific serial number, as
        the ONU sends them in Serial_Number_ONU.
@@ -2208,6 +2262,15 @@ Status and statistics
      - M
      - ``dev-get`` on the board with the fibre connected to an OLT (see
        "Status, alarms and notifications").
+   * - A MAC that sets ``onu_state`` in ``dev_status`` also lists in
+       ``encrypted_port_id`` every Port-ID the OLT has marked encrypted, in
+       ascending order, the lowest ``PON_MAX_ENCRYPTED_PORT_IDS`` of more, and
+       counts them in ``num_encrypted_port_ids``. A MAC that cannot tell sets
+       no state, as an empty list beside a state claims that nothing is
+       encrypted. It reports a change of the list with ``pon_device_notify()``,
+       as any other change of its report.
+     - T, I
+     - T: ``pon.dev_encryption`` over the stand-in MAC. I: the contract.
    * - ``gem_stats(pon, flow, st)`` is optional and may sleep. It returns the
        MAC's own counters for one GEM port. Without it, the interface's ethtool
        statistics are empty rather than showing the CPU's numbers under the
@@ -2764,8 +2827,11 @@ that carries the traffic of GEM interfaces. A frame sent on a GEM interface is
 counted and dropped, an OMCI message written to the port comes back to be read,
 and everything else the class asks of a MAC is answered from arrays; the state
 it reports is set through debugfs, in ``pon_sim``: ``state`` (the activation
-state, which sends a notification), ``omci_link`` (the OMCI channel), ``rx`` (a
-frame received in a flow), and ``flows`` and ``calls`` to read.
+state, which sends a notification), ``encrypt`` (``PORT 1`` or ``PORT 0``, a
+Port-ID marked encrypted or not, as Encrypted_Port-ID does, which sends a
+notification; refused below O4, where the stand-in has no ONU-ID, and the
+marks go when the state drops below O4), ``omci_link`` (the OMCI channel),
+``rx`` (a frame received in a flow), and ``flows`` and ``calls`` to read.
 
 ``tools/testing/selftests/drivers/net/pon/pon.py`` drives it, as root, with YNL
 for the family and plain rtnetlink for the ``gem`` links (iproute2 does not
@@ -2776,6 +2842,10 @@ of the tree in qemu, with the locking checks on:
   reports in each state, and the ONU-ID that appears from O4;
 * the ``dev-change-ntf`` message of the ``monitor`` group when the state
   changes;
+* ``encrypted-port-id``: none at first, a mark announced on ``monitor``, the
+  marks in ascending order with Port-ID 0 and the OMCC's, an unmark, the
+  refusals of a Port-ID above 4095, of a value other than 0 or 1 and of a mark
+  without an ONU-ID, and the marks gone with the ONU-ID;
 * ``tcont-set`` and ``tcont-get``: an Alloc-ID that serves one T-CONT, Alloc-ID
   0, unmapping, the dump, and the errors of an index or an Alloc-ID out of range;
 * the life of a GEM interface: the Port-ID has one, the OMCC's is not for one;
@@ -2876,6 +2946,11 @@ Assumptions the driver depends on
        more than a dropped answer ("The OMCI path").
      - CPU-sent traffic filling the conduit's ring while the daemon answers the
        OLT.
+   * - That an OLT that encrypts marks its Port-IDs again in each activation,
+       since the marks go with the ONU-ID ("Reports"); load-bearing for the
+       downstream of an encrypted Port-ID after a re-activation.
+     - ``encrypted-port-id`` and the traffic of an ONU on an OLT that
+       encrypts, before and after a fibre pull.
 
 Questions the code does not depend on
 -------------------------------------
@@ -3043,6 +3118,9 @@ About the family and its values
    * - Whether a MAC can report more than 32 allocations, and whether no OLT
        assigns that many to one ONU ("Identifiers").
      - A MAC with more than 32 allocations.
+   * - Whether no OLT marks more than 128 Port-IDs of one ONU encrypted
+       ("Identifiers").
+     - An OLT that marks more.
    * - Whether ``stats`` holds totals since bring-up whatever the MAC's
        counters do ("Counters").
      - The RTL9602C's counters clear on read; a second reader would show the

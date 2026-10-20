@@ -99,6 +99,16 @@ struct pon_gem_config {
 #define PON_MAX_ALLOC_IDS	32
 
 /**
+ * define PON_MAX_ENCRYPTED_PORT_IDS - encrypted Port-IDs one status report
+ *	can carry
+ *
+ * As many as the flows of the RTL9602C, the OMCC's among them. A MAC with
+ * more reports the lowest ones. That an OLT encrypts no more Port-IDs for
+ * one ONU than this is an assumption, not verified.
+ */
+#define PON_MAX_ENCRYPTED_PORT_IDS	128
+
+/**
  * struct pon_dev_stats - counters of the transmission convergence layer
  * @sn_requests: serial number requests: allocations to the activation
  *		 Alloc-ID, 254, with the PLOAMu flag
@@ -186,6 +196,12 @@ struct pon_dev_stats {
  *		  valid with @have_onu_state_time. A MAC leaves it out when it
  *		  compares two reports for a change, as it does the counters.
  * @have_onu_state_time: @onu_state_ms is set
+ * @encrypted_port_id: the Port-IDs whose downstream the OLT encrypts
+ *		       (Encrypted_Port-ID, ITU-T G.984.3 clause 9.2.3.8), in
+ *		       ascending order, the OMCC's among them when it is
+ *		       encrypted. A MAC that sets @onu_state sets these too, as
+ *		       a Port-ID not listed then counts as carried in the clear.
+ * @num_encrypted_port_ids: how many entries of @encrypted_port_id are used
  *
  * What is not known stays "nothing known": @onu_id and @omcc_port_id -1,
  * everything else 0. The class hands the structure to
@@ -213,6 +229,8 @@ struct pon_dev_status {
 	bool have_eqd;
 	u64 onu_state_ms;
 	bool have_onu_state_time;
+	u16 encrypted_port_id[PON_MAX_ENCRYPTED_PORT_IDS];
+	unsigned int num_encrypted_port_ids;
 };
 
 /**
@@ -361,10 +379,11 @@ struct pon_device_ops {
 	/**
 	 * @dev_status: Fill st with the state of the transmission convergence
 	 * layer: the activation state, the identifiers the OLT assigned, the
-	 * alarms present now and the totals. st arrives set to "nothing
-	 * known" (see &struct pon_dev_status); leave unset what is not known.
-	 * An error discards the whole report. Called under the class's
-	 * registration lock; it may sleep and must not take RTNL.
+	 * Port-IDs it encrypts, the alarms present now and the totals. st
+	 * arrives set to "nothing known" (see &struct pon_dev_status); leave
+	 * unset what is not known. An error discards the whole report. Called
+	 * under the class's registration lock; it may sleep and must not take
+	 * RTNL.
 	 */
 	int (*dev_status)(struct pon_device *pon, struct pon_dev_status *st);
 	/**
