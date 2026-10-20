@@ -307,6 +307,18 @@ by its whole path where procd starts it.
       pon keep       # the boot script's service
       pon enable
 
+   On the board, with the disable and the enable injected as the OLT sends
+   them (M, 2026-10-20): in O7 the store held ``PON_DISABLED=1``, and the
+   system log said that the disable is kept across a restart until the OLT
+   enables it; the store's file was written anew, and the shipped firmware's
+   files beside it were left as they were. The enable took the key out, and
+   the log said that the ONU is no longer kept disabled. ``pon enable`` took
+   a disabled ONU to O5 and said so in the log. A restart with the key in the
+   store, through ``onu-apply identity``, has not been run on the board (I);
+   the driver's bring-up in O7 with the disable given before it has
+   (``Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst`` in the
+   kernel).
+
 ``onu-nl``
    makes, through netlink, the requests of tc, ip (the links) and devlink that
    the boot script and the scripts here make, since the image carries
