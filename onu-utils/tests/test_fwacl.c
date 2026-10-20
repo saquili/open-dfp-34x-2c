@@ -20,6 +20,8 @@
 #include "aclmsg.h"
 #include "fwacl.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 static int failures;
 static int checks;
 
@@ -376,7 +378,7 @@ static void test_lines(void)
 	};
 	char err[128];
 
-	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
 		acl_spec_init(&g_spec);
 		CHECK(acl_spec_line(&g_spec, bad[i], err, sizeof(err)) == -1);
 	}

@@ -529,8 +529,9 @@ static void test_rule_lines(void)
 	      !s.block[FW_BETWEEN]);
 	CHECK(!fw_spec_line(&s, "default between block", g_err, sizeof(g_err)) &&
 	      s.block[FW_BETWEEN]);
-	CHECK(!fw_spec_line(&s, "allow between iif net2 ether 00:00:5E:00:53:a2 oif net1 "
-			    "daddr 192.168.1.10 tcp 9100", g_err, sizeof(g_err)));
+	CHECK(!fw_spec_line(&s,
+			    "allow between iif net2 ether 00:00:5E:00:53:a2 oif net1 daddr 192.168.1.10 tcp 9100",
+			    g_err, sizeof(g_err)));
 	r = &s.rule[0];
 	CHECK(r->way == FW_BETWEEN && !strcmp(r->iif, "net2") && !strcmp(r->oif, "net1") &&
 	      r->ether && r->mac[2] == 0x5e && r->mac[5] == 0xa2 && !r->saddr && r->daddr &&
@@ -635,8 +636,7 @@ static void test_rule_batch(void)
 		char line[200];
 
 		snprintf(line, sizeof(line),
-			 "allow %s iif averylongname1 ether 00:00:5e:00:53:ff oif averylongname2 "
-			 "saddr 10.0.0.0/9 daddr 192.168.255.254 %s 60000-60100",
+			 "allow %s iif averylongname1 ether 00:00:5e:00:53:ff oif averylongname2 saddr 10.0.0.0/9 daddr 192.168.255.254 %s 60000-60100",
 			 i % 3 == 0 ? "in" : i % 3 == 1 ? "out" : "between", i % 2 ? "udp" : "tcp");
 		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
 	}

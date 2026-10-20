@@ -11,6 +11,8 @@
 
 #include "fwacl.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 #define IPPROTO_ICMP_ 1
 #define IPPROTO_TCP_ 6
 #define IPPROTO_UDP_ 17
@@ -321,7 +323,7 @@ static void put_l4(struct ctx *c, struct acl_entry t, unsigned int protos, bool 
 		{ ACL_ANY, 0 },
 	};
 
-	for (size_t i = 0; i < sizeof(p) / sizeof(p[0]); i++) {
+	for (size_t i = 0; i < ARRAY_SIZE(p); i++) {
 		uint32_t a = lo;
 
 		if (!(protos & p[i].bit))
@@ -808,7 +810,10 @@ void acl_compile(const struct acl_spec *s, int room, struct acl_set *out)
 		out->e[i].pref = pref[out->e[i].port]++;
 }
 
-static __attribute__((format(printf, 4, 5))) int put(char *buf, size_t cap, int len, const char *fmt, ...)
+static int put(char *buf, size_t cap, int len, const char *fmt, ...)
+	__attribute((format(printf, 4, 5)));
+
+static int put(char *buf, size_t cap, int len, const char *fmt, ...)
 {
 	va_list ap;
 	int n;

@@ -58,7 +58,7 @@
 /* A batch and room for the last request of it (mnl_nlmsg_batch_start()). */
 static char g_buf[2 * FW_BATCH_MAX];
 
-static void usage(void)
+static void print_usage(void)
 {
 	fputs("usage: onu-fw apply FILE | clear | acl FILE STATUS | acl-show FILE | acl-clear\n",
 	      stderr);
@@ -512,6 +512,6 @@ int main(int argc, char **argv)
 		return acl_show(argv[2]);
 	if (argc == 2 && !strcmp(argv[1], "acl-clear"))
 		return acl_clear();
-	usage();
+	print_usage();
 	return 2;
 }

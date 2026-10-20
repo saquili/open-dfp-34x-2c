@@ -743,8 +743,6 @@ static void test_forwards(void)
 	}
 }
 
-/* Network 2, besides network 1 and its device DEV with its fixed address. */
-#define TWO_NETS PINNED NET2
 
 static void test_rules(void)
 {
@@ -801,7 +799,7 @@ static void test_rules(void)
 	}
 
 	/* The panel's rules, written as they are, in their order, with names for people. */
-	CHECK(judge(&s, TWO_NETS
+	CHECK(judge(&s, PINNED NET2
 		    "RULE1=1_allow_lan:2_dev:1:" DEV "_tcp_9100_any_on\n"
 		    "RULE1_NAME=Drukarka dla Biura\n"
 		    "RULE2=2_block_lans_internet_tcp_25_any_on\n"
@@ -827,38 +825,38 @@ static void test_rules(void)
 	CHECK(strstr(g_out, "RULE1=") < strstr(g_out, "RULE2=") &&
 	      strstr(g_out, "RULE95=") < strstr(g_out, "RULE96="));
 	/* A default is not written, and an empty rule is none, its name gone with it. */
-	CHECK(judge(&s, TWO_NETS "FW_OUT=allow\nFW_BETWEEN=block\n"
+	CHECK(judge(&s, PINNED NET2 "FW_OUT=allow\nFW_BETWEEN=block\n"
 		    "RULE5=5_block_lans_internet_tcp_25_any_on\nRULE5_NAME=x\nRULE5=\n") == 0 &&
 	      !strstr(g_out, "FW_") && !strstr(g_out, "RULE"));
 	/* Without any network, a default is kept all the same. */
 	CHECK(judge(&s, "FW_OUT=block\n") == 0 && !strcmp(g_out, "FW_OUT=block\n"));
 
 	/* From somewhere to somewhere else. */
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_internet_internet:10.0.0.0/8_any__any_on\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_internet_internet:10.0.0.0/8_any__any_on\n") == -2 &&
 	      strstr(g_err, "rule 1: from the internet to the internet"));
-	CHECK(judge(&s, TWO_NETS "RULE2=1_block_lan:1_dev:1:" DEV "_any__any_on\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE2=1_block_lan:1_dev:1:" DEV "_any__any_on\n") == -2 &&
 	      strstr(g_err, "rule 2: within one network, 1"));
-	CHECK(judge(&s, TWO_NETS "RULE2=1_block_dev:2:00:00:5e:00:53:a2_dev:2:00:00:5e:00:53:a2_any__any_on\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE2=1_block_dev:2:00:00:5e:00:53:a2_dev:2:00:00:5e:00:53:a2_any__any_on\n") == -2 &&
 	      strstr(g_err, "within one network, 2"));
-	CHECK(judge(&s, TWO_NETS "RULE1=1_block_lans_lan:1_any__any_on\n"
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_block_lans_lan:1_any__any_on\n"
 		    "RULE2=2_block_lan:1_lans_any__any_on\nRULE3=3_block_lans_lans_any__any_on\n") == 0);
 	/* The family of its address. */
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_internet:192.0.2.0/24_lan:1_any__ipv6_on\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_internet:192.0.2.0/24_lan:1_any__ipv6_on\n") == -2 &&
 	      strstr(g_err, "rule 1: an address of IPv4 in a rule of ipv6"));
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:1_internet:2001:db8::1_any__ipv4_on\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_lan:1_internet:2001:db8::1_any__ipv4_on\n") == -2 &&
 	      strstr(g_err, "rule 1: an address of IPv6 in a rule of ipv4"));
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:1_internet:2001:db8::1_any__any_on\n") == 0);
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_lan:1_internet:2001:db8::1_any__any_on\n") == 0);
 	/* A network it names is set up; a device it goes to has a fixed address. */
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:3_internet_any__any_on\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_lan:3_internet_any__any_on\n") == -2 &&
 	      strstr(g_err, "rule 1: network 3 is not set up"));
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:1_dev:4:00:00:5e:00:53:a4_any__any_on\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_lan:1_dev:4:00:00:5e:00:53:a4_any__any_on\n") == -2 &&
 	      strstr(g_err, "rule 1: network 4 is not set up"));
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:2_dev:1:00:00:5e:00:53:a9_any__any_off\n") == -2 &&
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_lan:2_dev:1:00:00:5e:00:53:a9_any__any_off\n") == -2 &&
 	      strstr(g_err, "rule 1: the device 00:00:5e:00:53:a9 has no fixed address in network 1"));
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_dev:1:00:00:5e:00:53:a9_lan:2_any__any_on\n") == 0);
-	CHECK(judge(&s, TWO_NETS "RULE1=1_allow_lan:2_dev:1:00:00:5E:00:53:A1_any__any_on\n") == 0);
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_dev:1:00:00:5e:00:53:a9_lan:2_any__any_on\n") == 0);
+	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_lan:2_dev:1:00:00:5E:00:53:A1_any__any_on\n") == 0);
 	/* An ID is one rule's. */
-	CHECK(judge(&s, TWO_NETS "RULE1=5_allow_lans_internet_any__any_on\n"
+	CHECK(judge(&s, PINNED NET2 "RULE1=5_allow_lans_internet_any__any_on\n"
 		    "RULE7=5_block_lans_internet_any__any_on\n") == -2 &&
 	      strstr(g_err, "rules 1 and 7 have one ID, 5"));
 
@@ -888,9 +886,7 @@ static void test_rules(void)
 					       100 + i % 64, 100 + i % 64);
 		for (int i = 1; i <= SETTINGS_RULES; i++) {
 			at += (size_t)snprintf(text + at, sizeof(text) - at,
-					       "RULE%d=%d_block_dev:%d:02:00:00:00:%02x:%02x_internet:"
-					       "0000:0000:0000:0000:0000:ffff:255.255.255.255/128_"
-					       "both_65000-65535_any_off\nRULE%d_NAME=",
+					       "RULE%d=%d_block_dev:%d:02:00:00:00:%02x:%02x_internet:0000:0000:0000:0000:0000:ffff:255.255.255.255/128_both_65000-65535_any_off\nRULE%d_NAME=",
 					       i, i, (i - 1) % 8 + 1, (i - 1) % 8 + 1, i % 64, i);
 			for (int c = 0; c < 40; c++)
 				at += (size_t)snprintf(text + at, sizeof(text) - at, "\xf0\x9f\x98\x80");

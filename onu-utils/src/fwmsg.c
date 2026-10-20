@@ -68,8 +68,7 @@ static bool ifname_ok(const char *v)
 	size_t n = strlen(v);
 
 	return n && n < FW_IFNAMSIZ &&
-	       strspn(v, "abcdefghijklmnopqrstuvwxyz"
-			 "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == n;
+	       strspn(v, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == n;
 }
 
 /* a.b.c.d/len, the first address of a network: false for anything else. */
