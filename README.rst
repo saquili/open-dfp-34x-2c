@@ -81,7 +81,10 @@ What it does
   firmware's page had. A demo of the panel, with a mock stick, runs in a
   browser on this repository's GitHub Pages site,
   `saquili.github.io/open-dfp-34x-2c
-  <https://saquili.github.io/open-dfp-34x-2c/>`__.
+  <https://saquili.github.io/open-dfp-34x-2c/>`__. The panel calls this
+  system BuchOS, the author's own name for it; another name can be set
+  under System, tab Settings, "Product name", and the panel's title and the
+  names of the files it hands out follow it.
 * **Keeps time from the host**: PTP with the switch's hardware timestamps,
   or NTP, or the OLT's time of day and the seconds of its frames; and it is
   the PTP master of the host link while it hears no better clock (`timed
