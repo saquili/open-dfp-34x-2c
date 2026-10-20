@@ -311,8 +311,9 @@ The release
 -----------
 
 ``.github/workflows/toolchain.yml``, started by hand, builds the toolchain of
-``configs/toolchain_defconfig`` twice, checks it and compares the two builds
-(see "Checks on the toolchain"), and makes a release of the first, tagged
+``configs/toolchain_defconfig``, checks it (see "Checks on the toolchain"),
+with "compare" on builds it again and compares the two builds, and makes a
+release of the first, tagged
 ``toolchain-<version>``, the version being the time of the commit in UTC, as
 ``2026.10.20-0130``. The release is not marked as the repository's latest,
 which stays the firmware's. It holds three files:
