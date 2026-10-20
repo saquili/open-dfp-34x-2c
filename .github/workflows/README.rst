@@ -16,8 +16,11 @@ host, with checkpatch over their sources and full line coverage of
 of the kernel series, the device-tree binding checks with ``dtbs_check`` of
 the board, and the kernel documentation. The cross toolchain and the flash
 images, each built twice and compared for reproducibility, are built when
-started by hand, and so are their releases. The merge rule is a green suite,
-full line coverage where it is measured, and a device run (``tests/device``).
+started by hand, and so are their releases. A change to the panel on main
+builds its demo, in which a mock stick answers it in the browser, and puts it
+on the repository's GitHub Pages site (``demo.yml``). The merge rule is a
+green suite, full line coverage where it is measured, and a device run
+(``tests/device``).
 
 Every job that builds or tests runs in one pinned host build environment, a
 Debian 13 container named by digest, and installs its tools from that Debian
