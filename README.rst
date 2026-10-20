@@ -179,10 +179,10 @@ it, and have been tried by hand.
        their own files and left this system's alone (by hand)
    * - Install through the shipped firmware's web page
      - 🟡 Bench
-     - On 2026-10-19, from two builds of the shipped firmware, one of them on
-       a copy of a stick as sold: the identity, the MAC address and the administrator's
-       password taken, and the way back to the shipped firmware with its
-       settings (by hand)
+     - On 2026-10-19, from two builds of the shipped firmware, one of them on a
+       copy of a stick as sold: the identity, the MAC address and the
+       administrator's password taken, and the way back to the shipped firmware
+       with its settings (by hand)
    * - The panel's copy of the whole flash, and its way back to the shipped
        firmware
      - ⚪ Not on a stick yet
@@ -192,10 +192,10 @@ it, and have been tried by hand.
 
     ℹ️ **The latest recorded run is of an earlier image, without the data
     path.** On 2026-10-12 32 of 48 cases passed on the image of that day, run
-    from the flash, and none failed. The 16 it skipped send frames from the ports
-    of a bench, one behind the OLT and one at the far end of the stick's host
-    link, and the lab as it is has no such ports. They were last recorded on
-    2026-10-07, on an image of before procd, netifd, the panel over HTTPS and
+    from the flash, and none failed. The 16 it skipped send frames from the
+    ports of a bench, one behind the OLT and one at the far end of the stick's
+    host link, and the lab as it is has no such ports. They were last recorded
+    on 2026-10-07, on an image of before procd, netifd, the panel over HTTPS and
     the new store of the settings, and have not run on this one
     (`tests/device/README.rst <tests/device/README.rst>`__).
 
@@ -517,7 +517,7 @@ The top-level ``Makefile`` holds the entry points. You need:
 * for ``make`` and ``make sdk``, which run Buildroot: Linux (or the container
   that `building.rst <docs/handbook/building.rst>`__ names), the packages
   that page lists, some 9 GB of disk, and the network, to fetch the sources
-  of the packages, which are checked by hash;
+  of the packages and the toolchain's release, which are checked by hash;
 * for ``make linux`` alone: a MIPS cross compiler (``mips-linux-gnu-gcc`` on
   Debian, or name yours with ``CROSS_COMPILE=``) and ``mkimage``;
 * for ``make buildroot``, ``make ramboot`` and ``make flash``: Python 3.11 or
@@ -531,7 +531,7 @@ The top-level ``Makefile`` holds the entry points. You need:
     make image-check   # the sizes, the instruction-set gate and the digests
     make ram-image     # after make: build/image/images/ram.uImage, for ramboot
     make linux         # the kernel alone (build/linux/arch/mips/boot/uImage)
-    make buildroot     # fetch the pinned Buildroot and patch it (build/buildroot)
+    make buildroot     # fetch and patch the pinned Buildroot (build/buildroot)
     make sdk           # a relocatable cross toolchain (build/toolchain/images)
     make legal-info    # the licences of a built image (build/image/legal-info)
     make check         # the offline gates and the tools' tests
@@ -540,6 +540,12 @@ The top-level ``Makefile`` holds the entry points. You need:
     make ramboot       # start a kernel from RAM over the bench
     make flash IMAGE=F TARGET=kernel|rootfs   # write bank 0 over the bench
     make clean         # remove the build products; distclean all of build/
+
+``make`` builds the images with the cross toolchain of the release that
+``br2-external/toolchain/PIN`` names, checked against the pin, and builds no
+compiler. ``make TOOLCHAIN=source``, or a pin that names no release, has it
+build a toolchain of its own from source first (`br2-external/README.rst
+<br2-external/README.rst>`__, "The toolchain of a release").
 
 The programs of this tree build and test on their own on the host, with
 ``make -C <program> check``. A build of your own installs as a release does,
