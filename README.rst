@@ -15,8 +15,9 @@
           src="https://img.shields.io/badge/licence-GPL--2.0--only-blue">
    </p>
    <p align="center">
-     <b>Try the panel in your browser</b>: a demo with a mock stick, no stick
-     needed, on this repository's GitHub Pages site
+     <b><a href="https://saquili.github.io/open-dfp-34x-2c/">Try the panel
+     in your browser</a></b>: a demo with a mock stick, no stick needed, on
+     this repository's GitHub Pages site
    </p>
    <p align="center">
      <a href="#what-it-does">What it does</a> ·
@@ -78,7 +79,9 @@ What it does
 * **Is managed from the router's side**: ssh, and a web panel with an API
   over HTTPS, on VLAN 4094 of the host link, at the address the shipped
   firmware's page had. A demo of the panel, with a mock stick, runs in a
-  browser on this repository's GitHub Pages site.
+  browser on this repository's GitHub Pages site,
+  `saquili.github.io/open-dfp-34x-2c
+  <https://saquili.github.io/open-dfp-34x-2c/>`__.
 * **Keeps time from the host**: PTP with the switch's hardware timestamps,
   or NTP, or the OLT's time of day and the seconds of its frames; and it is
   the PTP master of the host link while it hears no better clock (`timed
@@ -482,7 +485,9 @@ Where to start
      - `install-guide.rst <docs/handbook/install-guide.rst>`__, after
        `Before you install`_
    * - See the panel without a stick
-     - The demo on this repository's GitHub Pages site, with a mock stick
+     - The demo on this repository's GitHub Pages site, with a mock stick,
+       `saquili.github.io/open-dfp-34x-2c
+       <https://saquili.github.io/open-dfp-34x-2c/>`__
        (``.github/workflows/demo.yml``)
    * - Try a build of your own on a stick
      - `board.rst <docs/handbook/board.rst>`__ for the stick and its
