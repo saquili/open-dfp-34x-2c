@@ -1408,6 +1408,73 @@ T-CONT 16.
      - M on this board's revision 2 (the peak-rate row above). I for revision
        1, which has not been seen (see "Switch settings in the build").
 
+Data on the default Alloc-ID
+----------------------------
+
+The default Alloc-ID, which equals the ONU-ID, carries the upstream PLOAM
+messages and the OMCC, and may carry user data as well: an OLT may give it to a
+T-CONT ME, and the OMCC then shares its allocations with that T-CONT's traffic,
+the OMCC first. The driver has the default Alloc-ID's allocations in T-CONT 16,
+whose one queue, 64, is the OMCC's, and refuses to map a GEM T-CONT to it.
+Carrying data there with the OMCC first needs a second queue in T-CONT 16,
+below queue 64, or the OMCC in a queue of the T-CONT that carries the data. A
+way to do either has not been found yet; the rows say what was looked at and
+what would settle it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The default Alloc-ID carries the upstream PLOAM and OMCC traffic and
+       may carry user data traffic. Any Alloc-ID, the default one included,
+       serves at most one user-traffic T-CONT.
+     - P
+     - ITU-T G.984.3 (01/2014) clauses 5.5.3 and 5.5.4.
+   * - The OLT may give the default Alloc-ID to a T-CONT ME for user traffic;
+       the OMCC's use of it is unaffected, and the OMCC is multiplexed with
+       the user traffic by strict priority, the OMCC higher.
+     - P
+     - ITU-T G.988 (11/2022) clause 9.2.2 and clause B.2.4.
+   * - A mapping of a GEM T-CONT to the ONU-ID, while the ONU holds one, is
+       refused (``rtl9602c_gpon_tcont_map()``): ``tcont-set`` fails with
+       ``-EOPNOTSUPP`` and the message "Alloc-ID N is the default, the OMCC's
+       in T-CONT 16", and omcid marks that T-CONT ME instance as rejected.
+     - I
+     - Design choice, not exercised: a ``tcont-set`` of a GEM T-CONT to the
+       ONU-ID in O5 would show the refusal.
+   * - No queue but 64 has been found for T-CONT 16. Its map is a bitmap over
+       the queues of its group (the numbering rows under "Sizes and
+       numbering"), and its group, the third, starts at queue 64, the last
+       one with committed-rate, peak-rate and weight words: those words end
+       after 65 queues, so bits 1 to 31 of its map would name queues 65 to 95,
+       for which no such words have been found.
+     - I
+     - Not found yet; nothing shows that the scheduler cannot do it. Looked
+       at: the numbering, measured for T-CONTs 0, 1 and 16, and the layout of
+       the per-queue words. Setting bit 1 of T-CONT 16's map with a GEM
+       port's stream pointed at queue 65, which the stream map's seven bits
+       can name, while OMCI runs, would show whether the port's frames leave
+       in the default Alloc-ID's allocations, and whether the OMCC keeps its
+       turn.
+   * - Whether a T-CONT's map can name a queue outside its group, so that
+       T-CONT 16 could schedule one of queues 0 to 63 beside queue 64.
+     - I
+     - Not found yet. Looked at: the map is 32 bits, one per queue of the
+       group, measured for T-CONTs 0, 1 and 16; no other field of the
+       scheduler is known to choose the group. Nothing has been tried.
+   * - Whether the default Alloc-ID can be given to a GEM T-CONT's entry of the
+       Alloc-ID table in place of T-CONT 16's, with the OMCC's stream pointed
+       at that T-CONT's highest queue and the data in its lower ones: whether
+       the upstream PLOAM messages leave in that T-CONT's allocations, and
+       whether the OMCC needs queue 64, are not known.
+     - I
+     - Not tried. That setting, then the ``ploamlog`` view, an OMCI exchange
+       and a GEM port's upstream on the same T-CONT, would settle it, and
+       would show whether the OMCC keeps its turn under a data flood.
+
 What a queue drain depends on
 -----------------------------
 
@@ -2554,10 +2621,14 @@ Known limitations
   first.
 - GEM ports get eight T-CONTs, so an OLT that assigns more than eight
   Alloc-IDs beside the default one finds the ninth without a T-CONT ("no idle
-  T-CONT"). The default Alloc-ID cannot serve a GEM T-CONT: T-CONT 16 holds it
-  for the OMCC, and a mapping to it is refused with ``-EOPNOTSUPP``, although
-  G.988 allows it.
-  The queue numbering is measured for T-CONTs 0, 1 and 16 only.
+  T-CONT"). The queue numbering is measured for T-CONTs 0, 1 and 16 only.
+- The default Alloc-ID carries no user data: a mapping of a GEM T-CONT to it
+  is refused with ``-EOPNOTSUPP``, although G.984.3 and G.988 allow it. Its
+  allocations go to T-CONT 16, whose one queue is the OMCC's, and a way to
+  give T-CONT 16 a second queue below the OMCC's, or to carry the OMCC in a
+  GEM T-CONT's highest queue, has not been found yet (see "Data on the
+  default Alloc-ID"). An OLT that sends its data on the default Alloc-ID gets
+  no upstream data from this ONU.
 - A queue that its last GEM port leaves is drained before it is detached, and
   the drain discards the frames still waiting in it, also when the port only
   moved to another queue of its T-CONT. A queue whose drain does not complete
@@ -2736,6 +2807,14 @@ Questions the code does not depend on
        device tree lacks the system controller or a region ("The buffer's
        DRAM").
      - Booting a device tree without them.
+   * - Whether user data can share the default Alloc-ID with the OMCC first:
+       a second queue in T-CONT 16, a queue of another group in its map, or
+       the default Alloc-ID and the OMCC's stream in a GEM T-CONT ("Data on
+       the default Alloc-ID").
+     - Bit 1 of T-CONT 16's map with a GEM stream on queue 65; the default
+       Alloc-ID in a GEM T-CONT's table entry with stream 64 on that T-CONT's
+       highest queue; in each, OMCI and the port's upstream running, and the
+       OMCC answering under a data flood.
    * - The unit of the queue rate fields ("Sizes and numbering").
      - A peak rate below the maximum against a flood above it.
    * - Whether the switch's OMCI counters count what their names say ("Switch
