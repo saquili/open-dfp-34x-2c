@@ -433,6 +433,10 @@ name the others.
      - warning, rate-limited
      - The upstream latch reported bit 8 or 9. The device name replaces the
        prefix.
+   * - ``<GPON> upstream FEC on`` or ``<GPON> upstream FEC off``
+     - info
+     - The upstream FEC state the MAC reports changed; once a change, from off
+       at each bring-up (see "FEC and encryption").
    * - ``<GPON> upstream PLOAM queue N full``
      - warning, rate-limited
      - A message was refused with ``-EBUSY``. The device name replaces the
