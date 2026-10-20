@@ -2147,11 +2147,11 @@ entity also gives an untagged frame a tag and takes it off again in the other
 direction, puts an S-tag in front of a C-tag and takes it off again (IEEE
 802.1ad), rewrites a tag, and sets a tag's priority. The driver offers these
 operations as tc flower rules on the ingress of a user port, one vlan action
-each or two pops, which the OMCI daemon installs, and turns each rule into one
-entry of the classifier, or into one per priority where GEM interfaces divide
-the VLAN that the rule leads into (below). The classifier's entry format and
-the sequence that programs an entry are on the *acl-qos* page; VLAN membership
-(``port_vlan_add``) is a different block.
+each or a few that together make one tag operation, which the OMCI daemon
+installs, and turns each rule into one entry of the classifier, or into one per
+priority where GEM interfaces divide the VLAN that the rule leads into (below).
+The classifier's entry format and the sequence that programs an entry are on
+the *acl-qos* page; VLAN membership (``port_vlan_add``) is a different block.
 
 A translation from VID 410 to VID 1410, a C-tag of VID 410 and priority 5 given
 to untagged frames from the subscriber side, and that tag taken off frames from
@@ -2173,6 +2173,12 @@ taken off again downstream::
             vlan_id 100 action vlan push id 200 priority 3 protocol 802.1ad
     tc filter add dev pon ingress protocol 802.1ad flower skip_sw \
             vlan_id 200 action vlan pop
+
+A translation from VID 410 to VID 1410 that gives the tag priority 0, which a
+``vlan modify`` cannot give (see below), takes the tag off and pushes another::
+
+    tc filter add dev sfp ingress protocol 802.1Q flower skip_sw \
+            vlan_id 410 action vlan pop action vlan push id 1410 priority 0
 
 .. list-table::
    :header-rows: 1
@@ -2232,9 +2238,23 @@ taken off again downstream::
    * - A ``vlan modify`` that gives priority 0 keeps the frame's priority
        instead: the action reaches the driver without saying whether it gives
        a priority at all, and keeping it is what a modify without one does.
+       A rule that gives priority 0 pops the tag and pushes another (next
+       row).
      - I
      - The flow action's VLAN fields (``struct flow_action_entry``): a VID, a
        protocol and a priority, and no flag for a priority given.
+   * - A ``vlan pop`` of the outer tag followed by a ``vlan push`` of a tag of
+       the same protocol becomes the entry of a ``vlan modify`` with the
+       priority assigned: the push's VID and its priority, which a push always
+       names, so priority 0 is written rather than kept. A pop and a push of
+       the other protocol are refused.
+     - T, I
+     - T: the KUnit case ``rtl9602c_test_vlan_rewrite`` reads back the
+       modify's action word, ``0x00042c12``, with
+       ``RTL9602C_CLS_ACT_CPRI_SET`` added and the priority 0. I: not
+       measured on the board; 100 frames of C-VID 410 and priority 5 under the
+       rule of the example above, leaving the far side of the OLT as 1410 with
+       priority 0, would settle it.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress rules (the classifier
        acts on ingress); any key but the VLAN tags (with the basic and control
        keys), or an EtherType behind them; a VID or priority with a partial
@@ -2242,7 +2262,8 @@ taken off again downstream::
        outer tag that is neither 802.1Q nor 802.1ad, or with no protocol; a
        second tag behind an outer C-tag, or anything but a C-tag behind an
        S-tag; the VID or priority of both an S-tag and the C-tag behind it;
-       more than one action, but two pops on an S-tag; any action but ``vlan
+       more than one action, but two pops on an S-tag, and a pop and a push of
+       the outer tag's protocol (the row above); any action but ``vlan
        modify``, ``push`` and ``pop`` (a drop, trap or pass goes to the ACL,
        and ``police`` on a destination-address match to storm control, both on
        the *acl-qos* page); a modify of an untagged frame, or of a C-tag into
@@ -2700,6 +2721,11 @@ Assumptions the driver depends on
        it that keeps the priority; frames of each priority from the host,
        counted in each port's upstream octets; the eight entries in ``cf``,
        and back to one when one interface takes every priority.
+   * - ``RTL9602C_CLS_ACT_CPRI_SET`` with the priority 0 writes priority 0, so
+       a pop and a push give a translated tag priority 0 ("VLAN tag
+       operations").
+     - Frames of C-VID 410 and priority 5 under a pop and a push of 1410 with
+       priority 0, read at the far side of the OLT.
 
 Questions the code does not depend on
 -------------------------------------

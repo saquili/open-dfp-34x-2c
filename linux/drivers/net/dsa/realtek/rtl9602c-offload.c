@@ -3381,10 +3381,108 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 }
 
 /*
- * A VLAN rule of tc flower as a classifier entry, on the ingress of the SFP
- * port for upstream frames, of its own port only, or of the PON port for
- * downstream ones. The match is that of rtl9602c_flower_vlan_match(); the
- * actions are:
+ * The C-tag plane of @x: a C-tag of VID @vid, the frame's own rewritten or one
+ * added to an untagged frame, with priority @pri when @pri_set and else the
+ * priority the tag had.
+ */
+static void rtl9602c_cf_ctag(struct rtl9602c_cf_xlate *x, u16 vid,
+			     bool pri_set, u8 pri)
+{
+	x->act[1] = RTL9602C_CLS_ACT_CVID_SET |
+		    FIELD_PREP(RTL9602C_CLS_ACT_CVID, vid) |
+		    FIELD_PREP(RTL9602C_CLS_ACT_CTAG, RTL9602C_CLS_ACT_CTAG_TAG);
+	if (pri_set)
+		x->act[1] |= RTL9602C_CLS_ACT_CPRI_SET |
+			     FIELD_PREP(RTL9602C_CLS_ACT_CPRI, pri);
+}
+
+/*
+ * The S-tag plane of @x: @op, RTL9602C_CLS_ACT_STAG_ADD or _CTPID, with VID
+ * @vid and, when @pri_set, priority @pri.
+ */
+static void rtl9602c_cf_stag(struct rtl9602c_cf_xlate *x, u32 op, u16 vid,
+			     bool pri_set, u8 pri)
+{
+	x->act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG, op) |
+		    RTL9602C_CLS_ACT_SVID_SET |
+		    FIELD_PREP(RTL9602C_CLS_ACT_SVID, vid);
+	if (pri_set)
+		x->act[0] |= RTL9602C_CLS_ACT_SPRI_SET |
+			     FIELD_PREP(RTL9602C_CLS_ACT_SPRI, pri);
+}
+
+/* Whether @e is a vlan action @id, of a tag of protocol @proto unless 0. */
+static bool rtl9602c_vlan_act_is(const struct flow_action_entry *e,
+				 enum flow_action_id id, u16 proto)
+{
+	return e->id == id && (!proto || e->vlan.proto == htons(proto));
+}
+
+/* The tag operation of a VLAN rule's one action; see rtl9602c_flower_vlan_act(). */
+static int rtl9602c_flower_vlan_act1(const struct flow_action_entry *act,
+				     u16 outer, struct rtl9602c_cf_xlate *x,
+				     struct netlink_ext_ack *extack)
+{
+	switch (act->id) {
+	case FLOW_ACTION_VLAN_MANGLE:
+		if (outer == ETH_P_8021Q &&
+		    act->vlan.proto == htons(ETH_P_8021Q)) {
+			rtl9602c_cf_ctag(x, act->vlan.vid, act->vlan.prio != 0,
+					 act->vlan.prio);
+		} else if (outer == ETH_P_8021AD &&
+			   (act->vlan.proto == htons(ETH_P_8021AD) ||
+			    act->vlan.proto == htons(ETH_P_8021Q))) {
+			rtl9602c_cf_stag(x,
+					 act->vlan.proto == htons(ETH_P_8021AD) ?
+					 RTL9602C_CLS_ACT_STAG_ADD :
+					 RTL9602C_CLS_ACT_STAG_CTPID,
+					 act->vlan.vid, act->vlan.prio != 0,
+					 act->vlan.prio);
+		} else {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "vlan modify rewrites the outer tag: a C-tag into a C-tag, an S-tag into an S-tag or a C-tag");
+			return -EOPNOTSUPP;
+		}
+		x->out_vid = act->vlan.vid;
+		return 0;
+	case FLOW_ACTION_VLAN_PUSH:
+		if (act->vlan.proto == htons(ETH_P_8021Q) && !outer) {
+			rtl9602c_cf_ctag(x, act->vlan.vid, true, act->vlan.prio);
+		} else if (act->vlan.proto == htons(ETH_P_8021AD) &&
+			   outer != ETH_P_8021AD) {
+			rtl9602c_cf_stag(x, RTL9602C_CLS_ACT_STAG_ADD,
+					 act->vlan.vid, true, act->vlan.prio);
+		} else {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "a C-tag is pushed onto an untagged frame, an S-tag onto a frame without one");
+			return -EOPNOTSUPP;
+		}
+		x->out_vid = act->vlan.vid;
+		return 0;
+	case FLOW_ACTION_VLAN_POP:
+		if (outer == ETH_P_8021AD) {
+			x->act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
+					       RTL9602C_CLS_ACT_STAG_POP);
+		} else if (outer == ETH_P_8021Q) {
+			x->act[1] = FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
+					       RTL9602C_CLS_ACT_CTAG_UNTAG);
+		} else {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "an untagged frame has no tag to pop");
+			return -EOPNOTSUPP;
+		}
+		return 0;
+	default:
+		NL_SET_ERR_MSG_MOD(extack,
+				   "the offloadable actions are vlan modify, push and pop");
+		return -EOPNOTSUPP;
+	}
+}
+
+/*
+ * The tag operation of a VLAN rule's actions @a, on frames whose outer tag is
+ * of protocol @outer (0 for an untagged frame), into @x's action words, with
+ * the VID of the outer tag it writes in @x->out_vid:
  *
  * - vlan modify of the outer tag: of a C-tag, its VID, and its priority
  *   unless the action gives 0, as the action cannot say whether it gives one;
@@ -3394,7 +3492,55 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
  *   the TPID of RTL9602C_SVLAN_TPID_CFG_PRIMARY) in front of a frame without
  *   one, with the action's VID and priority;
  * - vlan pop of the outer tag, and two vlan pops of an S-tag and the C-tag
- *   behind it.
+ *   behind it;
+ * - vlan pop of the outer tag and vlan push of a tag of the same protocol: the
+ *   tag rewritten with the push's VID and priority, a priority of 0 included,
+ *   as a push always names its priority.
+ */
+static int rtl9602c_flower_vlan_act(const struct flow_action *a, u16 outer,
+				    struct rtl9602c_cf_xlate *x,
+				    struct netlink_ext_ack *extack)
+{
+	const struct flow_action_entry *e = a->entries;
+	unsigned int n = a->num_entries;
+
+	if (n == 1)
+		return rtl9602c_flower_vlan_act1(&e[0], outer, x, extack);
+
+	if (outer == ETH_P_8021AD && n == 2 &&
+	    rtl9602c_vlan_act_is(&e[0], FLOW_ACTION_VLAN_POP, 0) &&
+	    rtl9602c_vlan_act_is(&e[1], FLOW_ACTION_VLAN_POP, 0)) {
+		/* Both tags off: the S-tag, and the C-tag if there is one. */
+		x->act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
+				       RTL9602C_CLS_ACT_STAG_POP);
+		x->act[1] = FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
+				       RTL9602C_CLS_ACT_CTAG_UNTAG);
+		return 0;
+	}
+
+	if (outer && n == 2 &&
+	    rtl9602c_vlan_act_is(&e[0], FLOW_ACTION_VLAN_POP, 0) &&
+	    rtl9602c_vlan_act_is(&e[1], FLOW_ACTION_VLAN_PUSH, outer)) {
+		/* The outer tag rewritten, its priority given. */
+		if (outer == ETH_P_8021Q)
+			rtl9602c_cf_ctag(x, e[1].vlan.vid, true, e[1].vlan.prio);
+		else
+			rtl9602c_cf_stag(x, RTL9602C_CLS_ACT_STAG_ADD,
+					 e[1].vlan.vid, true, e[1].vlan.prio);
+		x->out_vid = e[1].vlan.vid;
+		return 0;
+	}
+
+	NL_SET_ERR_MSG_MOD(extack,
+			   "one action, two vlan pops of an S-tag, or a pop and a push of the outer tag's protocol");
+	return -EOPNOTSUPP;
+}
+
+/*
+ * A VLAN rule of tc flower as a classifier entry, on the ingress of the SFP
+ * port for upstream frames, of its own port only, or of the PON port for
+ * downstream ones. The match is that of rtl9602c_flower_vlan_match(), the
+ * actions those of rtl9602c_flower_vlan_act().
  *
  * An upstream rule into a VLAN whose priorities GEM interfaces divide, that
  * keeps a priority it neither matches nor writes, becomes one entry per
@@ -3409,7 +3555,6 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 		.out_vid = VLAN_N_VID, .port = port, .pcp = -1,
 	};
 	DECLARE_BITMAP(stale, RTL9602C_CLS_ENTRIES);
-	const struct flow_action_entry *act;
 	u16 outer;
 	int err;
 
@@ -3421,104 +3566,10 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 		x.care |= RTL9602C_CLS_RULE_UNI;
 	}
 
-	if (outer == ETH_P_8021AD && rule->action.num_entries == 2 &&
-	    rule->action.entries[0].id == FLOW_ACTION_VLAN_POP &&
-	    rule->action.entries[1].id == FLOW_ACTION_VLAN_POP) {
-		/* Both tags off: the S-tag, and the C-tag if there is one. */
-		x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
-				      RTL9602C_CLS_ACT_STAG_POP);
-		x.act[1] = FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
-				      RTL9602C_CLS_ACT_CTAG_UNTAG);
-		goto place;
-	}
-	if (!flow_offload_has_one_action(&rule->action)) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "one action, or two vlan pops of an S-tag and the C-tag behind it");
-		return -EOPNOTSUPP;
-	}
-	act = &rule->action.entries[0];
+	err = rtl9602c_flower_vlan_act(&rule->action, outer, &x, extack);
+	if (err)
+		return err;
 
-	switch (act->id) {
-	case FLOW_ACTION_VLAN_MANGLE:
-		if (outer == ETH_P_8021Q &&
-		    act->vlan.proto == htons(ETH_P_8021Q)) {
-			x.act[1] = RTL9602C_CLS_ACT_CVID_SET |
-				   FIELD_PREP(RTL9602C_CLS_ACT_CVID,
-					      act->vlan.vid) |
-				   FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
-					      RTL9602C_CLS_ACT_CTAG_TAG);
-			if (act->vlan.prio)
-				x.act[1] |= RTL9602C_CLS_ACT_CPRI_SET |
-					    FIELD_PREP(RTL9602C_CLS_ACT_CPRI,
-						       act->vlan.prio);
-		} else if (outer == ETH_P_8021AD &&
-			   (act->vlan.proto == htons(ETH_P_8021AD) ||
-			    act->vlan.proto == htons(ETH_P_8021Q))) {
-			x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
-					      act->vlan.proto == htons(ETH_P_8021AD) ?
-					      RTL9602C_CLS_ACT_STAG_ADD :
-					      RTL9602C_CLS_ACT_STAG_CTPID) |
-				   RTL9602C_CLS_ACT_SVID_SET |
-				   FIELD_PREP(RTL9602C_CLS_ACT_SVID,
-					      act->vlan.vid);
-			if (act->vlan.prio)
-				x.act[0] |= RTL9602C_CLS_ACT_SPRI_SET |
-					    FIELD_PREP(RTL9602C_CLS_ACT_SPRI,
-						       act->vlan.prio);
-		} else {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "vlan modify rewrites the outer tag: a C-tag into a C-tag, an S-tag into an S-tag or a C-tag");
-			return -EOPNOTSUPP;
-		}
-		x.out_vid = act->vlan.vid;
-		break;
-	case FLOW_ACTION_VLAN_PUSH:
-		if (act->vlan.proto == htons(ETH_P_8021Q) && !outer) {
-			x.act[1] = RTL9602C_CLS_ACT_CVID_SET |
-				   FIELD_PREP(RTL9602C_CLS_ACT_CVID,
-					      act->vlan.vid) |
-				   RTL9602C_CLS_ACT_CPRI_SET |
-				   FIELD_PREP(RTL9602C_CLS_ACT_CPRI,
-					      act->vlan.prio) |
-				   FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
-					      RTL9602C_CLS_ACT_CTAG_TAG);
-		} else if (act->vlan.proto == htons(ETH_P_8021AD) &&
-			   outer != ETH_P_8021AD) {
-			x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
-					      RTL9602C_CLS_ACT_STAG_ADD) |
-				   RTL9602C_CLS_ACT_SVID_SET |
-				   FIELD_PREP(RTL9602C_CLS_ACT_SVID,
-					      act->vlan.vid) |
-				   RTL9602C_CLS_ACT_SPRI_SET |
-				   FIELD_PREP(RTL9602C_CLS_ACT_SPRI,
-					      act->vlan.prio);
-		} else {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "a C-tag is pushed onto an untagged frame, an S-tag onto a frame without one");
-			return -EOPNOTSUPP;
-		}
-		x.out_vid = act->vlan.vid;
-		break;
-	case FLOW_ACTION_VLAN_POP:
-		if (outer == ETH_P_8021AD) {
-			x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
-					      RTL9602C_CLS_ACT_STAG_POP);
-		} else if (outer == ETH_P_8021Q) {
-			x.act[1] = FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
-					      RTL9602C_CLS_ACT_CTAG_UNTAG);
-		} else {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "an untagged frame has no tag to pop");
-			return -EOPNOTSUPP;
-		}
-		break;
-	default:
-		NL_SET_ERR_MSG_MOD(extack,
-				   "the offloadable actions are vlan modify, push and pop");
-		return -EOPNOTSUPP;
-	}
-
-place:
 	/*
 	 * From the bottom of the usable range, below the stream entries: one
 	 * entry, or one per priority (rtl9602c_cf_xlate_layout()).
