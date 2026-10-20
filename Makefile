@@ -178,13 +178,15 @@ omcid:
 # libraries, packed by the build system as a tarball that can be unpacked
 # anywhere: TOOLCHAIN_OUT/images/*.tar.gz (docs/handbook/toolchain.rst). Before it
 # is packed, br2-external/toolchain/keep-uclibc puts the pieces of the C
-# library's link into it, for the cut of an image built with it.
+# library's link into it, for the cut of an image built with it. The tarball and
+# its one directory are named open-dfp-34x-2c-toolchain (br2-external/toolchain/PIN).
+TOOLCHAIN_NAME = open-dfp-34x-2c-toolchain
 sdk:
 	$(BR2_ENV) make -C "$$br" O="$(TOOLCHAIN_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
 	  toolchain_defconfig && make -C "$(TOOLCHAIN_OUT)" && \
 	  br2-external/toolchain/keep-uclibc "$(TOOLCHAIN_OUT)" && \
-	  make sdk -C "$(TOOLCHAIN_OUT)" && \
-	  ls -l "$(TOOLCHAIN_OUT)"/images/*.tar.gz
+	  make sdk -C "$(TOOLCHAIN_OUT)" BR2_SDK_PREFIX=$(TOOLCHAIN_NAME) && \
+	  ls -l "$(TOOLCHAIN_OUT)/images/$(TOOLCHAIN_NAME).tar.gz"
 
 # The licence information a release owes, which the build system collects for
 # the board's configuration into IMAGE_OUT/legal-info: the licence of every
