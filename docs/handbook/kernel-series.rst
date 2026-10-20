@@ -17,7 +17,9 @@ Layers
 
 From the bottom:
 
-#. The import of the release, one commit, "linux: import Linux 6.18.57".
+#. The release: Linux 6.18.48 by the import "linux: import Linux 6.18.48",
+   and 6.18.57 by the subtree merge "linux: Update to Linux 6.18.57", whose
+   squash commit holds the release as it is.
 #. The platform: the Lexra LX5281 core and the RTL9602C SoC, its device-tree
    bindings, and the small changes to the Otto drivers (timer, GPIO, SPI,
    watchdog) that the SoC shares with the RTL838x family.
