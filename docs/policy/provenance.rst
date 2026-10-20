@@ -82,6 +82,13 @@ interface -- that it keeps to its own files, that it installs such a package
 inside, its versions and builds by name, and how it behaves where this system
 does not depend on it, are not stated.
 
+The names of the shipped firmware's files, and of the keys in them, that this
+system reads for compatibility may be named in code and documentation: the
+files ``lastgood.xml`` and ``lastgood_hs.xml``, and keys such as ``GPON_SN``,
+``SUSER_PASSWORD`` and ``ELAN_MAC_ADDR``. Importing the owner's identity,
+password and MAC address from the shipped firmware needs them. Its versions
+and builds are still not named. (Decided by the maintainer on 2026-10-20.)
+
 How hardware facts are written
 ==============================
 
