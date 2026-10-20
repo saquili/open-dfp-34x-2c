@@ -170,8 +170,11 @@ Back to the shipped firmware
 Until the first update, the bank this system does not run holds the shipped
 firmware, in its own split: bank 1 after the bench, either bank after the web
 page (``updating.rst``, "The first update"). Stop the countdown and start that
-bank for this boot with ``run b0`` or ``run b1``. After the first update it is
-gone; a copy of the flash taken before it brings it back (``backup.rst``).
+bank for this boot with ``run b0`` or ``run b1``. For good, and with no
+console, the panel's "Go back to the shipped firmware" or ``onu-update
+return`` makes it the bank that starts (``install-guide.rst``, "Going back").
+After the first update it is gone; a copy of the flash taken before it brings
+it back (``backup.rst``).
 
 The loader and its environment
 ==============================

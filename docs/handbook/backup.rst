@@ -69,8 +69,9 @@ repository and out of any report or issue.
 Taking the copy
 ===============
 
-From the panel: the System page has "Copy the whole flash", which asks for
-root's password and downloads the eight partitions in order as one file,
+From the panel: the System page's Software tab has "Copy the whole flash",
+which needs root's password in "Root password" and downloads the eight
+partitions in order as one file,
 ``buchos-gpon-flash-<version>.bin`` of 8388608 bytes
 (``GET /api/firmware/backup``, ``onu-update backup`` on the stick;
 ``pond/README.rst``). Keep it private: it holds the unit's registration

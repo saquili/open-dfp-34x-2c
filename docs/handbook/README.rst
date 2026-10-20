@@ -27,6 +27,11 @@ The stick and the system
         and what a person does.
 
 Building and installing
+    ``install-guide.rst``
+        The walk-through, step by step: installing through the shipped
+        firmware's web page, reaching and signing in to the panel, an update
+        to a newer release, going back to the other bank or to the shipped
+        firmware, and what to do when a step fails.
     ``building.rst``
         Building the two flash images: what each is, its budget and its
         margin, the root filesystem and the boot script, how to build, check

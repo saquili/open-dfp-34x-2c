@@ -15,7 +15,8 @@ at any point leaves a stick that starts.
 A stick as shipped takes this system the first time through its shipped
 firmware's web page (below), or through the bench, which writes the flash
 from the boot loader's prompt (``flashing.rst``) and is also the way to a
-recovery.
+recovery. ``install-guide.rst`` walks through the install, an update and the
+ways back in order; this page says how each works.
 
 The parts
 =========
@@ -44,12 +45,13 @@ The parts
        commits the bank once the system is up, and restarts into the committed
        bank when it is not.
    * - The panel
-     - The System page lists system A (bank 0) and system B (bank 1; see
-       ``boot-contract.rst``, "The names of a bank"), uploads an
+     - The System page's Software tab lists system A (bank 0) and system B
+       (bank 1; see ``boot-contract.rst``, "The names of a bank"), uploads an
        update file, offers to start the new system, downloads the running one,
-       and starts the other one unless it shows as empty. pond hands the upload
-       on a pipe to onu-act, which runs ``onu-update`` on it
-       (``pond/README.rst``).
+       starts the other one when it holds a whole system of its own, goes back
+       to the shipped firmware when the other bank holds that, and copies the
+       whole flash. pond hands the upload on a pipe to onu-act, which runs
+       ``onu-update`` on it (``pond/README.rst``).
 
 Which bank runs
 ===============
@@ -96,10 +98,13 @@ writes only a bank that is named, and ``onu-trial`` does nothing.
 Updating
 ========
 
-From the panel: System, "Upload new software", and the file ``update.bin``. The
-page shows how much has gone; the stick then checks and reads back the bank,
-some 45 seconds in all, and says which version it wrote where. "Start the new
-software" restarts the stick into it, once.
+From the panel: System, tab Software, root's password in "Root password",
+"Upload new software", and the file ``update.bin``. The page shows how much
+has gone; the stick then checks and reads back the bank, some 45 seconds in
+all, and says which version it wrote where. "Start the new software" restarts
+the stick into it, once; with "Start it on trial right after the upload"
+turned on, the restart follows the write by itself. ``install-guide.rst``
+gives the steps with what the panel shows at each.
 
 From a shell on the stick, with the file streamed in over ssh, or from
 ``/tmp``::
@@ -322,13 +327,28 @@ its MAC address from the shipped firmware's files, the host's port at
 * With ``sw_commit`` set to 0 and a restart, the shipped firmware started
   from bank 0, and the password its owner had set signed them in to its page.
 
+It was measured again on 2026-10-20 with the files of the first release, as
+the release workflow made them, through the shipped firmware's page of a stick
+that ran it:
+
+* This system's trial start reached O5 about 10 s after its kernel started,
+  and committed its bank.
+* The panel answered over HTTPS on VLAN 4094, at ``192.168.1.1``, with the
+  certificate the stick signed itself, to a host with ``192.168.1.2/24`` on
+  that VLAN, and signed in ``root`` with the password of the shipped
+  firmware's administrator.
+* "Go back to the shipped firmware" restarted the stick into the shipped
+  firmware with its own settings, whose page answered at ``192.168.1.1``
+  again, without a VLAN tag.
+
 The new system finds the shipped firmware's files in the partition
 ``config``, mounts them, takes the identity from them and starts with its
 settings' defaults, which it then keeps in a file of its own there
 (``boot-contract.rst``). The shipped firmware stays in the other bank until
-an update overwrites it: going back is a switch of the bank, from the boot
-loader's prompt (``run b<bank>``) or, for good, ``onu-update`` with
-``sw_commit`` (``onu-update env``).
+an update overwrites it. Going back to it for good is the panel's "Go back to
+the shipped firmware" or ``onu-update return`` ("The first update", below);
+for one start only, ``run b<bank>`` at the boot loader's prompt
+(``recovery.rst``).
 
 The first update
 ================
@@ -347,10 +367,12 @@ the unit's registration identity and this system's secrets: keep it private.
 ``backup.rst``, "Writing it back", says how to write it back.
 
 While the other bank holds the shipped firmware, the same page has "Go back to
-the shipped firmware", which asks for root's password, commits that bank and
-restarts, so that this start and every one after it are the shipped
-firmware's, with its own settings (``POST /api/firmware/return``, ``onu-update return``).
-It refuses a bank whose kernel is not whole.
+the shipped firmware (system A)", or B, which needs root's password, commits
+that bank and restarts, so that the next start and every one after it are the
+shipped firmware's, with its own settings (``POST /api/firmware/return``,
+``onu-update return``). It refuses a bank whose kernel is not whole. Once the
+first update has written over the shipped firmware the button is gone, and
+``onu-update return`` refuses the bank.
 
 A store from before 2026-10-11
 ==============================

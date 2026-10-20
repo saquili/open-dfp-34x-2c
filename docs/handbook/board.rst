@@ -174,8 +174,11 @@ Linux router (M: the state file of the router's SFP driver, in its debugfs, and
      - The option word declares the signal implemented.
    * - RX_LOS
      - 0
-     - Not declared by the option word. It read 0 throughout, with light from
-       the OLT; what it does without light is not recorded.
+     - Not declared by the option word as it was changed on this stick (see
+       below). It read 0 throughout, with light from the OLT. The contact is
+       the laser driver's own loss-of-signal output: with the fibre pulled it
+       went high within a second of the PON leaving O5, and low again within a
+       second of light returning (M: ``gn25l95.rst``, 2026-10-17).
    * - TX_DISABLE
      - 0, driven by the host
      - The option word declares the signal implemented. What the stick does
@@ -189,10 +192,31 @@ The identity page the host reads over the cage's two-wire bus (A0h at
 ``0x50``) declares an SFP (identifier ``0x03``) with a single-mode laser of
 1310 nm and 20 km on an SC connector, the name ``ODI`` (bytes 20 to 35) and
 the part number ``DFP-34X-2C3`` (bytes 40 to 55), and no digital
-diagnostics. Its option word, bytes 64 and 65,
-reads ``0x0018``: bit 4 (``SFP_OPTIONS_TX_DISABLE``) and bit 3
-(``SFP_OPTIONS_TX_FAULT``) of ``linux/include/linux/sfp.h``. Which part of the
-stick serves this page to the host is not recorded here.
+diagnostics. It declares no Ethernet compliance code (byte 6 is 0) and a
+nominal bit rate of 2500 MBd (byte 12, ``0x19``), so a Linux host picks the
+lane's mode from the bit rate alone (``install-guide.rst``, "The host's view
+of the stick").
+
+The page is a memory of its own, apart from the laser driver's private EEPROM,
+which the host never sees, on a bus the SoC does not reach: the SoC's SFP
+slave is disabled and empty, and the stick cannot change what the host reads
+(M: ``gn25l95.rst``, 2026-10-17).
+
+**The sticks this system was tested on do not carry the page as shipped.** As
+shipped, byte 65 (``0x41``), the low byte of the option word of bytes 64 and
+65, read ``0x1a``: bit 4 (``SFP_OPTIONS_TX_DISABLE``), bit 3
+(``SFP_OPTIONS_TX_FAULT``) and bit 1 (``SFP_OPTIONS_LOS_NORMAL``) of
+``linux/include/linux/sfp.h``, RX_LOS declared. It was written to ``0x18``
+from the Linux host of the cage, and the check byte CC_EXT, byte 95
+(``0x5f``), the low byte of the sum of bytes 64 to 94, from ``0x3d`` to
+``0x3b``. The option word now reads ``0x0018``, TX_DISABLE and TX_FAULT
+alone. With RX_LOS declared, a Linux host keeps the link down while RX_LOS is
+high: after a warm restart of the host its SFP driver stayed in the state
+``wait_los``, while a cold power cycle sometimes brought the link up anyway;
+with the change the link came up after every warm restart (M: the host's SFP
+driver, warm restarts of the host before and after the change). Why the change
+matters, and how to make it, is in ``install-guide.rst``, "The host's view of
+the stick".
 
 The PON side
 ============
