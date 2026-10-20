@@ -136,16 +136,18 @@ void cpu_probe(void)
 		/*
 		 * MIPS_CPU_3K_CACHE as on the R3000, but the cache is
 		 * served by the Lexra cache code (CONFIG_CPU_LEXRA_CACHE).
-		 * No MIPS_CPU_LLSC: ll works, but sc never stores, always
-		 * reports failure and never traps, so code built on them
-		 * would loop forever (measured on this board). No FPU
-		 * probe: __cpu_has_fpu() enables coprocessor 1 and reads
-		 * its implementation register, which on a core without an
-		 * FPU faults before any console exists; whether this core
-		 * has one is not verified.
+		 * MIPS_CPU_LLSC: the core runs ll and sc of MIPS II, in
+		 * kernel and user mode, cached and uncached; sc stores and
+		 * reports success unless an exception came after the ll,
+		 * and the instruction after an ll waits for its result as
+		 * after a lw (measured on this board). No FPU probe:
+		 * __cpu_has_fpu() enables coprocessor 1 and reads its
+		 * implementation register, which on a core without an FPU
+		 * faults before any console exists; whether this core has
+		 * one is not verified.
 		 */
 		c->options = MIPS_CPU_TLB | MIPS_CPU_3K_CACHE |
-			     MIPS_CPU_NOFPUEX;
+			     MIPS_CPU_NOFPUEX | MIPS_CPU_LLSC;
 		/* As on the R3000; the size is not probed and not verified. */
 		c->tlbsize = 64;
 		break;
