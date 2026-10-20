@@ -11,6 +11,8 @@ ok atexit
 handler 3
 handler 2
 handler 1
+== t-atomic
+ok atomic
 == t-div64
 6148914691236517205
 -1317624576693539401

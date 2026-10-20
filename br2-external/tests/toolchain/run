@@ -13,10 +13,11 @@
 # build/toolchain-tests in the repository). The gate then scans OUT, and each
 # program runs under qemu-mips, the dynamic ones with the toolchain's sysroot as
 # the root of the dynamic loader's search. The output of each is compared with
-# its section of expected.txt, and the instructions that qemu-mips translated
-# for it (-d in_asm) are searched for the load-linked, store-conditional and sync
-# instructions, which the core does not run: the library code that the program
-# reaches, as well as its own, has to be free of them. -n stops after the gate.
+# its section of expected.txt. For the programs of llsc_programs (t-atomic), the
+# instructions that qemu-mips translated for it (-d in_asm) have to hold ll and
+# sc: the toolchain makes atomic operations in place as the ll/sc sequences
+# that the core runs, and a call to a library function instead would not show
+# them. -n stops after the gate.
 # t-divzero is not run under qemu-mips, which sends SIGTRAP for the break
 # instruction that a division by zero executes, where the kernel of the board
 # sends SIGFPE.
@@ -53,7 +54,12 @@ expected() {	# the section of expected.txt for program $1
 	sed -n "/^== $1\$/,/^== /{/^== /d;p;}" "$here/expected.txt"
 }
 
+translated() {	# did qemu-mips translate the instruction $2, by the trace $1?
+	grep -E -q "^0x[0-9a-f]+:[[:space:]]+$2([[:space:]]|\$)" "$1"
+}
+
 qemu_skip=" t-divzero "
+llsc_programs=" t-atomic "
 fail=0
 rm -rf "$out"
 mkdir -p "$out/static" "$out/dynamic" || exit 2
@@ -85,12 +91,16 @@ if [ "$run_programs" = 1 ]; then
 			else
 				got=$(qemu-mips -d in_asm -D "$trace" -L "$sysroot" "$out/$kind/$p" 2>&1)
 			fi
+			case $llsc_programs in
+			*" $p "*) llsc=1 ;;
+			*) llsc=0 ;;
+			esac
 			if [ "$got" != "$(expected "$p")" ]; then
 				echo "FAIL $kind $p: unexpected output"
 				echo "$got" | sed 's/^/    /'
 				fail=1
-			elif grep -E -q '^0x[0-9a-f]+:[[:space:]]+(ll|sc|sync)([[:space:]]|$)' "$trace"; then
-				echo "FAIL $kind $p: ll, sc or sync was translated (see $trace)"
+			elif [ "$llsc" = 1 ] && ! { translated "$trace" ll && translated "$trace" sc; }; then
+				echo "FAIL $kind $p: ll and sc were not both translated (see $trace)"
 				fail=1
 			else
 				echo "pass $kind $p"

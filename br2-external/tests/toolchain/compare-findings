@@ -14,7 +14,7 @@ front of each file name.
 
 The findings are grouped by file, archive member and function, and each group
 is counted and its instructions are listed in order: the mnemonic of each, and
-for a word that the MIPS I listing leaves as data (.word) the word itself,
+for a word that the gate's listing leaves as data (.word) the word itself,
 because the word says which instruction it is. The offset in the function and
 the registers are left out, so that a rebuilt library with the same code
 compares equal. The list and the findings have to be the same, group for group:

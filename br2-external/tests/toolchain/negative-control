@@ -5,16 +5,17 @@
 # negative-control: show that the instruction-set gate can fail. It compiles a
 # few lines with the Debian cross compiler for MIPS (gcc-mips-linux-gnu), whose
 # default is MIPS32 release 2, and requires the gate to refuse the object: for its
-# architecture flags, for the load-linked and store-conditional pair (which a
-# listing as MIPS I shows as lwc0 and swc0) and for the instructions of MIPS32
-# that such a listing leaves as ".word" (clz and mul are of the 0x70 group, wsbh
-# of the 0x7c group).
+# architecture flags, for teq, the trap of MIPS II that this compiler puts after
+# a division to catch a zero divisor, and for the instructions of MIPS32 that a
+# listing as MIPS II leaves as ".word" (clz and mul are of the 0x70 group, wsbh
+# of the 0x7c group). The object also holds the ll, sc and sync of an atomic
+# addition, which the core runs: the gate must not report those.
 #
 # Usage: negative-control [PREFIX]
 #
 # PREFIX is the cross compiler's prefix (default mips-linux-gnu-). Exit status: 0
-# when the gate refused the object and named each of these, 1 when it did not, 2
-# when the compiler is missing.
+# when the gate refused the object, named each of these and none of ll, sc and
+# sync; 1 when it did not; 2 when the compiler is missing.
 
 prefix=${1:-mips-linux-gnu-}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -26,6 +27,7 @@ trap 'rm -rf "$dir"' EXIT
 cat >"$dir/stock.c" <<'SRC'
 unsigned int count(unsigned int x) { return __builtin_clz(x); }
 unsigned int times(unsigned int a, unsigned int b) { return a * b; }
+int quotient(int a, int b) { return a / b; }
 unsigned int bump(unsigned int *p) { return __sync_fetch_and_add(p, 1); }
 unsigned int swap(unsigned int x) { return __builtin_bswap32(x); }
 SRC
@@ -35,7 +37,11 @@ SRC
 status=$?
 cat "$dir/gate.out"
 [ "$status" = 1 ] || { echo "negative-control: the gate exited $status, expected 1" >&2; exit 1; }
-for what in 'mips32r2' 'lwc0' 'swc0' '\.word 0x70' '\.word 0x7c'; do
+for what in 'mips32r2' ': teq' '\.word 0x70' '\.word 0x7c'; do
 	grep -q "$what" "$dir/gate.out" || { echo "negative-control: the gate did not report $what" >&2; exit 1; }
 done
+if grep -E -q '\+0x[0-9a-f]+: (ll|sc|sync)( |$)' "$dir/gate.out"; then
+	echo "negative-control: the gate reported ll, sc or sync, which the core runs" >&2
+	exit 1
+fi
 echo "negative-control: the gate refused the MIPS32 object, as it must"

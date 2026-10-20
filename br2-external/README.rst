@@ -106,10 +106,12 @@ The toolchain
 source:
 
 ======================= ======================================================
-MIPS I                  big endian, soft-float; the architecture variant that
-                        the carried patch adds (``buildroot/README.rst``)
+MIPS I                  big endian, soft-float, with ``ll``, ``sc`` and
+                        ``sync``; the architecture variant that the carried
+                        patch adds (``buildroot/README.rst``)
 gcc 14.4.0              C only; no C++, no Fortran, one library set (no
-                        multilib); configured with ``--with-arch=mips1``
+                        multilib); configured with ``--with-arch=mips1`` and
+                        ``--with-llsc``
 binutils 2.44
 uClibc-ng 1.0.59        static and shared libraries, no threads, the stack
                         protector on (see below)
@@ -181,14 +183,15 @@ What the build makes can be checked by compiling a file with no options and
 looking at the compiler and at the object::
 
     t=build/toolchain/host/bin/mips-buildroot-linux-uclibc
-    $t-gcc -v 2>&1 | grep -o -e '--with-[a-z0-9-]*=[a-z0-9]*' -e '--without-[a-z]*'
+    $t-gcc -v 2>&1 | grep -o -e '--with-[a-z0-9-]*=[a-z0-9]*' -e '--with-llsc' \
+        -e '--without-[a-z]*'
     echo 'int f(int a, int b) { return a / b; }' > /tmp/f.c
     $t-gcc -O2 -c /tmp/f.c -o /tmp/f.o
     $t-readelf -h /tmp/f.o | grep -e Flags -e Data
     $t-readelf -A /tmp/f.o | grep -e ISA -e 'FP ABI'
 
 The compiler is configured with ``--with-arch=mips1``, ``--with-abi=32``,
-``--with-float=soft``, ``--with-divide=breaks``, ``--without-llsc`` and
+``--with-float=soft``, ``--with-divide=breaks``, ``--with-llsc`` and
 ``--without-synci``; the object has the flags ``mips1``, ``o32``, big endian,
 and the ABI flags ``ISA: MIPS1`` and ``FP ABI: Soft float``.
 
@@ -216,12 +219,24 @@ hand out the headers of another kernel.
 No threads
 ----------
 
-The toolchain has no thread library (``BR2_PTHREADS_NONE``), and the patch does
-not offer one. uClibc-ng's thread libraries, and its atomic header, are built on
-the load-linked and store-conditional pair: on this core they assemble and then
-never complete. A program without threads has nothing that must be atomic, and
-gcc is configured with ``--disable-threads``, ``--disable-tls`` and
-``--disable-libatomic``.
+The toolchain has no thread library (``BR2_PTHREADS_NONE``), and the patch
+offers neither of uClibc-ng's. NPTL finds each thread's storage through the
+thread pointer, which the MIPS ABI reads with ``rdhwr $3, $29``; on this core
+that instruction faults as an access to memory instead of trapping, so the
+kernel cannot emulate it (M, ``linux/Documentation/arch/mips/rtl9602c.rst``,
+"Instructions beyond MIPS I"). linuxthreads is not kept up. gcc is configured
+with ``--disable-threads``, ``--disable-tls`` and ``--disable-libatomic``; a
+``__thread`` variable is emulated by libgcc (``__emutls_get_address()``), one
+per process.
+
+Atomic operations need no threads. gcc is configured with ``--with-llsc``, and
+makes the ``__sync`` and ``__atomic`` operations on objects of 1, 2 and 4
+bytes in place as ``ll``/``sc`` sequences, with ``sync`` where the memory order
+asks for it, which the core runs (M, the same section; ADR 0021); the build
+system claims
+them (``BR2_TOOLCHAIN_HAS_SYNC_1``, ``_2`` and ``_4``). An operation on 8 bytes
+needs libatomic, which is not built, and does not link: ``undefined reference
+to '__atomic_fetch_add_8'``.
 
 The C library's configuration
 -----------------------------
@@ -460,51 +475,47 @@ leaves out the programs that run on the build machine::
     br2-external/tests/toolchain/target-objects build/toolchain/host \
         | xargs tools/isa-gate/isa-gate --archives
 
-For the toolchain this defconfig builds, the list holds 22 files and the gate
-scans 3109 objects, 366584 instructions. It reports 34 findings, all in two
-functions of the libraries:
+For the toolchain this defconfig builds, the list holds 30 files, 22 objects
+and 8 archives, and the gate scans 5469 objects, 731149 instructions (M,
+2026-10-20). It reports 27 findings, all in one function of libgcc:
 
-``__speculation_barrier`` (libgcc.a and libgcc_s.so.1, 10 findings in each file)
-    A ``sync``, written as a data word because MIPS I has none, eight ``ssnop``
-    and a ``jr.hb`` word. gcc 14 builds it for every MIPS target
-    (``LIB1ASMFUNCS`` in ``libgcc/config/mips/t-mips``). A program reaches it
-    through ``__builtin_speculation_safe_value`` only.
-``_test_and_set`` (libc.a and libuClibc.so, 2 findings in each file)
-    A load-linked and store-conditional loop, the function behind
-    ``<sys/tas.h>``; uClibc-ng builds it for every MIPS target
-    (``libc/sysdeps/linux/mips/Makefile.arch``).
+``__speculation_barrier`` (9 findings in libgcc.a and in each libgcc_s.so.1)
+    Eight ``ssnop`` and a ``jr.hb`` word, after a ``sync``, which the gate
+    allows; ``libgcc_s.so.1`` is in the toolchain twice. gcc 14 builds it
+    for every MIPS target (``LIB1ASMFUNCS`` in
+    ``libgcc/config/mips/t-mips``). A program reaches it through
+    ``__builtin_speculation_safe_value`` only.
 
-A third, ``__cxa_finalize`` of uClibc-ng, ran a compare-and-exchange for each
-entry of the exit-handler table; the carried patch of the exit handlers
-(``buildroot/README.rst``) claims the entry with a plain test and store when
-there are no threads, and it is no longer a finding.
+The ``ll``/``sc`` sequences of the C library, in ``__cxa_finalize``, which
+claims an entry of the exit-handler table with a compare-and-exchange, and in
+``_test_and_set``, the function behind ``<sys/tas.h>``, are not findings: the
+core runs them, and the gate allows ``ll``, ``sc`` and ``sync`` (ADR 0021).
 
-No option of gcc or of uClibc-ng leaves the two functions out. A program that
-links the C library statically takes only the objects it refers to, so a static
-program does not contain them; the test programs below, static and dynamic, pass
-the gate, and none of them executes a load-linked, store-conditional or sync
-instruction. The image's programs share the C library, which the build cuts to
-the functions they import: no program imports ``_test_and_set``, so the image's
-library does not hold it, and the image does not ship ``libgcc_s``, which
-nothing loads (ADR 0008). The gate over the target tree holds the image to that.
+No option of gcc leaves the function out. A program that links libgcc
+statically takes only the objects it refers to, so a static program does not
+contain it; the test programs below, static and dynamic, pass the gate. The
+image does not ship ``libgcc_s``, which nothing loads (ADR 0008), and the gate
+over the target tree holds the image to that.
 
 ``tests/toolchain/known-findings.txt`` lists the findings, for each file,
 archive member and function, with the instructions in the order the gate reports
 them. ``compare-findings`` holds the gate's output to the list: the toolchain
 job passes when the findings are exactly the list, and fails when one is new,
-gone or different. On the toolchain this defconfig builds the 34 findings are
-the 5 groups of the list. When the toolchain changes on purpose,
+gone or different. On the toolchain this defconfig builds the 27 findings are
+the 3 groups of the list. When the toolchain changes on purpose,
 ``compare-findings --print-known`` writes the new list from the gate's output.
 
 The test programs
 -----------------
 
-``tests/toolchain/t-*.c`` are 14 small programs: formatted input and output, the
+``tests/toolchain/t-*.c`` are 15 small programs: formatted input and output, the
 allocator, the string and memory functions, ``qsort``, calendar and clock
 functions, ``poll`` and ``select``, sockets that need no network, signals,
 64-bit division, shifts by a run-time count, unaligned loads and stores through
-``memcpy``, exit handlers, soft-float arithmetic and the maths library, and
-integer division by zero (which the compiler checks with ``break``). Each checks
+``memcpy``, exit handlers, atomic operations of 1, 2 and 4 bytes (one of them
+on a count that a timer's signal handler adds to as well), soft-float
+arithmetic and the maths library, and integer division by zero (which the
+compiler checks with ``break``). Each checks
 its own results and prints ``ok <name>``; the values that some print are checked
 against exact arithmetic done outside the programs. ``expected.txt`` holds what
 each prints. ::
@@ -512,13 +523,16 @@ each prints. ::
     br2-external/tests/toolchain/run build/toolchain/host
 
 builds every program with ``-O2`` and ``-Wall -Wextra -Werror``, static and
-dynamic, into ``build/toolchain-tests``; runs the gate over the 28 binaries;
-runs each of 13 of the programs under ``qemu-mips`` (the dynamic ones with the
-toolchain's sysroot) and compares its output with ``expected.txt``; and searches
-the instructions that ``qemu-mips`` translated for ``ll``, ``sc`` and ``sync``.
-``t-divzero`` is built and checked by the gate, and not run under ``qemu-mips``,
-which raises SIGTRAP for the ``break`` where the kernel of the board raises
-SIGFPE.
+dynamic, into ``build/toolchain-tests``; runs the gate over the 30 binaries;
+runs each of 14 of the programs under ``qemu-mips`` (the dynamic ones with the
+toolchain's sysroot) and compares its output with ``expected.txt``; and, for
+``t-atomic``, requires the instructions that ``qemu-mips`` translated to hold
+``ll`` and ``sc``, the sign that the atomic operations were made in place and
+not as calls. On the board, ``t-atomic`` also puts the sequences through the
+interrupts and signals that end their reservations, which the emulator does
+not do. ``t-divzero`` is built and checked by the gate, and not run under
+``qemu-mips``, which raises SIGTRAP for the ``break`` where the kernel of the
+board raises SIGFPE.
 
 To run them on the board, copy the ``static`` directory, and ``check-output``
 and ``expected.txt`` of ``br2-external/tests/toolchain``, to it, and run::
@@ -545,12 +559,14 @@ under ``qemu-mips``, as above.
 The negative control
 --------------------
 
-``tests/toolchain/negative-control`` compiles four functions with the Debian
+``tests/toolchain/negative-control`` compiles five functions with the Debian
 cross compiler for MIPS, whose default is MIPS32 release 2, and requires the
-gate to refuse the object: for its architecture flags, for the load-linked and
-store-conditional pair (``lwc0`` and ``swc0``), and for the instructions that a
-listing as MIPS I leaves as data words (``clz``, ``mul``, ``wsbh`` and
-``sync``). It shows that the gate can fail on code that this core cannot run.
+gate to refuse the object: for its architecture flags, for ``teq``, the trap
+of MIPS II that this compiler puts after a division, and for the instructions
+that a listing as MIPS II leaves as data words (``clz``, ``mul`` and
+``wsbh``). It shows that the gate can fail on code that this core cannot run.
+The object also holds the ``ll``, ``sc`` and ``sync`` of an atomic addition,
+which the core runs, and the gate must not report them.
 
 Two builds
 ----------

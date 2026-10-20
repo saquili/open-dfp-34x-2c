@@ -249,21 +249,23 @@ class TheList(unittest.TestCase):
     def test_it_parses(self):
         self.assertGreater(len(self.groups()), 0)
 
-    def test_it_holds_the_two_functions_and_no_other(self):
+    def test_it_holds_the_one_function_and_no_other(self):
         functions = {key[2] for key in self.groups()}
-        self.assertEqual(functions, {"__speculation_barrier", "_test_and_set"})
+        self.assertEqual(functions, {"__speculation_barrier"})
 
     def test_each_function_has_the_count_the_documentation_gives_per_file(self):
         counts = {}
         for (path, _member, function), what in self.groups().items():
             counts.setdefault(function, []).append((os.path.basename(path), len(what)))
         self.assertEqual(sorted(counts["__speculation_barrier"]),
-                         [("libgcc.a", 10), ("libgcc_s.so.1", 10), ("libgcc_s.so.1", 10)])
-        self.assertEqual(sorted(counts["_test_and_set"]),
-                         [("libc.a", 2), ("libuClibc-1.0.59.so", 2)])
+                         [("libgcc.a", 9), ("libgcc_s.so.1", 9), ("libgcc_s.so.1", 9)])
 
-    def test_the_total_is_thirty_four(self):
-        self.assertEqual(sum(len(what) for what in self.groups().values()), 34)
+    def test_the_total_is_twenty_seven(self):
+        self.assertEqual(sum(len(what) for what in self.groups().values()), 27)
+
+    def test_the_instructions_the_core_runs_are_not_findings(self):
+        for what in self.groups().values():
+            self.assertFalse({"ll", "sc", "sync", ".word=0xf"} & set(what), what)
 
     def test_every_path_is_relative_to_the_toolchain_directory(self):
         for path, _member, _function in self.groups():

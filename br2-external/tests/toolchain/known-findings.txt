@@ -8,25 +8,22 @@
 # compare-findings holds what it reports to this list: the job passes when the
 # findings are exactly these, and fails when one is new, gone or different.
 #
-# The two functions are in the libraries of libgcc and of uClibc-ng and are
-# built for every MIPS target; a third, uClibc-ng's __cxa_finalize, left the
-# list with the carried patch of the exit handlers (buildroot/README.rst). A
-# program that links the C library statically takes only the objects it refers
-# to, so neither is in a static program; the image's programs share a C library
-# cut to what they import, which leaves out _test_and_set, and the image does
-# not ship libgcc_s (docs/adr/0008).
+# The one function is libgcc's, built for every MIPS target. uClibc-ng's
+# __cxa_finalize and _test_and_set, whose ll/sc sequences the core runs, left
+# the list when the gate came to allow ll, sc and sync (docs/adr/0021). A
+# program that links libgcc statically takes only the objects it refers to, so
+# the function is not in a static program, and the image does not ship
+# libgcc_s (docs/adr/0008).
 #
 # One line for each file, archive member and function: the number of findings,
 # the file (below the toolchain directory), the archive member (- for a file that
 # is not an archive), the function, and the instructions in the order the gate
-# reports them: the mnemonic of each, and for a word that a listing as MIPS I
-# leaves as data, the word (.word=0xf is sync; .word=0x3e00408 is jr.hb). When
-# the toolchain changes on purpose, "compare-findings --print-known" writes the
-# new list from the gate's output.
+# reports them: the mnemonic of each, and for a word that a listing as MIPS II
+# leaves as data, the word (.word=0x3e00408 is jr.hb). When the toolchain
+# changes on purpose, "compare-findings --print-known" writes the new list from
+# the gate's output.
 #
 # findings | file | archive member (- for none) | function | instructions
-10 | lib/gcc/mips-buildroot-linux-uclibc/14.4.0/libgcc.a | _speculation_barrier.o | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
-10 | mips-buildroot-linux-uclibc/lib/libgcc_s.so.1 | - | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
-10 | mips-buildroot-linux-uclibc/sysroot/lib/libgcc_s.so.1 | - | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
-2 | mips-buildroot-linux-uclibc/sysroot/lib/libuClibc-1.0.59.so | - | _test_and_set | lwc0 swc0
-2 | mips-buildroot-linux-uclibc/sysroot/usr/lib/libc.a | _test_and_set.os | _test_and_set | lwc0 swc0
+9 | lib/gcc/mips-buildroot-linux-uclibc/14.4.0/libgcc.a | _speculation_barrier.o | __speculation_barrier | ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
+9 | mips-buildroot-linux-uclibc/lib/libgcc_s.so.1 | - | __speculation_barrier | ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
+9 | mips-buildroot-linux-uclibc/sysroot/lib/libgcc_s.so.1 | - | __speculation_barrier | ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408

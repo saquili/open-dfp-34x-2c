@@ -6,14 +6,15 @@
 # tarball, which a release of the toolchain workflow carries. See
 # br2-external/README.rst.
 
-# MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
+# MIPS I, big endian, soft-float: the Lexra core of the RTL9602C, which also
+# runs ll, sc and sync, so atomic operations are ll/sc sequences. The MIPS I
 # variant comes from the patch in buildroot/patches.
 BR2_mips=y
 BR2_mips_1=y
 
 # gcc 14 and binutils 2.44, and uClibc-ng with its C library configuration of
-# this product. No threads: the core has no atomic operations. Wide
-# characters, which nftables needs.
+# this product. No threads: the core has no thread pointer for thread-local
+# storage. Wide characters, which nftables needs.
 BR2_BINUTILS_VERSION_2_44_X=y
 BR2_GCC_VERSION_14_X=y
 BR2_TOOLCHAIN_BUILDROOT_UCLIBC=y
