@@ -83,7 +83,8 @@ describe("the services", () => {
       [279, [6, 7], 272],
       [2046, [], null],
     ]);
-    expect(channels[0]?.encrypted).toBe(true);
+    /* The OLT encrypts a subscriber's channels, not the broadcast one. */
+    expect(channels.map((c) => c.encrypted)).toEqual([true, true, false]);
     expect(channels[0]?.queue).toEqual({ priority: 0, weight: 1 });
   });
 

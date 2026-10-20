@@ -145,8 +145,13 @@ vlanFilter(0x1103, [200]);
 vlanFilter(0x1104, [300]);
 vlanFilter(0x110b, [100, 200, 300]);
 
-/* The channels, their interworking points and T-CONTs. */
-const ctp = (id: number, portId: number, tcont: number, dir: number, queue: number) =>
+/*
+ * The channels, their interworking points and T-CONTs. The OLT encrypts the
+ * downstream of each subscriber channel, encryption state 1 (AES-128, G.988
+ * 9.2.3); the broadcast and multicast channels reach every ONU and stay in
+ * the clear, state 0.
+ */
+const ctp = (id: number, portId: number, tcont: number, dir: number, queue: number, enc: number) =>
   me(268, id, {
     1: u16(portId),
     2: u16(tcont),
@@ -155,16 +160,16 @@ const ctp = (id: number, portId: number, tcont: number, dir: number, queue: numb
     5: u16(0),
     6: u8(0),
     7: u16(0),
-    8: u8(1),
+    8: u8(enc),
     9: u16(0),
     10: u8(0),
   });
-ctp(0x0116, 278, 0x8000, 3, 0x8000);
-ctp(0x0117, 279, 0x8001, 3, 0x8008);
-ctp(0x0118, 280, 0x8002, 3, 0x8010);
-ctp(0x0119, 281, 0x8002, 3, 0x8011);
-ctp(0x07fe, 2046, 0xffff, 2, 0xffff);
-ctp(0x07ff, 2047, 0xffff, 2, 0xffff);
+ctp(0x0116, 278, 0x8000, 3, 0x8000, 1);
+ctp(0x0117, 279, 0x8001, 3, 0x8008, 1);
+ctp(0x0118, 280, 0x8002, 3, 0x8010, 1);
+ctp(0x0119, 281, 0x8002, 3, 0x8011, 1);
+ctp(0x07fe, 2046, 0xffff, 2, 0xffff, 0);
+ctp(0x07ff, 2047, 0xffff, 2, 0xffff, 0);
 const iw = (id: number, option: number, profile: number) =>
   me(266, id, { 1: u16(id), 2: u8(option), 3: u16(profile), 4: u16(0xffff), 6: u8(0), 7: u16(1) });
 iw(0x0116, 5, 0x1102);
@@ -267,7 +272,7 @@ export function withServices(n: number): OmciValue {
     port(id, 3, id);
     mapper(id, Object.fromEntries([0, 1, 2, 3, 4, 5, 6, 7].map((p) => [p, 0x3000 + i])));
     vlanFilter(id, [2000 + i]);
-    ctp(0x3000 + i, 300 + i, 0x8002, 3, 0x8012);
+    ctp(0x3000 + i, 300 + i, 0x8002, 3, 0x8012, 1);
     iw(0x3000 + i, 5, id);
     more.push(
       rule({ op: NO, ov: VANY, ip: 8, iv: 1000 + i }, 1, { op: NO, ov: 0, ip: 8, iv: 2000 + i }),
