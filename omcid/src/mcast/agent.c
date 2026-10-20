@@ -857,6 +857,16 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 						<< 13 |
 					r[i].assign_cvid);
 		}
+		if (r[i].kind == OMCI_HW_VLAN_SCVID_PUSH) {
+			if (outer_tag(f, &tci) != 0u)
+				continue;
+			len = push_tag(f, len, 0x8100u,
+				       (unsigned int)r[i].inner_pri << 13 |
+					       r[i].assign_cvid);
+			return push_tag(f, len, 0x88a8u,
+					(unsigned int)r[i].assign_pri << 13 |
+						r[i].assign_svid);
+		}
 		if (!ctag || vid != r[i].match_cvid ||
 		    (r[i].match_has_pri && pcp != r[i].match_pri))
 			continue;
@@ -870,6 +880,10 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 							r[i].assign_cvid);
 			return len;
 		}
+		if (r[i].inner_has_pri)
+			omci_be16_store(&f[14],
+					(unsigned int)r[i].inner_pri << 13 |
+						(tci & 0x1fffu));
 		return push_tag(f, len, 0x88a8u, pri << 13 | r[i].assign_svid);
 	}
 	return ctag && discard ? 0u : len;
@@ -1313,7 +1327,8 @@ static bool unicast_vlan(uint16_t vid)
 		if (r[i].kind == OMCI_HW_VLAN_DISCARD_TAGGED ||
 		    r[i].kind == OMCI_HW_VLAN_DISCARD_VID)
 			continue;
-		if ((r[i].kind == OMCI_HW_VLAN_SVID_PUSH ?
+		if ((r[i].kind == OMCI_HW_VLAN_SVID_PUSH ||
+				     r[i].kind == OMCI_HW_VLAN_SCVID_PUSH ?
 			     r[i].assign_svid :
 			     r[i].assign_cvid) == vid)
 			return true;

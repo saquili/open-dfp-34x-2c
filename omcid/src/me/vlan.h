@@ -34,6 +34,8 @@
  *	rule takes: the default rule of such frames, when it discards them
  * @OMCI_VLAN_OP_DISCARD_VID: drop the single-tagged frames of one VID, and of
  *	one priority when the filter names it
+ * @OMCI_VLAN_OP_SCVID_PUSH: give an untagged frame a C-tag and an S-tag in
+ *	front of it
  */
 enum omci_vlan_op {
 	OMCI_VLAN_OP_NONE = 0,
@@ -49,6 +51,8 @@ enum omci_vlan_op {
 	OMCI_VLAN_OP_DISCARD_TAGGED,
 
 	OMCI_VLAN_OP_DISCARD_VID,
+
+	OMCI_VLAN_OP_SCVID_PUSH,
 };
 
 /**
@@ -56,8 +60,7 @@ enum omci_vlan_op {
  * @OMCI_VLAN_REJECT_NONE: it can
  * @OMCI_VLAN_REJECT_ETHERTYPE: it filters on an Ethertype
  * @OMCI_VLAN_REJECT_PCP_REMARK: it sets a priority that is not carried: one
- *	taken from a tag the frame does not have, or from its DSCP, or a new
- *	priority of the C-tag behind an added S-tag
+ *	taken from a tag the frame does not have, or from its DSCP
  * @OMCI_VLAN_REJECT_SHAPE: its combination of filter and treatment has no
  *	counterpart in the hardware
  * @OMCI_VLAN_REJECT_VID_RANGE: a VID outside 1 to 4094
@@ -79,14 +82,19 @@ enum omci_vlan_reject {
  * @reject: why it cannot be programmed, when @op is unsupported
  * @match_cvid: the VID the rule matches, 0 for an untagged frame; of a
  *	discard, the VID of the frames it drops
- * @assign_cvid: the VID that replaces it, for a translation, or of the tag a
- *	C-VID push adds
- * @assign_svid: the VID of the added outer tag, for an S-VID push
- * @assign_pri: the priority of the tag written, 0 to 7,
+ * @assign_cvid: the VID that replaces it, for a translation, or of the C-tag a
+ *	C-VID push or a C- and S-VID push adds
+ * @assign_svid: the VID of the added outer tag, for an S-VID push or a C- and
+ *	S-VID push
+ * @assign_pri: the priority of the tag written, the outer one of two, 0 to 7,
  *	%OMCI_HW_VLAN_PRI_KEEP or %OMCI_HW_VLAN_PRI_COPY
  * @match_has_pri: the rule takes only the frames whose tag has priority
  *	@match_pri, which its filter names
  * @match_pri: that priority, 0 to 7
+ * @inner_has_pri: the rule gives the C-tag behind its S-tag priority
+ *	@inner_pri: the C-tag a C- and S-VID push adds, or the frame's own
+ *	C-tag where an S-VID push changes its priority
+ * @inner_pri: that priority, 0 to 7
  * @filter_outer_pri: the fields of the rule, as the row holds them
  * @filter_outer_vid: see @filter_outer_pri
  * @filter_outer_tpid: see @filter_outer_pri
@@ -112,6 +120,8 @@ struct omci_vlan_rule {
 	uint8_t assign_pri;
 	bool match_has_pri;
 	uint8_t match_pri;
+	bool inner_has_pri;
+	uint8_t inner_pri;
 
 	uint8_t filter_outer_pri;
 	uint16_t filter_outer_vid;

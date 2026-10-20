@@ -174,6 +174,49 @@ static void vlan_rules(void)
 	CHECK(at("pon", TC_PRIO_VLAN, "modify id 410"));
 	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
 	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
+
+	const struct omci_hw_vlan_xlate two[] = {
+		{ .kind = OMCI_HW_VLAN_SCVID_PUSH,
+		  .assign_cvid = 410,
+		  .inner_has_pri = true,
+		  .inner_pri = 5,
+		  .assign_svid = 200,
+		  .assign_pri = 3 },
+		{ .kind = OMCI_HW_VLAN_SVID_PUSH,
+		  .match_cvid = 100,
+		  .match_has_pri = true,
+		  .match_pri = 6,
+		  .assign_svid = 300,
+		  .assign_pri = 6,
+		  .inner_has_pri = true,
+		  .inner_pri = 0 },
+		{ .kind = OMCI_HW_VLAN_SVID_PUSH,
+		  .match_cvid = 101,
+		  .assign_svid = 301,
+		  .assign_pri = 1,
+		  .inner_has_pri = true,
+		  .inner_pri = 4 },
+	};
+
+	puts("two tags on untagged frames, both popped; S-tags before C-tags given a priority");
+	CHECK(omci_hw_kernel_ops.vlan_apply(two, 3, &rejected) == OMCI_OK);
+	CHECK(rejected.n == 0);
+	CHECK(at("sfp", TC_PRIO_VLAN, "push id 410"));
+	CHECK(at("sfp", TC_PRIO_VLAN, "priority 5"));
+	CHECK(at("sfp", TC_PRIO_VLAN, "push id 200"));
+	CHECK(at("sfp", TC_PRIO_VLAN, "802.1ad"));
+	CHECK(at("pon", TC_PRIO_VLAN, "vlan_id 200"));
+	CHECK(at("pon", TC_PRIO_VLAN, "vlan_ethtype"));
+	CHECK(at("pon", TC_PRIO_VLAN, "pop"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 1, "pop"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 1, "push id 100"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 1, "push id 300"));
+	CHECK(at("pon", TC_PRIO_VLAN + 1, "vlan_id 300"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 2, "modify id 101"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 2, "priority 4"));
+	CHECK(at("sfp", TC_PRIO_VLAN + 2, "push id 301"));
+	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
+	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
 }
 
 /*

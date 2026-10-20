@@ -155,6 +155,8 @@ static inline bool omci_hw_reject_has(const struct omci_hw_reject *r,
  *	subscriber side that no other rule takes; it matches no VID itself
  * @OMCI_HW_VLAN_DISCARD_VID: drop the single-tagged frames of one VID from
  *	the subscriber side; nothing comes back downstream
+ * @OMCI_HW_VLAN_SCVID_PUSH: give an untagged frame a C-tag and an S-tag in
+ *	front of it
  */
 enum omci_hw_vlan_kind {
 	OMCI_HW_VLAN_CVID_XLATE = 0,
@@ -162,6 +164,7 @@ enum omci_hw_vlan_kind {
 	OMCI_HW_VLAN_CVID_PUSH,
 	OMCI_HW_VLAN_DISCARD_TAGGED,
 	OMCI_HW_VLAN_DISCARD_VID,
+	OMCI_HW_VLAN_SCVID_PUSH,
 };
 
 /*
@@ -176,10 +179,13 @@ enum omci_hw_vlan_kind {
  * @kind: what it does
  * @match_cvid: the VID of the frames it takes from the subscriber side; 0,
  *	which no rule's VID can be, for the untagged frames of a C-VID push
- * @assign_cvid: the VID they leave with, for a translation or a C-VID push
- * @assign_svid: the VID of the added tag, for an S-VID push
- * @assign_pri: the priority of the tag the rule writes, 0 to 7,
- *	%OMCI_HW_VLAN_PRI_KEEP or %OMCI_HW_VLAN_PRI_COPY
+ *	or of a C- and S-VID push
+ * @assign_cvid: the VID they leave with, for a translation or a C-VID push,
+ *	or of the C-tag of a C- and S-VID push
+ * @assign_svid: the VID of the added S-tag, for an S-VID push or a C- and
+ *	S-VID push
+ * @assign_pri: the priority of the tag the rule writes, the S-tag of a C- and
+ *	S-VID push: 0 to 7, %OMCI_HW_VLAN_PRI_KEEP or %OMCI_HW_VLAN_PRI_COPY
  * @match_has_pri: the rule takes only the tagged frames of priority
  *	@match_pri; without it, those of any priority
  * @match_pri: that priority, 0 to 7
@@ -193,6 +199,10 @@ enum omci_hw_vlan_kind {
  * @keep_pri: of a discard that names no priority, the priorities that earlier
  *	rules take from its VID, bit p for priority p: it leaves those frames
  *	to them
+ * @inner_has_pri: the rule gives the C-tag behind its S-tag priority
+ *	@inner_pri: the C-tag of a C- and S-VID push, and the frame's own C-tag
+ *	where an S-VID push changes its priority
+ * @inner_pri: that priority, 0 to 7
  */
 struct omci_hw_vlan_xlate {
 	enum omci_hw_vlan_kind kind;
@@ -205,6 +215,8 @@ struct omci_hw_vlan_xlate {
 	bool up_only;
 	bool per_pri;
 	uint8_t keep_pri;
+	bool inner_has_pri;
+	uint8_t inner_pri;
 };
 
 /**

@@ -218,12 +218,32 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		return true;
 	}
 
-	/* An untagged frame given two tags is beyond the switch. */
+	/*
+	 * An untagged frame given two tags: a C-tag by the inner treatment and
+	 * an S-tag in front of it by the outer one, each with the priority and
+	 * the VID its treatment gives; an untagged frame has none to copy.
+	 */
 	if (out->filter_outer_pri == VLAN_PRI_NO_TAG &&
 	    out->filter_inner_pri == VLAN_PRI_NO_TAG &&
 	    out->tags_to_remove == VLAN_TAGS_REMOVE_0 &&
-	    out->treat_outer_pri != VLAN_PRI_NO_TAG)
-		return refuse(out, OMCI_VLAN_REJECT_SHAPE);
+	    out->treat_outer_pri != VLAN_PRI_NO_TAG) {
+		if (out->filter_ethertype != 0u)
+			return refuse(out, OMCI_VLAN_REJECT_ETHERTYPE);
+		if (out->treat_inner_pri > 7u || out->treat_outer_pri > 7u)
+			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
+		if (!vid_is_programmable(out->treat_inner_vid) ||
+		    !vid_is_programmable(out->treat_outer_vid))
+			return refuse(out, OMCI_VLAN_REJECT_VID_RANGE);
+
+		out->op = OMCI_VLAN_OP_SCVID_PUSH;
+		out->match_cvid = 0u;
+		out->assign_cvid = out->treat_inner_vid;
+		out->inner_has_pri = true;
+		out->inner_pri = out->treat_inner_pri;
+		out->assign_svid = out->treat_outer_vid;
+		out->assign_pri = out->treat_outer_pri;
+		return true;
+	}
 
 	if (out->filter_inner_vid == VLAN_VID_WILDCARD)
 		return true;
@@ -259,12 +279,13 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		return true;
 	}
 
-	/* A tag kept and an outer one added: an S-VID push. */
+	/*
+	 * A tag kept and an outer one added: an S-VID push, which may give the
+	 * tag it keeps a new priority.
+	 */
 	if (out->tags_to_remove == VLAN_TAGS_REMOVE_0 &&
 	    !filter_names_a_tag(w0) && filter_names_a_tag(w1) &&
 	    out->treat_outer_pri != VLAN_PRI_NO_TAG) {
-		if (inner_remarks)
-			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
 		if (!vid_is_programmable(out->filter_inner_vid) ||
 		    !vid_is_programmable(out->treat_outer_vid))
 			return refuse(out, OMCI_VLAN_REJECT_VID_RANGE);
@@ -289,6 +310,10 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		out->op = OMCI_VLAN_OP_SVID_PUSH;
 		out->match_cvid = out->filter_inner_vid;
 		out->assign_svid = out->treat_outer_vid;
+		if (inner_remarks) {
+			out->inner_has_pri = true;
+			out->inner_pri = out->treat_inner_pri;
+		}
 		match_priority(out);
 		return true;
 	}
@@ -308,7 +333,7 @@ static bool programmable(enum omci_vlan_op op)
 	return op == OMCI_VLAN_OP_CVID_XLATE || op == OMCI_VLAN_OP_SVID_PUSH ||
 	       op == OMCI_VLAN_OP_CVID_PUSH ||
 	       op == OMCI_VLAN_OP_DISCARD_TAGGED ||
-	       op == OMCI_VLAN_OP_DISCARD_VID;
+	       op == OMCI_VLAN_OP_DISCARD_VID || op == OMCI_VLAN_OP_SCVID_PUSH;
 }
 
 /* The hardware rule of a programmable operation. */
@@ -323,6 +348,8 @@ static enum omci_hw_vlan_kind kind_of(enum omci_vlan_op op)
 		return OMCI_HW_VLAN_DISCARD_TAGGED;
 	case OMCI_VLAN_OP_DISCARD_VID:
 		return OMCI_HW_VLAN_DISCARD_VID;
+	case OMCI_VLAN_OP_SCVID_PUSH:
+		return OMCI_HW_VLAN_SCVID_PUSH;
 	default:
 		return OMCI_HW_VLAN_CVID_XLATE;
 	}
@@ -335,13 +362,19 @@ static bool gives_net(const struct omci_hw_vlan_xlate *r)
 	       r->kind != OMCI_HW_VLAN_DISCARD_VID;
 }
 
+/* Whether a rule puts an S-tag in front of the frames it gives the network. */
+static bool adds_stag(const struct omci_hw_vlan_xlate *r)
+{
+	return r->kind == OMCI_HW_VLAN_SVID_PUSH ||
+	       r->kind == OMCI_HW_VLAN_SCVID_PUSH;
+}
+
 /* The VID a rule gives its frames toward the network, 0 for none. */
 static uint16_t net_vid_of(const struct omci_hw_vlan_xlate *r)
 {
 	if (!gives_net(r))
 		return 0u;
-	return (r->kind == OMCI_HW_VLAN_SVID_PUSH) ? r->assign_svid :
-						     r->assign_cvid;
+	return adds_stag(r) ? r->assign_svid : r->assign_cvid;
 }
 
 /* The hardware rule of a decoded rule. */
@@ -355,6 +388,8 @@ static struct omci_hw_vlan_xlate hw_rule_of(const struct omci_vlan_rule *d)
 		.assign_pri = d->assign_pri,
 		.match_has_pri = d->match_has_pri,
 		.match_pri = d->match_pri,
+		.inner_has_pri = d->inner_has_pri,
+		.inner_pri = d->inner_pri,
 	};
 }
 
@@ -444,9 +479,7 @@ static bool same_net(const struct omci_hw_vlan_xlate *a,
 		return false;
 	if (!gives_net(a) || !gives_net(b))
 		return gives_net(a) == gives_net(b);
-	return net_vid_of(a) == net_vid_of(b) &&
-	       (a->kind == OMCI_HW_VLAN_SVID_PUSH) ==
-		       (b->kind == OMCI_HW_VLAN_SVID_PUSH);
+	return net_vid_of(a) == net_vid_of(b) && adds_stag(a) == adds_stag(b);
 }
 
 /*

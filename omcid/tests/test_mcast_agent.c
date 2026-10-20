@@ -2052,6 +2052,46 @@ static void test_a_vlan_rule_discards_the_messages_of_its_vid(void)
 	down();
 }
 
+/*
+ * A rule that gives untagged frames two tags gives a message both, the S-tag
+ * in front; one that puts an S-tag in front of a C-tag whose priority it
+ * changes sends the message with that C-tag's new priority behind the S-tag.
+ */
+static void test_the_vlan_rules_that_write_two_tags(void)
+{
+	static const uint32_t two[][4] = {
+		/* untagged: C-VID 410 at priority 5 behind S-VID 200 at 3 */
+		{ 0xf8000000u, 0xf8000000u, (3u << 16) | (200u << 3),
+		  (5u << 16) | (410u << 3) },
+		/* C-VID 37, any priority: S-VID 101 at 2, the C-tag at 0 */
+		{ 0xf8000000u, (8u << 28) | (37u << 15),
+		  (2u << 16) | (101u << 3), (0u << 16) | (4096u << 3) },
+	};
+	unsigned int tpid, tci;
+	uint8_t out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	rules(two, ARRAY_SIZE(two));
+
+	CHECK_EQ(join_up(-1, out), 54u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x88a8u && tci == ((3u << 13) | 200u));
+	tag_at(out, 16, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 410u));
+	CHECK_EQ(join_up(37, out), 54u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x88a8u && tci == ((2u << 13) | 101u));
+	tag_at(out, 16, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == 37u);
+	rules(two, 0);
+	down();
+}
+
 static void test_the_gem_port_of_a_message(void)
 {
 	static const uint32_t xlate[][4] = {
@@ -2513,6 +2553,7 @@ int main(void)
 	RUN(test_the_vlan_rules_tag_the_messages);
 	RUN(test_the_vlan_rules_discard_messages_they_do_not_take);
 	RUN(test_a_vlan_rule_discards_the_messages_of_its_vid);
+	RUN(test_the_vlan_rules_that_write_two_tags);
 	RUN(test_the_gem_port_of_a_message);
 	RUN(test_the_downstream_tag_of_multicast);
 	RUN(test_lost_groups);

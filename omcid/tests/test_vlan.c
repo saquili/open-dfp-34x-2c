@@ -210,11 +210,43 @@ int main(void)
 	     (5u << 16) | (5000u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
 	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_VID_RANGE);
+	/*
+	 * An untagged frame given two tags: the inner treatment's C-tag behind
+	 * the outer treatment's S-tag, each with its own priority; copies of a
+	 * priority, the DSCP and VIDs copied from a tag are refused, as an
+	 * untagged frame has neither.
+	 */
 	pack(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (36u << 3),
 	     (5u << 16) | (410u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
-	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
-	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_SHAPE);
+	CHECK_EQ(r.op, OMCI_VLAN_OP_SCVID_PUSH);
+	CHECK_EQ(r.match_cvid, 0u);
+	CHECK_EQ(r.assign_svid, 36u);
+	CHECK_EQ(r.assign_pri, 3u);
+	CHECK_EQ(r.assign_cvid, 410u);
+	CHECK(r.inner_has_pri);
+	CHECK_EQ(r.inner_pri, 5u);
+	pack(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (36u << 3),
+	     (0u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_SCVID_PUSH);
+	CHECK_EQ(r.inner_pri, 0u);
+	pack(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (36u << 3),
+	     (8u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_PCP_REMARK);
+	pack(row, 0xf8000000u, 0xf8000000u, (10u << 16) | (36u << 3),
+	     (5u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_PCP_REMARK);
+	pack(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (36u << 3),
+	     (5u << 16) | (4096u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_VID_RANGE);
+	pack(row, 0xf8000000u, 0xf8000004u, (3u << 16) | (36u << 3),
+	     (5u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE);
 
 	/* A translation that gives the tag a new priority. */
 	pack(row, 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
@@ -314,11 +346,26 @@ int main(void)
 	CHECK(omci_vlan_decode(row, 16, &r));
 	CHECK_EQ(r.op, OMCI_VLAN_OP_NONE);
 
+	/* An S-VID push that gives the C-tag behind it priority 0, or 2. */
 	pack(row, 0xf8000000u, (6u << 28) | (410u << 15),
 	     (0u << 30) | (6u << 16) | (100u << 3), (0u << 16) | (410u << 3));
 	CHECK(omci_vlan_decode(row, 16, &r));
-	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
-	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_PCP_REMARK);
+	CHECK_EQ(r.op, OMCI_VLAN_OP_SVID_PUSH);
+	CHECK_EQ(r.assign_svid, 100u);
+	CHECK_EQ(r.assign_pri, 6u);
+	CHECK(r.inner_has_pri);
+	CHECK_EQ(r.inner_pri, 0u);
+	pack(row, 0xf8000000u, (8u << 28) | (410u << 15),
+	     (0u << 30) | (8u << 16) | (100u << 3), (2u << 16) | (4096u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_SVID_PUSH);
+	CHECK_EQ(r.assign_pri, OMCI_HW_VLAN_PRI_COPY);
+	CHECK(r.inner_has_pri);
+	CHECK_EQ(r.inner_pri, 2u);
+	pack(row, 0xf8000000u, (6u << 28) | (410u << 15),
+	     (0u << 30) | (6u << 16) | (100u << 3), (6u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK(!r.inner_has_pri);
 
 	CHECK(omci_vlan_reject_name((enum omci_vlan_reject)99)[0] != '\0');
 
@@ -589,6 +636,58 @@ int main(void)
 			if (nf == 9u)
 				CHECK_EQ(f[8].fate,
 					 (uint8_t)OMCI_VLAN_FATE_SHADOWED);
+		}
+		clear_rows(mib);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	}
+
+	/*
+	 * A push of a C-tag and an S-tag takes the untagged frames, as a push of
+	 * a C-tag does, which after it is shadowed. After an S-VID push into the
+	 * same S-VID it works upstream only, the way back being the earlier
+	 * rule's.
+	 */
+	{
+		uint8_t two[16], one[16], spush[16];
+		const struct omci_vlan_fate_rec *f = NULL;
+
+		clear_rows(mib);
+		pack(two, 0xf8000000u, 0xf8000000u, (3u << 16) | (200u << 3),
+		     (5u << 16) | (410u << 3));
+		pack(one, 0xf8000000u, 0xf8001000u, 0x000f0000u,
+		     (4u << 16) | (36u << 3));
+		pack(spush, 0xf8000000u, (8u << 28) | (100u << 15),
+		     (0u << 30) | (2u << 16) | (200u << 3),
+		     (8u << 16) | (4096u << 3));
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, two, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, one, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, spush, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 2u);
+		if (omci_hw_vlan_recorded(&applied) == 2u) {
+			CHECK_EQ(applied[0].kind, OMCI_HW_VLAN_SVID_PUSH);
+			CHECK_EQ(applied[0].match_cvid, 100u);
+			CHECK(!applied[0].up_only);
+			CHECK_EQ(applied[1].kind, OMCI_HW_VLAN_SCVID_PUSH);
+			CHECK_EQ(applied[1].match_cvid, 0u);
+			CHECK_EQ(applied[1].assign_cvid, 410u);
+			CHECK(applied[1].inner_has_pri);
+			CHECK_EQ(applied[1].inner_pri, 5u);
+			CHECK_EQ(applied[1].assign_svid, 200u);
+			CHECK_EQ(applied[1].assign_pri, 3u);
+			CHECK(applied[1].up_only);
+		}
+		CHECK_EQ(omci_vlan_fates(&f, NULL), 3u);
+		if (f != NULL && omci_vlan_fates(NULL, NULL) == 3u) {
+			CHECK_EQ(f[1].net_vid, 200u);
+			CHECK_EQ(f[2].fate, (uint8_t)OMCI_VLAN_FATE_SHADOWED);
+			CHECK_EQ(f[2].rival_net, 200u);
 		}
 		clear_rows(mib);
 		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
