@@ -19,7 +19,9 @@
 # before (procd starts one that crashed again after 2 s), the status daemon
 # answers on ADDRESS, and
 # the PON is in O5, operation, unless the receiver has no light (alarm LOS):
-# without a fiber the PON says nothing about the new system. All three hold
+# without a fiber the PON says nothing about the new system. Nor does it in
+# O7, where the OLT disabled the ONU, which stays so across a restart until
+# the OLT enables it (pon keep): that counts as up. All three hold
 # for a person to manage the stick and for the operator to see it. Then
 # "onu-update commit" makes the running bank the one the boot loader starts.
 # When they do not hold within TRIAL_LIMIT seconds (300), onu-trial restarts
@@ -91,10 +93,11 @@ pond_answers() {
 	grep -q '"ok":true' "$reply"
 }
 
-# Whether the PON is in O5, or has no light to judge by.
+# Whether the PON is in O5, or has no light to judge by, or the OLT disabled
+# the ONU, in O7.
 pon_ready() {
 	pon >"$RUN/onu-trial.pon" 2>/dev/null || return 1
-	grep -q ' O5 ' "$RUN/onu-trial.pon" && return 0
+	grep -q -e ' O5 ' -e ' O7 ' "$RUN/onu-trial.pon" && return 0
 	grep 'alarms' "$RUN/onu-trial.pon" | grep -q 'LOS'
 }
 

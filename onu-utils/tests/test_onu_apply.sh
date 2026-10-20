@@ -1072,6 +1072,40 @@ printf '#!/bin/sh\n[ "$1" = omcid ] && { [ -e "%s/omcid.running" ] || [ -e "%s/d
 check 'logged "^procd start omcid -- .*/onu-run omcid$" && ! logged "^killall"'
 teardown
 
+echo "an ONU the OLT disabled: the driver keeps it disabled before the PON comes up"
+setup
+printf 'serial=XXXXXXXXXXXX\n' >"$ONU_ROOT/run/onu-identity"
+printf '#!/bin/sh\necho "onu-config $*" >>"$LOG"\n[ "$1 $2" = "get PON_DISABLED" ] && echo 1\nexit 0\n' \
+	>"$T/bin/onu-config"
+"$MODE_SCRIPT" identity 2>/dev/null
+check 'logged "^onu-nl param gpon_disabled true$"'
+check '[ "$(grep -n "gpon_disabled" "$LOG" | cut -d: -f1)" -lt "$(grep -n "onu-nl link set pon up" "$LOG" | cut -d: -f1)" ]'
+# The end of a disable is the OLT's, or pon enable's: never given here.
+check '! logged "gpon_disabled false"'
+check '! logged "onu-config set" && ! logged "onu-config unset"'
+teardown
+
+echo "an ONU the OLT disabled, and a driver that cannot keep it so: the PON stays down"
+setup
+printf 'serial=XXXXXXXXXXXX\n' >"$ONU_ROOT/run/onu-identity"
+printf '#!/bin/sh\necho "onu-config $*" >>"$LOG"\n[ "$1 $2" = "get PON_DISABLED" ] && echo 1\nexit 0\n' \
+	>"$T/bin/onu-config"
+printf '#!/bin/sh\necho "onu-nl $*" >>"$LOG"\n[ "$1 $2" = "param gpon_disabled" ] && exit 1\nexit 0\n' \
+	>"$T/bin/onu-nl"
+"$MODE_SCRIPT" identity 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ]'
+check 'logged "^onu-nl param gpon_disabled true$" && ! logged "onu-nl link set pon up"'
+teardown
+
+echo "an ONU the OLT did not disable: the driver is told nothing of a disable"
+setup
+printf 'serial=XXXXXXXXXXXX\n' >"$ONU_ROOT/run/onu-identity"
+"$MODE_SCRIPT" identity 2>/dev/null
+check 'logged "^onu-config get PON_DISABLED$"'
+check '! logged "gpon_disabled" && logged "onu-nl link set pon up"'
+teardown
+
 echo "without a serial number the PON stays down"
 setup
 : >"$ONU_ROOT/run/onu-identity"

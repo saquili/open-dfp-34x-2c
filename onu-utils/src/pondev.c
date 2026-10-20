@@ -139,6 +139,29 @@ const char *pon_state_name(uint32_t state)
 	return "unknown";
 }
 
+/*
+ * The driver reports O7 exactly while the OLT has the ONU disabled, and a
+ * disabled ONU leaves O7 for O2 only when it is enabled. A take-down reports
+ * O1 and then no state, and keeps the disable, so neither says anything.
+ */
+int pon_keep_of(const struct pon_dev *d)
+{
+	if (!(d->have & (1u << PON_A_DEV_ONU_STATE)))
+		return PON_KEEP_UNKNOWN;
+	switch (d->state) {
+	case PON_ONU_STATE_O7:
+		return PON_KEEP_DISABLED;
+	case PON_ONU_STATE_O2:
+	case PON_ONU_STATE_O3:
+	case PON_ONU_STATE_O4:
+	case PON_ONU_STATE_O5:
+	case PON_ONU_STATE_O6:
+		return PON_KEEP_ENABLED;
+	default:
+		return PON_KEEP_UNKNOWN;
+	}
+}
+
 static const char *type_name(uint32_t type)
 {
 	switch (type) {

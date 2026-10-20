@@ -72,6 +72,19 @@ int pon_tcont_parse(const struct nlmsghdr *nlh, struct pon_tcont *t);
 const char *pon_state_name(uint32_t state);
 
 /*
+ * What a report says of the OLT's disable of the ONU (Disable_Serial_Number,
+ * ITU-T G.984.3 clause 9.2.3.6), which "pon keep" keeps across a restart.
+ */
+enum pon_keep {
+	PON_KEEP_UNKNOWN = -1,	/* no state, or O1, which a take-down passes */
+	PON_KEEP_ENABLED,	/* O2 to O6: a disabled ONU is enabled first */
+	PON_KEEP_DISABLED,	/* O7, which only a disable leads to */
+};
+
+/* What the report @d says of the OLT's disable, an &enum pon_keep. */
+int pon_keep_of(const struct pon_dev *d);
+
+/*
  * Print a device for a person. The serial number, which the OLT takes as
  * the credential of the line, is printed only when @serial is true.
  */

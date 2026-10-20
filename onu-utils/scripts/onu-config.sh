@@ -197,7 +197,7 @@ settings() {
 	if [ -r "$CONF" ]; then
 		grep '^[A-Z][A-Z0-9_]*=' "$CONF" |
 			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_' -e '^TLS_' \
-				-e '^SSH_' -e '^POND_'
+				-e '^SSH_' -e '^POND_' -e '^PON_DISABLED='
 		[ -s "$CONF" ] && printf '%s\n' "$stored" | awk -v conf="$CONF" '
 			BEGIN {
 				while ((getline line < conf) > 0) {
@@ -213,6 +213,7 @@ settings() {
 				k = substr($0, 1, i - 1)
 			}
 			k ~ /^(ID_|PPPOE|AUTH_|SYS_|TLS_|SSH_|POND_)/ || k ~ /^PD[1-9]_HOST$/ { next }
+			k == "PON_DISABLED" { next }
 			!(k in kept) { print "-" k }'
 	fi
 	n=1
@@ -257,6 +258,9 @@ load() {
 			v = substr($0, i + 1)
 		}
 		k ~ /^ID_/ { next }
+		# The OLT disabled the ONU: pon keep keeps it, and onu-apply
+		# identity reads it from the store, for the PON driver.
+		k == "PON_DISABLED" { next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k == "TLS_KEY" { if (v != "") print v > tls; next }
 		k == "SSH_HOST_KEY" { if (v != "") print v > ssh; next }

@@ -389,6 +389,46 @@ static void test_gem_links_are_read(void)
 	CHECK(gem_link_parse(nlh, &g) == -EINVAL);
 }
 
+/*
+ * What "pon keep" takes from a report: O7 is the OLT's disable, O2 to O6 an
+ * ONU enabled, and O1 or no state at all, which a take-down reports, nothing.
+ */
+static void test_the_disable_is_read_from_the_state(void)
+{
+	static const struct {
+		uint32_t state;
+		int keep;
+	} cases[] = {
+		{ PON_ONU_STATE_O1, PON_KEEP_UNKNOWN },
+		{ PON_ONU_STATE_O2, PON_KEEP_ENABLED },
+		{ PON_ONU_STATE_O3, PON_KEEP_ENABLED },
+		{ PON_ONU_STATE_O4, PON_KEEP_ENABLED },
+		{ PON_ONU_STATE_O5, PON_KEEP_ENABLED },
+		{ PON_ONU_STATE_O6, PON_KEEP_ENABLED },
+		{ PON_ONU_STATE_O7, PON_KEEP_DISABLED },
+		{ 0, PON_KEEP_UNKNOWN },
+		{ 8, PON_KEEP_UNKNOWN },
+	};
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct nlmsghdr *nlh;
+	struct pon_dev d;
+
+	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+		nlh = message(buf, PON_CMD_DEV_CHANGE_NTF);
+		mnl_attr_put_u32(nlh, PON_A_DEV_ID, 0);
+		mnl_attr_put_u32(nlh, PON_A_DEV_ONU_STATE, cases[i].state);
+		CHECK(pon_dev_parse(nlh, &d) == 0);
+		CHECK(pon_keep_of(&d) == cases[i].keep);
+	}
+
+	/* A device that is down reports no state. */
+	nlh = message(buf, PON_CMD_DEV_CHANGE_NTF);
+	mnl_attr_put_u32(nlh, PON_A_DEV_ID, 0);
+	mnl_attr_put_u32(nlh, PON_A_DEV_TYPE, PON_TYPE_GPON);
+	CHECK(pon_dev_parse(nlh, &d) == 0);
+	CHECK(pon_keep_of(&d) == PON_KEEP_UNKNOWN);
+}
+
 int main(void)
 {
 	test_a_full_device_is_read();
@@ -399,6 +439,7 @@ int main(void)
 	test_a_tcont_is_read();
 	test_an_idle_tcont_prints_as_idle();
 	test_gem_links_are_read();
+	test_the_disable_is_read_from_the_state();
 
 	printf("test_pondev: %d checks, %d failed\n", checks, failures);
 	return failures != 0;

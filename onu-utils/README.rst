@@ -223,6 +223,10 @@ by its whole path where procd starts it.
       * - ``POND_TOKEN``
         - ``onu-config token``
         - ``/run/onu-pond-token``: the token of scripts.
+      * - ``PON_DISABLED``
+        - ``pon keep``, ``pon enable``
+        - None: ``onu-apply identity`` reads it from the store and gives the
+          PON driver the OLT's disable before the PON comes up (``pon``).
       * - every other key
         - ``onu-config save``, ``import``
         - A line of ``/run/onu.conf``: the settings (``src/settings.h``).
@@ -264,7 +268,8 @@ by its whole path where procd starts it.
    run first by the boot script: after a start of a bank on trial, it commits
    the bank once omcid runs as one process across two looks, the status
    daemon answers on the address of ``/run/onu-mgmt`` (or one given) and the
-   PON is in O5 (or has no light), and restarts into the committed bank when
+   PON is in O5 (or has no light, or is in O7, where the OLT keeps it
+   disabled), and restarts into the committed bank when
    that does not happen within 300 s, forcing the restart after 30 s more.
 
 ``pon``
@@ -281,6 +286,26 @@ by its whole path where procd starts it.
           PLOAM messages             120
           bandwidth maps             5000000
           T-CONT 0  Alloc-ID 1024
+
+   ``pon keep``, a service of procd, keeps across a restart the disable that
+   the OLT gives the ONU with Disable_Serial_Number: G.984.3 has a disabled
+   ONU stay in O7, emergency stop, with its laser off, even after a
+   power-off, until the OLT enables it (clause 10.2.4 and clause 11.1.2). It
+   follows the state the kernel reports and announces: in O7, which only a
+   disable leads to, it keeps ``PON_DISABLED=1`` in the configuration store,
+   and in O2 to O6, which a disabled ONU reaches only once it is enabled, it
+   takes the key out; O1, which a take-down passes, and a PON that is down
+   say nothing. ``onu-config`` writes the store only when that changes it.
+   ``onu-apply identity`` gives the disable back to the PON driver at boot,
+   before the PON comes up, which then comes up in O7. Each change is in the
+   system log. ``pon enable`` forgets the disable by hand, for a stick whose
+   OLT will not enable it, such as one moved to another PON: the driver takes
+   an ONU in O7 to O2 at once, or brings the PON up enabled the next time,
+   and the store no longer keeps the disable; the system log says that it was
+   enabled by hand, not by the OLT::
+
+      pon keep       # the boot script's service
+      pon enable
 
 ``onu-nl``
    makes, through netlink, the requests of tc, ip (the links) and devlink that
@@ -416,11 +441,14 @@ by its whole path where procd starts it.
    waits leaves the change to that one.
 
    ``identity`` gives the PON driver the serial number and PLOAM password of
-   ``/run/onu-identity`` (twenty hex digits of password as its ten octets) and
-   brings the PON up; ``reidentify`` takes the PON down first and restarts
-   omcid afterwards, so the OLT sees the stick leave and register anew. The
-   MIB that omcid kept in ``/run/omcid/mib`` stays, and the new omcid goes on
-   from it until the OLT provisions the stick again.
+   ``/run/onu-identity`` (twenty hex digits of password as its ten octets),
+   and the OLT's disable when the store keeps it (``pon keep``), so that the
+   PON comes up in O7, and brings the PON up; a driver that does not take the
+   disable leaves the PON down, dark. It never gives the end of a disable,
+   which is the OLT's or ``pon enable``'s. ``reidentify`` takes the PON down
+   first and restarts omcid afterwards, so the OLT sees the stick leave and
+   register anew. The MIB that omcid kept in ``/run/omcid/mib`` stays, and the
+   new omcid goes on from it until the OLT provisions the stick again.
 
 ``onu-mgmt``
    the VLAN and the address the stick is managed on from the host side, and a

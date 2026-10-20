@@ -546,6 +546,32 @@ run pd 8
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 teardown
 
+echo "the OLT's disable of the ONU, kept across a restart and never a setting"
+setup
+# pon keep sets it as onu-config set does, and the same again writes nothing.
+onu-config --store "$ONU_STORE" set PON_DISABLED 1
+check "stored 'PON_DISABLED=1'"
+cp "$ONU_STORE" "$T/before"
+onu-config --store "$ONU_STORE" set PON_DISABLED 1
+check 'cmp -s "$ONU_STORE" "$T/before"'
+# A save of the settings keeps it, and a load puts it in no file of /run:
+# onu-apply identity reads it from the store.
+echo "MODE=router" >"$ONU_ROOT/run/onu.conf"
+run save
+check "stored 'PON_DISABLED=1'"
+rm -f "$ONU_ROOT/run/onu.conf"
+run load
+check '[ $rc -eq 0 ] && ! grep -rq PON_DISABLED "$ONU_ROOT/run"'
+check '[ "$(onu-config --store "$ONU_STORE" get PON_DISABLED)" = 1 ]'
+# A save with the settings in force, which never hold it, keeps it still.
+printf 'MODE=router\nWAN_VLAN=410\n' >"$ONU_ROOT/run/onu.conf"
+run save
+check "stored 'PON_DISABLED=1'"
+# pon keep and pon enable take it out as onu-config unset does.
+onu-config --store "$ONU_STORE" unset PON_DISABLED
+check '! onu-config --store "$ONU_STORE" list | grep -q ^PON_'
+teardown
+
 echo "the store is a file of KEY=VALUE lines, at most 64 KiB, replaced whole"
 setup
 rm -f "$ONU_STORE"

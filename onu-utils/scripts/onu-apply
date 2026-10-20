@@ -15,7 +15,8 @@
 #   onu-apply revert   end the trial now, back to the settings it had
 #   onu-apply stop     take the sessions down and stop omcid
 #   onu-apply identity give the PON driver the serial number and PLOAM
-#                      password of /run/onu-identity and bring the PON up
+#                      password of /run/onu-identity, and the OLT's disable
+#                      the store keeps, and bring the PON up
 #   onu-apply reidentify  take the PON down, give it the identity of
 #                      /run/onu-identity, and register with the OLT again
 #   onu-apply status   the shape in force, the sessions, and the address
@@ -2071,6 +2072,13 @@ pass_down() {
 
 # The identity to the PON driver, which takes it while the PON is down, then
 # the PON up. Twenty hex digits of PLOAM password are its ten octets.
+#
+# An ONU the OLT disabled stays disabled across a restart, until the OLT
+# enables it (ITU-T G.984.3 clause 10.2.4 and clause 11.1.2): pon keep keeps
+# the disable in the configuration store, PON_DISABLED, and the driver takes
+# it here, before the PON comes up, which then comes up in O7, with the laser
+# off. Only the disable is given, never its end: an enable is the OLT's, or
+# pon enable's. A driver that does not take it leaves the PON down, dark.
 identity() {
 	serial=$(grep '^serial=' "$IDENTITY" 2>/dev/null | cut -d= -f2)
 	ploam=$(grep '^ploam_password=' "$IDENTITY" 2>/dev/null | cut -d= -f2-)
@@ -2087,6 +2095,13 @@ identity() {
 		esac
 		onu-nl param gpon_password "$ploam" ||
 			log "the PON driver did not take the PLOAM password"
+	fi
+	if [ "$(onu-config get PON_DISABLED 2>/dev/null)" = 1 ]; then
+		if ! onu-nl param gpon_disabled true; then
+			log "the OLT disabled this ONU, and the PON driver cannot keep it disabled: the PON stays down (pon enable forgets the disable)"
+			return 1
+		fi
+		log "the OLT disabled this ONU: the PON comes up in O7, laser off, until the OLT enables it (pon enable forgets the disable)"
 	fi
 	onu-nl link set pon up || log "the PON does not come up"
 }

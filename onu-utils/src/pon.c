@@ -8,6 +8,14 @@
  * every change the kernel announces, with the time it came; "pon gem" lists
  * the GEM interfaces, from the kernel's links, with the upstream priorities,
  * queue, weight and rates of those that carry traffic upstream.
+ *
+ * An ONU that the OLT disabled with Disable_Serial_Number stays disabled, in
+ * O7 with its laser off, even across a power-off, until the OLT enables it
+ * (ITU-T G.984.3 clause 10.2.4, Table 10-1, and clause 11.1.2). "pon keep",
+ * a service of procd, follows the state the kernel announces and keeps the
+ * disable in the configuration store, PON_DISABLED, which "onu-apply
+ * identity" gives the PON driver at boot, before the PON comes up. "pon
+ * enable" clears the disable by hand, in the driver and in the store.
  */
 
 #include <errno.h>
@@ -15,9 +23,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 #include <net/if.h>
+#include <sys/wait.h>
 
 #include <libmnl/libmnl.h>
 #include <linux/genetlink.h>
@@ -29,6 +39,9 @@
 
 #define MAX_DEVS 8
 #define MAX_TCONTS 64
+
+/* The key of the configuration store that keeps the OLT's disable. */
+#define KEEP_KEY "PON_DISABLED"
 
 struct family {
 	uint16_t id;
@@ -146,6 +159,168 @@ static int watch_changes(struct mnl_socket *nl, const struct family *fam)
 	}
 }
 
+/* Run @argv, a program of PATH, and wait for it: its exit status, or -1. */
+static int run(const char *const argv[])
+{
+	int status;
+	pid_t pid;
+
+	pid = fork();
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		execvp(argv[0], (char *const *)argv);
+		_exit(127);
+	}
+	while (waitpid(pid, &status, 0) < 0)
+		if (errno != EINTR)
+			return -1;
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/*
+ * Keep the disable in the configuration store, or take it out; onu-config
+ * writes nothing when the store holds that already. 0 when it took it.
+ */
+static int store_disabled(bool disabled)
+{
+	static const char *const set[] = { "onu-config", "set", KEEP_KEY, "1", NULL };
+	static const char *const unset[] = { "onu-config", "unset", KEEP_KEY, NULL };
+
+	return run(disabled ? set : unset) == 0 ? 0 : -1;
+}
+
+/* What "pon keep" last told the store, an &enum pon_keep. */
+static int kept = PON_KEEP_UNKNOWN;
+
+/*
+ * Follow one report: when it says something of the disable that the store
+ * was not told yet, tell the store. A store that failed is told again at the
+ * next report that says the same.
+ */
+static void keep_follow(const struct pon_dev *d)
+{
+	int now = pon_keep_of(d);
+
+	if (now == PON_KEEP_UNKNOWN || now == kept)
+		return;
+	if (store_disabled(now == PON_KEEP_DISABLED)) {
+		if (now == PON_KEEP_DISABLED)
+			syslog(LOG_ERR,
+			       "the OLT disabled this ONU, and the configuration store did not keep it: a restart enables it");
+		else
+			syslog(LOG_ERR,
+			       "the OLT enabled this ONU, and the configuration store did not forget the disable: a restart brings it up in O7");
+		return;
+	}
+	if (now == PON_KEEP_DISABLED)
+		syslog(LOG_WARNING,
+		       "the OLT disabled this ONU (O7, emergency stop, laser off): kept across a restart until the OLT enables it; \"pon enable\" clears it by hand");
+	else if (kept == PON_KEEP_DISABLED)
+		syslog(LOG_NOTICE, "the OLT enabled this ONU again: no longer kept disabled");
+	kept = now;
+}
+
+static int keep_cb(const struct nlmsghdr *nlh, void *data)
+{
+	const struct genlmsghdr *g = mnl_nlmsg_get_payload(nlh);
+	struct pon_dev d;
+
+	(void)data;
+	if ((g->cmd == PON_CMD_DEV_GET || g->cmd == PON_CMD_DEV_CHANGE_NTF) &&
+	    !pon_dev_parse(nlh, &d))
+		keep_follow(&d);
+	return MNL_CB_OK;
+}
+
+/* The state of every PON device now, asked on a socket of its own. */
+static int keep_dump(const struct family *fam)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct mnl_socket *nl = mnl_socket_open(NETLINK_GENERIC);
+	int err;
+
+	if (!nl || mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) < 0) {
+		err = -errno;
+		if (nl)
+			mnl_socket_close(nl);
+		return err;
+	}
+	err = genl_talk(nl, genl_request(buf, fam->id, PON_CMD_DEV_GET,
+					 NLM_F_DUMP, 1),
+			keep_cb, NULL);
+	mnl_socket_close(nl);
+	return err;
+}
+
+/*
+ * pon keep: the monitor group first, then the state now, so that no change
+ * falls between the two; then every change. Changes the socket had no room
+ * for are made up for by asking for the state again.
+ */
+static int keep(struct mnl_socket *nl, const struct family *fam)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	unsigned int group = fam->monitor;
+	int err;
+
+	openlog("pon", LOG_PID, LOG_DAEMON);
+	if (!group || mnl_socket_setsockopt(nl, NETLINK_ADD_MEMBERSHIP, &group,
+					    sizeof(group)) < 0) {
+		fprintf(stderr, "pon: cannot join the monitor group: %s\n",
+			group ? strerror(errno) : "the family has none");
+		return 1;
+	}
+	err = keep_dump(fam);
+	if (err)
+		fprintf(stderr, "pon: the kernel did not answer: %s\n",
+			strerror(-err));
+	for (;;) {
+		ssize_t n = mnl_socket_recvfrom(nl, buf, sizeof(buf));
+
+		if (n < 0 && errno == ENOBUFS) {
+			keep_dump(fam);
+			continue;
+		}
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			fprintf(stderr, "pon: %s\n", strerror(errno));
+			return 1;
+		}
+		mnl_cb_run(buf, (size_t)n, 0, 0, keep_cb, NULL);
+	}
+}
+
+/*
+ * pon enable: forget the OLT's disable by hand. The driver takes an ONU in
+ * O7 to O2 at once, or brings the PON up enabled the next time, and the
+ * store no longer gives the disable back at boot.
+ */
+static int enable_by_hand(void)
+{
+	static const char *const param[] = {
+		"onu-nl", "param", "gpon_disabled", "false", NULL
+	};
+	int rc = 0;
+
+	openlog("pon", LOG_PID, LOG_USER);
+	if (run(param)) {
+		fprintf(stderr, "pon: the PON driver did not forget the disable\n");
+		rc = 1;
+	}
+	if (store_disabled(false)) {
+		fprintf(stderr, "pon: the configuration store did not forget the disable\n");
+		rc = 1;
+	}
+	if (rc)
+		syslog(LOG_ERR, "enabled by hand, not by the OLT, in part: see the errors above");
+	else
+		syslog(LOG_WARNING,
+		       "enabled by hand, not by the OLT: the ONU leaves O7 and is no longer kept disabled");
+	return rc;
+}
+
 static int gem_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct gem_link g;
@@ -197,6 +372,9 @@ static int print_usage(void)
 		"usage: pon [-s]       the PON devices, their ONU and T-CONTs;\n"
 		"                      -s also prints the serial number\n"
 		"       pon monitor    every change the kernel announces\n"
+		"       pon keep       keep the OLT's disable of the ONU across\n"
+		"                      a restart, in the configuration store\n"
+		"       pon enable     forget the OLT's disable, by hand\n"
 		"       pon gem        the GEM interfaces: Port-ID, direction,\n"
 		"                      T-CONT, multicast, and upstream the\n"
 		"                      priorities, queue, weight and rates\n");
@@ -205,7 +383,7 @@ static int print_usage(void)
 
 int main(int argc, char **argv)
 {
-	bool serial = false, watch = false, gem = false;
+	bool serial = false, watch = false, gem = false, keeper = false;
 	struct mnl_socket *nl;
 	struct family fam;
 	int i, err;
@@ -217,6 +395,10 @@ int main(int argc, char **argv)
 			watch = true;
 		else if (!strcmp(argv[i], "gem"))
 			gem = true;
+		else if (!strcmp(argv[i], "keep") && argc == 2)
+			keeper = true;
+		else if (!strcmp(argv[i], "enable") && argc == 2)
+			return enable_by_hand();
 		else
 			return print_usage();
 	}
@@ -246,7 +428,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	err = watch ? watch_changes(nl, &fam) : show(nl, &fam, serial);
+	if (keeper)
+		err = keep(nl, &fam);
+	else
+		err = watch ? watch_changes(nl, &fam) : show(nl, &fam, serial);
 	mnl_socket_close(nl);
 	return err;
 }

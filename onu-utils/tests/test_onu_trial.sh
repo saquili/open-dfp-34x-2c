@@ -98,6 +98,13 @@ trial
 check '[ "$result" = committed ] && ! logged reboot'
 teardown
 
+echo "a PON the OLT keeps disabled, in O7, is not waited for"
+setup
+pon "pon  GPON  O7 emergency stop for 12 s" "     alarms none  GEM ports up to 128"
+trial
+check '[ "$result" = committed ] && ! logged reboot'
+teardown
+
 echo "with light but no O5, the stick restarts into the committed bank"
 setup
 pon "pon  GPON  O3 serial number  ONU-ID -" "     alarms none  GEM ports up to 128"
