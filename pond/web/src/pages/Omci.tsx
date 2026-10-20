@@ -16,6 +16,7 @@ import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useStat
 import { type Conversation, useConversation } from "../api/conversation";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter } from "../components/Pager";
+import { Reading } from "../components/Read";
 import { Detail, Dot, Facts, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { integer } from "../lib/format";
@@ -33,6 +34,7 @@ import {
   MT,
 } from "../lib/omci-frames";
 import { type Shown, shown } from "../lib/omci-values";
+import { reason } from "../lib/read";
 import { FibreState, OmciState, useMib } from "./Fibre";
 
 type T = (key: Key, vars?: Record<string, string | number>) => string;
@@ -400,7 +402,7 @@ function Talk({
     .filter((e) => !noReads || !isRead(e))
     .reverse();
   const newer = frozen == null ? 0 : list.filter((e) => e.seq >= frozen).length;
-  const state = talk.error ? "offline" : frozen != null ? "paused" : "live";
+  const state = talk.error != null ? "offline" : frozen != null ? "paused" : "live";
   const frames = omci.data?.frames;
   const onKey = (e: KeyboardEvent<HTMLTableRowElement>, x: Exchange) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -425,6 +427,9 @@ function Talk({
           <span className="flex items-center gap-1.5 text-sm">
             <Dot tone={state === "live" ? "good" : state === "paused" ? "neutral" : "bad"} />
             {t(`omci.${state}`)}
+            {talk.error != null && (
+              <span className="text-xs text-error">{reason(t, talk.error)}</span>
+            )}
           </span>
           <span className="ml-auto flex flex-wrap gap-1.5">
             {cls != null && (
@@ -467,13 +472,13 @@ function Talk({
           </span>
         </div>
         <div ref={box} className="min-h-0 flex-1 overflow-auto">
-          {visible.length === 0 ? (
+          {talk.loading ? (
+            <div className="py-4">
+              <Reading />
+            </div>
+          ) : visible.length === 0 ? (
             <p className="py-4 text-sm text-base-content/70">
-              {talk.loading
-                ? ""
-                : onlyClass && list.length
-                  ? t("omci.emptyFiltered")
-                  : t("omci.empty")}
+              {onlyClass && list.length ? t("omci.emptyFiltered") : t("omci.empty")}
             </p>
           ) : (
             <table className={`${TABLE} table-sm table-fixed`}>

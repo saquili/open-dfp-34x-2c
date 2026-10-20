@@ -21,6 +21,7 @@ import { useEffect } from "react";
 import { sessionQuery } from "./api/auth";
 import { OfflineError } from "./api/client";
 import { AppShell } from "./components/AppShell";
+import { Reading } from "./components/Read";
 import { useI18n } from "./i18n";
 import { ChannelsPage, FibrePage, IdentityPage, ServicesPage } from "./pages/Fibre";
 import {
@@ -60,6 +61,15 @@ function Unreachable({ error }: { error: unknown }) {
           {t("common.retry")}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* Who is signed in is asked before any page: while the answer is slow to come, that it is asked. */
+function Asking() {
+  return (
+    <div className="grid min-h-dvh place-items-center p-6">
+      <Reading />
     </div>
   );
 }
@@ -193,6 +203,7 @@ export function makeRouter(queryClient: QueryClient) {
     basepath: import.meta.env.BASE_URL,
     context: { queryClient },
     defaultPreload: "intent",
+    defaultPendingComponent: Asking,
     scrollRestoration: true,
   });
 }

@@ -11,11 +11,11 @@
 import { Link } from "@tanstack/react-router";
 import { Search } from "lucide-react";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
-import { ApiError, OfflineError } from "../api/client";
-import { useBridge, useNetwork, useOmci } from "../api/config";
+import { useBridge, useLeases, useNetwork, useOmci } from "../api/config";
 import { useLive } from "../api/live";
 import type { Neighbour, Route } from "../api/types";
 import { Page } from "../components/Page";
+import { QueryNote, QueryState } from "../components/Read";
 import { Card, Detail, Dot, GroupRow, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { Mib, services } from "../lib/omci";
@@ -50,14 +50,6 @@ const PROTOCOL: Record<Route["protocol"], Key> = {
   other: "switch.protoOther",
 };
 
-function failure(t: (k: Key, v?: Record<string, string>) => string, e: Error) {
-  return e instanceof OfflineError
-    ? t("connection.offline")
-    : t("switch.unreadable", {
-        reason: e instanceof ApiError ? (e.detail ?? e.message) : e.message,
-      });
-}
-
 /* ------------------------------------------------------------------- VLANs */
 
 /*
@@ -71,7 +63,7 @@ function useTranslations() {
     () => list.flatMap((s) => s.hostVlans.map((h) => ({ host: h, fibre: s.vlan }))),
     [list],
   );
-  return { list, translations };
+  return { omci, list, translations };
 }
 
 /* How a VLAN crosses the SFP port, to the host. */
@@ -97,7 +89,7 @@ function Vlans() {
   const { data: live } = useLive();
   const net = useNetwork();
   const bridge = useBridge();
-  const { list, translations } = useTranslations();
+  const { omci, list, translations } = useTranslations();
   const paths = vlanPaths(vlanMatrix(net.data, bridge.data, live, translations), translations);
   /* What a way carries that its columns do not show: the stick's sessions, multicast. */
   const carries = (vid: number) => {
@@ -107,72 +99,79 @@ function Vlans() {
       list.find((x) => x.vlan === vid)?.multicast && t("fibre.tagMulticast"),
     ].filter(Boolean);
   };
-  if (net.error) return <p className="text-sm text-error">{failure(t, net.error)}</p>;
 
   return (
     <Card scroll className="min-h-0">
-      <table className={`${TABLE} table-pin-rows`}>
-        <thead>
-          <tr className="[&>th]:align-bottom">
-            <th className="w-40">VLAN</th>
-            <th>{t("switch.vlanUse")}</th>
-            <th className="w-48">
-              {t("switch.hostSide")}
-              <span className="block font-normal">{t("switch.sfpPort")}</span>
-            </th>
-            <th className="w-40">{t("switch.stick")}</th>
-            <th className="w-56">
-              {t("switch.operatorSide")}
-              <span className="block font-normal">{t("switch.fibreSide")}</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {paths.map((p) => {
-            const more = carries(p.fibre ?? p.vid);
-            const to = ROLE_PAGE[p.role];
-            return (
-              <tr key={p.vid}>
-                <td>
-                  <span className="grid gap-0.5">
-                    <span className="tabular font-semibold">{p.vid}</span>
-                    {p.fibre != null && <Detail>{t("internet.onFibre", { vid: p.fibre })}</Detail>}
-                  </span>
-                </td>
-                <td>
-                  <span className="grid gap-0.5">
-                    {to ? (
-                      <Link to={to} className="link link-hover link-primary">
-                        {t(VLAN_ROLE[p.role])}
+      <QueryState reads={[net, bridge]}>
+        <QueryNote reads={omci} aside />
+        <table className={`${TABLE} table-pin-rows`}>
+          <thead>
+            <tr className="[&>th]:align-bottom">
+              <th className="w-40">VLAN</th>
+              <th>{t("switch.vlanUse")}</th>
+              <th className="w-48">
+                {t("switch.hostSide")}
+                <span className="block font-normal">{t("switch.sfpPort")}</span>
+              </th>
+              <th className="w-40">{t("switch.stick")}</th>
+              <th className="w-56">
+                {t("switch.operatorSide")}
+                <span className="block font-normal">{t("switch.fibreSide")}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {paths.map((p) => {
+              const more = carries(p.fibre ?? p.vid);
+              const to = ROLE_PAGE[p.role];
+              return (
+                <tr key={p.vid}>
+                  <td>
+                    <span className="grid gap-0.5">
+                      <span className="tabular font-semibold">{p.vid}</span>
+                      {p.fibre != null && (
+                        <Detail>{t("internet.onFibre", { vid: p.fibre })}</Detail>
+                      )}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="grid gap-0.5">
+                      {to ? (
+                        <Link to={to} className="link link-hover link-primary">
+                          {t(VLAN_ROLE[p.role])}
+                        </Link>
+                      ) : (
+                        <span>{t(VLAN_ROLE[p.role])}</span>
+                      )}
+                      {more.length > 0 && <Detail>{more.join(" · ")}</Detail>}
+                    </span>
+                  </td>
+                  <td>{p.host ? t(HOST[p.host]) : "–"}</td>
+                  <td>
+                    {p.ends
+                      ? t("switch.endsHere")
+                      : p.host && p.gems.length
+                        ? t("switch.passes")
+                        : "–"}
+                  </td>
+                  <td>
+                    {p.gems.length ? (
+                      <Link
+                        to="/operator/channels"
+                        className="link link-hover link-primary tabular"
+                      >
+                        GEM {p.gems.join(", ")}
                       </Link>
                     ) : (
-                      <span>{t(VLAN_ROLE[p.role])}</span>
+                      "–"
                     )}
-                    {more.length > 0 && <Detail>{more.join(" · ")}</Detail>}
-                  </span>
-                </td>
-                <td>{p.host ? t(HOST[p.host]) : "–"}</td>
-                <td>
-                  {p.ends
-                    ? t("switch.endsHere")
-                    : p.host && p.gems.length
-                      ? t("switch.passes")
-                      : "–"}
-                </td>
-                <td>
-                  {p.gems.length ? (
-                    <Link to="/operator/channels" className="link link-hover link-primary tabular">
-                      GEM {p.gems.join(", ")}
-                    </Link>
-                  ) : (
-                    "–"
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </QueryState>
     </Card>
   );
 }
@@ -219,6 +218,8 @@ function MacTable() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const bridge = useBridge();
+  const net = useNetwork();
+  const leases = useLeases();
   const who = useWho();
   const { translations } = useTranslations();
   const [system, setSystem] = useState(false);
@@ -280,9 +281,8 @@ function MacTable() {
         </>
       }
     >
-      {bridge.error ? (
-        <p className="text-sm text-error">{failure(t, bridge.error)}</p>
-      ) : (
+      <QueryState reads={bridge}>
+        <QueryNote reads={[net, leases]} aside />
         <table className={`${TABLE} table-pin-rows`}>
           <thead>
             <tr>
@@ -367,7 +367,7 @@ function MacTable() {
             )}
           </tbody>
         </table>
-      )}
+      </QueryState>
     </Card>
   );
 }
@@ -473,109 +473,116 @@ function Routing() {
       </tr>
     </thead>
   );
-  if (net.error) return <p className="text-sm text-error">{failure(t, net.error)}</p>;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <Card title={t("switch.routeTable")} scroll className="min-h-0">
-        <table className={`${TABLE} table-fixed table-pin-rows`}>
-          {head(["switch.destination", "switch.via", "switch.iface", "switch.origin"])}
-          <tbody>
-            {(["ipv4", "ipv6"] as const).map((family, i) => {
-              const list = routes.filter((r) => r.family === family);
-              if (!list.length) return null;
-              return (
-                <Fragment key={family}>
-                  <GroupRow span={4} first={i === 0 || !routes.some((r) => r.family === "ipv4")}>
-                    {family === "ipv4" ? "IPv4" : "IPv6"}
-                  </GroupRow>
-                  {list.map((r) => (
-                    <tr key={`${r.family}-${r.destination}-${r.dev}`}>
-                      <td>
-                        {r.destination === "default" ? (
-                          <span>
-                            {t("switch.defaultRoute")}
-                            <After>{t("switch.restOfTraffic")}</After>
-                          </span>
-                        ) : (
-                          <span className="tabular break-all">{r.destination}</span>
-                        )}
-                        {r.offloaded && <After>{t("switch.inHw")}</After>}
-                      </td>
-                      <td>
-                        {r.gateway ? (
-                          <span className="tabular break-all">
-                            {r.gateway}
-                            {r.gateway.toLowerCase().startsWith("fe80:") && (
-                              <After>{t("switch.linkLocal")}</After>
+      <QueryNote reads={net} />
+      {net.data !== undefined && (
+        <>
+          <Card title={t("switch.routeTable")} scroll className="min-h-0">
+            <table className={`${TABLE} table-fixed table-pin-rows`}>
+              {head(["switch.destination", "switch.via", "switch.iface", "switch.origin"])}
+              <tbody>
+                {(["ipv4", "ipv6"] as const).map((family, i) => {
+                  const list = routes.filter((r) => r.family === family);
+                  if (!list.length) return null;
+                  return (
+                    <Fragment key={family}>
+                      <GroupRow
+                        span={4}
+                        first={i === 0 || !routes.some((r) => r.family === "ipv4")}
+                      >
+                        {family === "ipv4" ? "IPv4" : "IPv6"}
+                      </GroupRow>
+                      {list.map((r) => (
+                        <tr key={`${r.family}-${r.destination}-${r.dev}`}>
+                          <td>
+                            {r.destination === "default" ? (
+                              <span>
+                                {t("switch.defaultRoute")}
+                                <After>{t("switch.restOfTraffic")}</After>
+                              </span>
+                            ) : (
+                              <span className="tabular break-all">{r.destination}</span>
                             )}
+                            {r.offloaded && <After>{t("switch.inHw")}</After>}
+                          </td>
+                          <td>
+                            {r.gateway ? (
+                              <span className="tabular break-all">
+                                {r.gateway}
+                                {r.gateway.toLowerCase().startsWith("fe80:") && (
+                                  <After>{t("switch.linkLocal")}</After>
+                                )}
+                              </span>
+                            ) : (
+                              t("switch.direct")
+                            )}
+                          </td>
+                          <td>
+                            <Iface dev={r.dev} />
+                          </td>
+                          <td>{t(PROTOCOL[r.protocol])}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+                {!routes.length && net.data && (
+                  <tr>
+                    <td colSpan={4}>{t("switch.none")}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </Card>
+          <Card title={t("switch.neighbours")} scroll className="min-h-0">
+            <table className={`${TABLE} table-fixed table-pin-rows`}>
+              {head(["switch.address", "switch.device", "switch.iface", "switch.state"])}
+              <tbody>
+                {neighbours.map((n) => {
+                  const w = n.mac ? who(n.mac) : null;
+                  return (
+                    <tr key={`${n.dev}-${n.address}`}>
+                      <td className="tabular break-all">{n.address}</td>
+                      <td>
+                        {n.mac && w ? (
+                          <span>
+                            {w.own ? (
+                              t("switch.thisStick")
+                            ) : w.name ? (
+                              w.name
+                            ) : (
+                              <span className="text-base-content/70">{t("switch.unknown")}</span>
+                            )}
+                            <After mono>{n.mac}</After>
                           </span>
                         ) : (
-                          t("switch.direct")
+                          "–"
                         )}
                       </td>
                       <td>
-                        <Iface dev={r.dev} />
+                        <Iface dev={n.dev} />
                       </td>
-                      <td>{t(PROTOCOL[r.protocol])}</td>
+                      <td>
+                        <span className="flex items-center gap-2">
+                          <Dot tone={STATE_TONE[n.state]} />
+                          {t(STATE[n.state])}
+                        </span>
+                      </td>
                     </tr>
-                  ))}
-                </Fragment>
-              );
-            })}
-            {!routes.length && net.data && (
-              <tr>
-                <td colSpan={4}>{t("switch.none")}</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </Card>
-      <Card title={t("switch.neighbours")} scroll className="min-h-0">
-        <table className={`${TABLE} table-fixed table-pin-rows`}>
-          {head(["switch.address", "switch.device", "switch.iface", "switch.state"])}
-          <tbody>
-            {neighbours.map((n) => {
-              const w = n.mac ? who(n.mac) : null;
-              return (
-                <tr key={`${n.dev}-${n.address}`}>
-                  <td className="tabular break-all">{n.address}</td>
-                  <td>
-                    {n.mac && w ? (
-                      <span>
-                        {w.own ? (
-                          t("switch.thisStick")
-                        ) : w.name ? (
-                          w.name
-                        ) : (
-                          <span className="text-base-content/70">{t("switch.unknown")}</span>
-                        )}
-                        <After mono>{n.mac}</After>
-                      </span>
-                    ) : (
-                      "–"
-                    )}
-                  </td>
-                  <td>
-                    <Iface dev={n.dev} />
-                  </td>
-                  <td>
-                    <span className="flex items-center gap-2">
-                      <Dot tone={STATE_TONE[n.state]} />
-                      {t(STATE[n.state])}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-            {!neighbours.length && net.data && (
-              <tr>
-                <td colSpan={4}>{t("switch.none")}</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </Card>
+                  );
+                })}
+                {!neighbours.length && (
+                  <tr>
+                    <td colSpan={4}>{t("switch.none")}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

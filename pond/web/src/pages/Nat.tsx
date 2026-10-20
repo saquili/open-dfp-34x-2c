@@ -17,11 +17,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useDmzChange, useForwardChange } from "../api/config";
+import { useDmzChange, useForwardChange, useLeases } from "../api/config";
 import { useLive } from "../api/live";
 import type { ForwardInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
+import { QueryNote } from "../components/Read";
 import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
 import { Dot, NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
@@ -560,6 +561,8 @@ function Nat() {
   const list = forwards(live);
   const full = list.length >= MAX_FORWARDS;
   const devices = useDevices(nets.map((p) => p.lan.id));
+  /* The devices' names and addresses come from their leases. */
+  const leases = useLeases();
   const [open, setOpen] = useState<Open | null>(null);
   const form = useRef<HTMLDivElement>(null);
   const show = (o: Open) => {
@@ -570,6 +573,7 @@ function Nat() {
   const editing = open && "forward" in open ? (open.forward?.id ?? null) : null;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <QueryNote reads={leases} aside />
       {nets.length > 0 && <DmzBar nets={nets} onSet={(conn) => show({ dmz: conn })} />}
       <div className={withPanel(open != null)}>
         <section

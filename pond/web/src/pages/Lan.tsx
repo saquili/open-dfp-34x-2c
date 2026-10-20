@@ -32,6 +32,7 @@ import type { FixedInfo, LeaseInfo, Live } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Filter } from "../components/Pager";
+import { QueryNote, QueryState } from "../components/Read";
 import { SidePanel, withPanel } from "../components/SidePanel";
 import { NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
@@ -1243,6 +1244,7 @@ function Devices({
   const { t } = useI18n();
   const ids = nets.map((p) => p.lan.id);
   const all = useDevices(ids);
+  const leases = useLeases();
   const [q, setQ] = useState("");
   const [only, setOnly] = useState(false);
   const [fix, setFix] = useState<FixTarget | null>(null);
@@ -1308,19 +1310,21 @@ function Devices({
           )}
         </div>
         <div className="min-h-0 flex-1 px-px xl:overflow-auto">
-          {shown.length ? (
-            <DeviceTable list={shown} nets={nets} onFix={(d) => setFix({ d })} />
-          ) : (
-            <p className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center text-base-content/70">
-              {words
-                ? t("lan.noMatch")
-                : only
-                  ? t("lan.fixedNone")
-                  : all.length
-                    ? t("lan.noMatch")
-                    : t("lan.devicesNone")}
-            </p>
-          )}
+          <QueryState reads={leases}>
+            {shown.length ? (
+              <DeviceTable list={shown} nets={nets} onFix={(d) => setFix({ d })} />
+            ) : (
+              <p className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center text-base-content/70">
+                {words
+                  ? t("lan.noMatch")
+                  : only
+                    ? t("lan.fixedNone")
+                    : all.length
+                      ? t("lan.noMatch")
+                      : t("lan.devicesNone")}
+              </p>
+            )}
+          </QueryState>
         </div>
         <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
           {shown.length === all.length
@@ -1378,6 +1382,8 @@ export function useLanCounts() {
  */
 function Nets({ onDevices }: { onDevices: (lan: number) => void }) {
   const { all, routers, nets } = useNets();
+  const leases = useLeases();
+  const mgmt = useMgmt();
   const [editId, setEditId] = useState<number | null>(null);
   const editing = all.find((l) => l.id === editId) ?? null;
   /*
@@ -1405,6 +1411,7 @@ function Nets({ onDevices }: { onDevices: (lan: number) => void }) {
   return (
     <div className={withPanel(shown)}>
       <div className="min-h-0">
+        <QueryNote reads={[leases, mgmt]} aside />
         <Places
           routers={routers}
           nets={nets}

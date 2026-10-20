@@ -46,6 +46,7 @@ import { useLive, useTraffic } from "../api/live";
 import type { Banks, Firmware } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page, Tabs, useTab } from "../components/Page";
+import { QueryNote, QueryState } from "../components/Read";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Facts, Gauge, Meter, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
@@ -309,7 +310,10 @@ function ResourcesTab() {
         </Card>
       </div>
       <Card title={t("system.flashMap")} scroll>
-        <FlashMap parts={parts} />
+        <QueryState reads={banks}>
+          <QueryNote reads={fw} aside />
+          <FlashMap parts={parts} />
+        </QueryState>
       </Card>
     </div>
   );
@@ -430,6 +434,7 @@ function Updates() {
   return (
     <div className="grid min-h-0 flex-1 content-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <Card title={t("system.updates")}>
+        <QueryNote reads={firmware} />
         <ul className="grid gap-2">
           {(f ? bankViews(f) : []).map((b) => {
             const bank = f?.banks.find((x) => x.bank === b.bank);
@@ -743,6 +748,7 @@ function Certificate() {
         ]}
       />
       {cert && <p className="text-xs text-base-content/70">{t("system.certificateHint")}</p>}
+      <QueryNote reads={tls} />
     </>
   );
 }
@@ -753,19 +759,21 @@ function Certificate() {
  */
 function ClockCard() {
   const { t, lang } = useI18n();
-  const { data: c } = useClock();
+  const clock = useClock();
+  const c = clock.data;
   const when = (s: number) =>
     new Intl.DateTimeFormat(lang, { dateStyle: "medium", timeStyle: "short" }).format(s * 1000);
   if (!c)
     return (
       <Card title={t("system.clock")}>
-        <p className="text-sm text-base-content/70">–</p>
+        <QueryNote reads={clock} />
       </Card>
     );
   const [state, tone] = clockState(c);
   const inUse = c.source != null && c.source !== "none" && !stale(c);
   return (
     <Card title={t("system.clock")}>
+      <QueryNote reads={clock} />
       <Facts
         rows={[
           [t("system.clockTime"), when(c.now_s)],
@@ -874,6 +882,7 @@ function SettingsTab() {
             ],
           ]}
         />
+        <QueryNote reads={banks} aside />
         {live?.hostname != null ? (
           <HostnameForm name={live.hostname} />
         ) : (

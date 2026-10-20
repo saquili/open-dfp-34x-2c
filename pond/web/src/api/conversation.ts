@@ -6,7 +6,8 @@
  * (pond's value "omci_frames"), read from the number after the last one the
  * panel has, every two seconds, and at once again while a read comes back
  * full. A frame that changes the MIB has the MIB read again. omcid that
- * started again numbers its frames from 0, and the panel starts over.
+ * started again numbers its frames from 0, and the panel starts over. A read
+ * that fails keeps the frames, says why, and is tried again two seconds on.
  */
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -27,8 +28,8 @@ export interface Conversation {
   head: number;
   /** omcid has not answered yet. */
   loading: boolean;
-  /** The last read failed: no omcid, or no stick. */
-  error: boolean;
+  /** Why the last read failed (no omcid, or no stick), or null when it answered. */
+  error: unknown;
 }
 
 /* A frame of the OLT's, carried out, that changes the MIB. */
@@ -43,7 +44,7 @@ export function useConversation(): Conversation {
     first: 0,
     head: 0,
     loading: true,
-    error: false,
+    error: null,
   });
 
   useEffect(() => {
@@ -69,13 +70,13 @@ export function useConversation(): Conversation {
         /* The same list while nothing came, so that nothing is worked out again. */
         const frames = kept;
         setState((s) =>
-          s.frames === frames && s.head === v.head && !s.loading && !s.error
+          s.frames === frames && s.head === v.head && !s.loading && s.error == null
             ? s
-            : { frames, first: v.first, head: v.head, loading: false, error: false },
+            : { frames, first: v.first, head: v.head, loading: false, error: null },
         );
-      } catch {
+      } catch (e) {
         if (stopped) return;
-        setState((s) => ({ ...s, loading: false, error: true }));
+        setState((s) => ({ ...s, loading: false, error: e }));
       }
       if (!stopped) timer = setTimeout(read, full ? 0 : EVERY_MS);
     };

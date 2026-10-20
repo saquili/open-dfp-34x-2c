@@ -19,8 +19,10 @@
 
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useRef, useState } from "react";
+import { useNetwork, useOmci } from "../api/config";
 import { useLive } from "../api/live";
 import { Page } from "../components/Page";
+import { QueryNote } from "../components/Read";
 import { SidePanel, withPanel } from "../components/SidePanel";
 import { Dot } from "../components/ui";
 import { useI18n } from "../i18n";
@@ -63,6 +65,9 @@ function Conns() {
   const { data: live } = useLive();
   const list = conns(live);
   const { list: services, ready } = useServices();
+  /* The OLT's services name the connections' VLANs; the network, their interfaces. */
+  const omci = useOmci();
+  const net = useNetwork();
   const fib = fibre(live);
   /* Until the OLT's services are read, they are taken as there. */
   const known = !ready || services.length > 0;
@@ -86,6 +91,7 @@ function Conns() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <QueryNote reads={[omci, net]} aside />
       {!l2 && <NoServices fib={fib} />}
       <div className={withPanel(shown)}>
         <div className="min-h-0">

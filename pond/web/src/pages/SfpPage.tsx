@@ -20,6 +20,7 @@ import { useLive, useTraffic } from "../api/live";
 import type { LaneMode } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page } from "../components/Page";
+import { QueryNote } from "../components/Read";
 import { HistoryNote, TrafficChart } from "../components/TrafficChart";
 import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
@@ -202,9 +203,7 @@ function LaneCard() {
               {t("sfp.modeTry")}
             </button>
             <SaveState {...state} />
-            {!l && lane.isFetched && (
-              <span className="text-xs text-base-content/70">{t("sfp.modeUnavailable")}</span>
-            )}
+            <QueryNote reads={lane} missing={t("sfp.modeUnavailable")} />
             <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/70">
               {t("sfp.modeSafety")}
             </span>
@@ -250,7 +249,8 @@ function MgmtCard() {
   return (
     <Card title={t("sfp.mgmtTitle")}>
       <p className="text-sm text-base-content/70">{t("sfp.mgmtHint")}</p>
-      {m ? (
+      <QueryNote reads={mgmt} missing={t("sfp.mgmtUnavailable")} />
+      {m && (
         <Facts
           rows={[
             [t("sfp.mgmtVlan"), m.vlan ?? "–"],
@@ -269,8 +269,6 @@ function MgmtCard() {
             ],
           ]}
         />
-      ) : (
-        <p className="text-xs text-base-content/70">{t("sfp.mgmtUnavailable")}</p>
       )}
 
       {pending ? (

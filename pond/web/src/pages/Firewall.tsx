@@ -20,11 +20,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronDown, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useFwChange, useRuleChange } from "../api/config";
+import { useFwChange, useLeases, useRuleChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { FwDefaults, RuleInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
+import { QueryNote } from "../components/Read";
 import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
 import { Badge, Dot, NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
@@ -585,6 +586,8 @@ function Firewall() {
   const full = list.length >= MAX_RULES;
   const d = fwDefaults(live);
   const devices = useDevices(nets.map((p) => p.lan.id));
+  /* The devices' names and addresses come from their leases. */
+  const leases = useLeases();
   const [open, setOpen] = useState<Open | null>(null);
   const form = useRef<HTMLDivElement>(null);
   const show = (o: Open) => {
@@ -595,6 +598,7 @@ function Firewall() {
   const editing = open && "rule" in open ? (open.rule?.id ?? null) : null;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <QueryNote reads={leases} aside />
       <DefaultsBar d={d} onEdit={() => show({ defaults: true })} />
       <div className={withPanel(open != null)}>
         <section aria-labelledby="rules" className="@container flex flex-col xl:h-full xl:min-h-0">

@@ -26,6 +26,7 @@ import { Field, SaveState, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
+import { QueryNote, QueryState, Reading } from "../components/Read";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Detail, Facts, Figure, GroupRow, Stat, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
@@ -237,6 +238,7 @@ function Registration() {
         <span className="hidden text-xs text-base-content/70 sm:inline">{t("fibre.regHint")}</span>
       }
     >
+      <QueryNote reads={[omci, identity]} />
       <ol className="grid gap-4 lg:grid-cols-7 lg:gap-2">
         {REG_STEPS.map((id, i) => {
           const at = steps[id];
@@ -905,23 +907,24 @@ function RulesTable({ mib, q }: { mib: Mib; q: string }) {
   );
 }
 
+/*
+ * What the OLT set up, or while it is read, that it is; why it could not be
+ * read, with the button that reads it again; or, when the stick has none,
+ * that it has none.
+ */
 export function OmciState({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const { omci, mib } = useMib();
-  if (omci.isPending)
-    return (
-      <p className="flex items-center gap-2 text-sm">
-        <span className="loading loading-spinner loading-sm" />
-        {t("fibre.reading")}
-      </p>
-    );
-  if (omci.isError || mib.empty)
-    return (
-      <Card>
-        <p className="text-sm">{t("fibre.omciAbsent")}</p>
-      </Card>
-    );
-  return <>{children}</>;
+  const absent = (
+    <Card>
+      <p className="text-sm">{t("fibre.omciAbsent")}</p>
+    </Card>
+  );
+  return (
+    <QueryState reads={omci} reading={<Reading>{t("fibre.reading")}</Reading>} missing={absent}>
+      {mib.empty ? absent : children}
+    </QueryState>
+  );
 }
 
 /* The services, or the VLAN rules, as the page's tab asks; a card that fits its table. */
@@ -1003,7 +1006,7 @@ function ChannelList() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
   const rates = useTraffic().at(-1)?.gems;
-  const { mib } = useMib();
+  const { omci, mib } = useMib();
   const use = useChannelUse();
   const views = gems(live);
   const info = new Map<number, { c: Channel; services: Service[] }>();
@@ -1022,6 +1025,7 @@ function ChannelList() {
 
   return (
     <Card scroll className="min-h-0">
+      <QueryNote reads={omci} aside />
       <table className={`${TABLE} table-pin-rows`}>
         <thead>
           <tr>
@@ -1751,13 +1755,7 @@ function IdentityCard({
             </span>
           )}
         </div>
-        {identity.data ? (
-          form(identity.data)
-        ) : identity.isError ? (
-          <p className="text-sm text-error">{identity.error.message}</p>
-        ) : (
-          <span className="loading loading-spinner" />
-        )}
+        <QueryState reads={identity}>{() => identity.data && form(identity.data)}</QueryState>
       </div>
     </section>
   );

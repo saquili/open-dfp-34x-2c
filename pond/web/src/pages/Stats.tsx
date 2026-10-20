@@ -15,9 +15,11 @@
 import { Link } from "@tanstack/react-router";
 import { RotateCcw } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
+import { useNetwork } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { Live } from "../api/types";
 import { Page, Tabs, useTab } from "../components/Page";
+import { QueryNote } from "../components/Read";
 import { Card, Detail, Dot, GroupRow, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { bitrate, bytes, clock, decimal, integer } from "../lib/format";
@@ -433,6 +435,7 @@ function GponTab({ get, live }: { get: Get; live: Live | undefined }) {
 function IfacesTab({ get, live }: { get: Get; live: Live | undefined }) {
   const { t, lang } = useI18n();
   const what = useIfaceText();
+  const net = useNetwork();
   const list = (live?.ports ?? [])
     .map((p) => ({ p, ...what(p.name) }))
     .sort(
@@ -440,6 +443,7 @@ function IfacesTab({ get, live }: { get: Get; live: Live | undefined }) {
     );
   return (
     <Card scroll className="min-h-0">
+      <QueryNote reads={net} aside />
       <table className={`${TABLE} table-pin-rows`}>
         <thead>
           <tr>

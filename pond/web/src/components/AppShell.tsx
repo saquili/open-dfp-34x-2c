@@ -14,6 +14,7 @@
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Cable,
+  CircleAlert,
   Globe,
   KeyRound,
   LayoutDashboard,
@@ -30,15 +31,17 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useSignOut } from "../api/auth";
-import { OfflineError } from "../api/client";
+import { AuthError, OfflineError } from "../api/client";
 import { useChanges } from "../api/config";
 import { useLive } from "../api/live";
 import { type Key, useI18n } from "../i18n";
 import { useCountdown } from "../lib/countdown";
 import { clock } from "../lib/format";
+import { reason } from "../lib/read";
 import { THEMES, type Theme, useTheme } from "../lib/theme";
 import { confirmable, trialsToConfirm } from "../lib/trial";
 import { INTERNET_PAGES, useInternetCounts } from "../pages/Internet";
+import { Busy, Reading, Retry, useKept } from "./Read";
 
 /** A page of the menu. */
 interface Entry {
@@ -98,12 +101,14 @@ export function useNow(ms = 1000): number {
 /*
  * How long ago the stick last answered: green while the answers come as
  * often as they are asked for, amber when one is late, red when the stick
- * does not answer.
+ * does not answer, or answers without its state.
  */
 function LastAnswer({ now }: { now: number }) {
   const { t, lang } = useI18n();
   const live = useLive();
-  const offline = live.error instanceof OfflineError;
+  const error = useKept(live)[0]?.error;
+  const offline = error instanceof OfflineError;
+  const failed = error != null && !offline && !(error instanceof AuthError);
   const at = live.dataUpdatedAt;
   const age = at > 0 ? Math.max(0, Math.round((now - at) / 1000)) : null;
   const ago =
@@ -113,20 +118,23 @@ function LastAnswer({ now }: { now: number }) {
           -age,
           "second",
         );
-  const tone = offline
-    ? "bg-error"
-    : age == null
-      ? "bg-base-300"
-      : age > 12
-        ? "bg-warning"
-        : "bg-success";
+  const tone =
+    offline || failed
+      ? "bg-error"
+      : age == null
+        ? "bg-base-300"
+        : age > 12
+          ? "bg-warning"
+          : "bg-success";
   const text = offline
     ? ago
       ? t("connection.silentSince", { ago })
       : t("connection.offline")
     : ago
       ? t("connection.answered", { ago })
-      : t("connection.connecting");
+      : failed
+        ? t("connection.noState")
+        : t("connection.connecting");
   return (
     <span
       className={`flex items-center gap-1.5 text-sm ${offline ? "text-error" : "text-base-content/70"}`}
@@ -275,20 +283,31 @@ function InternetSection({ path, onGo }: { path: string; onGo: () => void }) {
   );
 }
 
-function OfflineBar() {
+/*
+ * The live figures' failure, over every page: the stick does not answer,
+ * since when, or it answered without its state, and why. The pages keep the
+ * last figures; the poll goes on, and the button reads at once. A session
+ * that ended sends the reader to the sign-in instead (main.tsx).
+ */
+function LiveBar() {
   const { t, lang } = useI18n();
   const live = useLive();
-  if (!(live.error instanceof OfflineError)) return null;
+  const e = useKept(live)[0]?.error;
+  if (!e || e instanceof AuthError) return null;
   const since = live.dataUpdatedAt ? clock(live.dataUpdatedAt, lang, true) : null;
+  const offline = e instanceof OfflineError;
+  const text = offline
+    ? since
+      ? t("connection.offlineSince", { time: since })
+      : t("connection.offline")
+    : since
+      ? t("connection.failedSince", { reason: reason(t, e), time: since })
+      : t("connection.failed", { reason: reason(t, e) });
   return (
     <div role="alert" className="alert alert-error alert-soft mb-4">
-      <WifiOff className="size-5" />
-      <span>{since ? t("connection.offlineSince", { time: since }) : t("connection.offline")}</span>
-      <span
-        role="status"
-        className="loading loading-dots loading-sm"
-        aria-label={t("connection.retrying")}
-      />
+      {offline ? <WifiOff className="size-5" /> : <CircleAlert className="size-5" />}
+      <span>{text}</span>
+      <Retry reads={live} />
     </div>
   );
 }
@@ -397,6 +416,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
               {name && <span className="text-sm text-base-content/70"> · {name}</span>}
             </div>
           </div>
+          <Busy />
           <LastAnswer now={now} />
           <Clock now={now} />
           <ThemeMenu />
@@ -448,9 +468,17 @@ export function AppShell({ children }: { children?: ReactNode }) {
           </div>
         </header>
         <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col p-4 sm:p-6 lg:min-h-0 lg:overflow-auto">
-          <OfflineBar />
+          <LiveBar />
           <TrialBar />
-          {children ?? <Outlet />}
+          {/*
+           * Every page shows the live figures: until their first answer, or
+           * their first failure, which the bar above says, that they are read.
+           */}
+          {live.data === undefined && live.errorUpdatedAt === 0 ? (
+            <Reading />
+          ) : (
+            (children ?? <Outlet />)
+          )}
         </main>
       </div>
       <div className="drawer-side z-30">

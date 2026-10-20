@@ -8,7 +8,7 @@
  * shows it, so going from page to page does not empty the charts.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { request } from "./client";
 import { LIVE_IDS, type Live } from "./types";
@@ -146,14 +146,17 @@ export async function fetchLive(): Promise<Live> {
   return live;
 }
 
+/* Polled whether the last read answered or not: a failed read is tried again at the next poll. */
+export const liveQuery = queryOptions({
+  queryKey: ["live"],
+  queryFn: fetchLive,
+  refetchInterval: POLL_MS,
+  refetchIntervalInBackground: false,
+  retry: false,
+});
+
 export function useLive() {
-  return useQuery({
-    queryKey: ["live"],
-    queryFn: fetchLive,
-    refetchInterval: POLL_MS,
-    refetchIntervalInBackground: false,
-    retry: false,
-  });
+  return useQuery(liveQuery);
 }
 
 /** The rates of the last ten minutes, oldest first. */
