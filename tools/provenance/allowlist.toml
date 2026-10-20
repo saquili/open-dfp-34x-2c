@@ -101,6 +101,18 @@ in its code and comments. They identify no unit of this project.
 
 [[allow]]
 gate = "denylist"
+rules = ["internal"]
+paths = ["README.rst"]
+match = '[a-z]+\.github\.io/open-dfp-34x-2c'
+hashes = ["04a19a9da9771806577ebb6441458d95f7f2796d3f0e62c81eabf5f69cd9341f"]
+reason = """
+The README gives the address of the panel's demo on this repository's GitHub
+Pages site, which carries the name of the account the repository lives under;
+the address is public and is the only way to reach the demo.
+"""
+
+[[allow]]
+gate = "denylist"
 rules = ["symbol"]
 paths = ["pond/third_party/mongoose/mongoose.c"]
 reason = """
