@@ -20,7 +20,7 @@ The parts
    * - Part
      - What it does
    * - The kernel (``linux/``)
-     - Linux 6.18.48 with this project's series: the SoC and its Lexra core,
+     - Linux 6.18.57 with this project's series: the SoC and its Lexra core,
        the switch as a DSA driver with its CPU port, the GPON and PON MACs, the
        optics, the watchdog, and the PON class, through which programs see the
        ONU: its state, its GEM ports and T-CONTs, and its OMCI channel

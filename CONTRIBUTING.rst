@@ -121,7 +121,7 @@ The kernel tree
 ===============
 
 ``linux/`` holds a Linux release exactly as upstream publishes it -- now Linux
-6.18.48, from the kernel.org release tarball -- imported with
+6.18.57, from the kernel.org release tarball -- imported with
 ``git subtree add --squash``, and our kernel work on top of it as ordinary
 kernel commits. Upstream files change only through such commits, never by
 editing the import, and a kernel commit touches nothing outside ``linux/``.
@@ -135,11 +135,11 @@ rebase onto the upstream stable tag, or to turn into patches with
 ``git format-patch``.
 
 The split starts at the commit the import was squashed from, which no branch
-contains; the tag ``linux-6.18.48`` keeps it. Without the tag,
+contains; the tag ``linux-6.18.57`` keeps it. Without the tag,
 ``git subtree split`` stops with "could not rev-parse split hash", so fetch and
 push the tag along with the branches::
 
-    git push origin main linux-6.18.48
+    git push origin main linux-6.18.57
 
 Paths that differ only in case
 ------------------------------
@@ -195,18 +195,18 @@ the unpacked tarball::
     export GIT_DIR=<repository>/.git GIT_WORK_TREE="$PWD"
     export GIT_INDEX_FILE="$(mktemp -u)"
     git add -A -f && tree=$(git write-tree) && rm -f "$GIT_INDEX_FILE"
-    commit=$(git commit-tree -p 'linux-6.18.48^{commit}' \
-        -m 'Linux 6.18.49' \
-        -m 'The release tarball linux-6.18.49.tar.xz, SHA-256 <digest>.' \
+    commit=$(git commit-tree -p 'linux-6.18.57^{commit}' \
+        -m 'Linux 6.18.58' \
+        -m 'The release tarball linux-6.18.58.tar.xz, SHA-256 <digest>.' \
         "$tree")
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 then, in the repository::
 
-    git tag -a -m 'Linux 6.18.49, as imported into linux/' \
-        linux-6.18.49 "$commit"
+    git tag -a -m 'Linux 6.18.58, as imported into linux/' \
+        linux-6.18.58 "$commit"
     git subtree merge --squash -P linux \
-        -m 'linux: update to Linux 6.18.49' linux-6.18.49
+        -m 'linux: update to Linux 6.18.58' linux-6.18.58
 
 As the new release commit descends from the previous one, the squash commit
 lists only the releases in between, and the gates treat it as pristine

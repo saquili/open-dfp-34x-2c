@@ -5,7 +5,7 @@
 The kernel series and the kernel under it
 =========================================
 
-``linux/`` is Linux 6.18.48 with this project's commits on top, kept to
+``linux/`` is Linux 6.18.57 with this project's commits on top, kept to
 mainline's rules, though the project does not submit them (ADR 0015). This
 page says what those commits change in code
 that the kernel owns, and why, so that a maintainer who is offered one of them
@@ -17,7 +17,7 @@ Layers
 
 From the bottom:
 
-#. The import of the release, one commit, "linux: import Linux 6.18.48".
+#. The import of the release, one commit, "linux: import Linux 6.18.57".
 #. The platform: the Lexra LX5281 core and the RTL9602C SoC, its device-tree
    bindings, and the small changes to the Otto drivers (timer, GPIO, SPI,
    watchdog) that the SoC shares with the RTL838x family.
