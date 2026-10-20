@@ -90,8 +90,8 @@ The platform
      - The Lexra LX5281 (``PRID_IMP_LEXRA``) in the R3000 probe. Without a
        case for its PRId ``cpu_probe()`` stops the boot at a ``BUG_ON()``
        before any console exists. The core runs as an R3000 with a 64-entry
-       TLB, without ``MIPS_CPU_LLSC`` (``sc`` never stores) and without the
-       FPU probe.
+       TLB, with ``MIPS_CPU_LLSC`` (the core runs ``ll`` and ``sc``, and the
+       kernel's atomic operations use them) and without the FPU probe.
    * - ``arch/mips/include/asm/tlbmisc.h``, ``arch/mips/mm/tlb-r3k.c``
      - ``r3k_wired_entries``: the number of entries a full flush leaves
        alone, 8 on the R3000 and 0 on this core. And a fix that holds for the

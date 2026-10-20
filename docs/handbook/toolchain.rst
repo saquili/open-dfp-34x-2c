@@ -68,22 +68,50 @@ architecture::
 The code it makes is not position-independent, as the image's programs are
 not (``BR2_PIC_PIE`` is off in ``toolchain_defconfig``).
 
-``$t-gcc -v`` shows ``--with-arch=mips1``, ``--with-float=soft`` and
-``--with-divide=breaks`` in its configuration, and an object made with no
-options has the ELF flags ``mips1`` and ``o32`` and the ABI flag ``FP ABI: Soft
-float`` (``$t-readelf -h`` and ``-A``).
+``$t-gcc -v`` shows ``--with-arch=mips1``, ``--with-float=soft``,
+``--with-divide=breaks`` and ``--with-llsc`` in its configuration, and an object
+made with no options has the ELF flags ``mips1`` and ``o32`` and the ABI flag
+``FP ABI: Soft float`` (``$t-readelf -h`` and ``-A``).
+
+Atomic operations
+=================
+
+The core runs ``ll``, ``sc`` and ``sync`` of MIPS II, in user and in kernel
+mode, and the instruction after an ``ll`` sees its result, as after an ``lw``
+(M, measured on the DFP-34X-2C3 on 2026-10-20; the kernel's ``rtl9602c.rst``,
+"Instructions beyond MIPS I", has the probes and the counts). The compiler makes
+the ``__sync`` and the C11 atomic operations on objects of 1, 2 and 4 bytes in
+place as ``ll``/``sc`` sequences, with ``sync`` where the memory order asks for
+it, and the instruction-set gate allows the three instructions
+(``docs/adr/0021-atomic-operations-use-the-cores-ll-and-sc.rst``). An ``sc``
+fails when an exception comes between it and its ``ll``, an interrupt or the
+page fault of the first store to a page not yet written among them (M), so
+every sequence starts again until its ``sc`` succeeds; those of the compiler do.
 
 What a program for this core must not do
 ========================================
 
-**Use atomic operations or threads.** The core runs the load-linked instruction
-but never completes a store-conditional, so an atomic sequence retries for ever
-(``tools/isa-gate/README.rst``). The toolchain does not offer what would need
-them. ``__sync_fetch_and_add`` fails to link, with
-``undefined reference to '__sync_fetch_and_add_4'``; C11 atomics fail the same
-way, on ``__atomic_fetch_add_4``; and ``<pthread.h>`` is not installed. A
-program that is given ``-march=mips2`` and ``-mllsc`` does get the instructions,
-and spins, which is what the instruction-set gate below is for.
+**Use threads.** The core has no thread pointer: ``rdhwr $3, $29``, with which
+the MIPS ABI reads it, faults as an access to memory instead of trapping, so the
+kernel cannot emulate it (M). The toolchain has no thread library, and
+``<pthread.h>`` is not installed. A ``__thread`` variable compiles, and libgcc
+emulates it with one copy per process (``__emutls_get_address()``); a dynamic
+program that has one needs ``libgcc_s``, which the image does not ship.
+
+**Use an atomic operation on 8 bytes.** It needs libatomic, which a toolchain
+without threads does not build: ``__sync_fetch_and_add`` on a ``long long``
+fails to link, with ``undefined reference to '__sync_fetch_and_add_8'``, and
+C11 atomics the same way, on ``__atomic_fetch_add_8``.
+
+**Count on one try of an ll/sc sequence.** A sequence written by hand has to
+start again when its ``sc`` fails, as above; one that tries once fails on every
+first store to a page not yet written.
+
+**Use other instructions of MIPS II or later.** The core traps on ``mul``,
+``clz``, ``teq``, ``beql`` and ``bnel``, and runs ``bltzl`` wrongly, without a
+signal (M). The compiler's defaults make none of them; a program that is given
+``-march=mips2`` or later does get them, which is what the instruction-set gate
+below is for.
 
 **Count on fast floating point.** There is no floating-point unit: ``float`` and
 ``double`` work, through the compiler's library, and are slow. A 64-bit division
@@ -109,11 +137,10 @@ program built apart from the image runs on the board only if that library holds
 every function it imports; otherwise the loader names the first one it misses.
 For a program copied onto a running board, link statically.
 
-The toolchain's own libraries are whole. Its shared C library and ``libgcc_s``
-carry two functions that the gate refuses, a speculation barrier of libgcc and a
-test-and-set of uClibc-ng (``br2-external/README.rst`` lists them and says when
-a program reaches them); the image leaves both out, and the gate runs over its
-whole target tree.
+The toolchain's own libraries are whole. ``libgcc_s`` carries a function that
+the gate refuses, the speculation barrier of libgcc (``br2-external/README.rst``
+says when a program reaches it); the image leaves ``libgcc_s`` out, and the gate
+runs over its whole target tree.
 
 Checking a program
 ==================
@@ -129,12 +156,12 @@ describes what it checks and its exit status.
 Running the test programs on the board
 ======================================
 
-``br2-external/tests/toolchain`` holds 14 programs that exercise the C library,
+``br2-external/tests/toolchain`` holds 15 programs that exercise the C library,
 the compiler's runtime and the kernel's system calls, each of which checks its
 own results. ``qemu-mips`` runs all but one of them on a build machine. The
 board runs them as they are, and shows what the emulator does not: the kernel's
-``SIGFPE`` for a division by zero (``t-divzero``), and any atomic sequence on
-the path of a program, which the emulator completes and the board never does.
+``SIGFPE`` for a division by zero (``t-divzero``), and atomic sequences that
+interrupts and signals make start again (``t-atomic``).
 Copy the ``static`` directory that ``run`` builds, with ``check-output`` and
 ``expected.txt``, to the board and run ``sh check-output static``;
 ``br2-external/README.rst`` has the steps for the dynamic programs.

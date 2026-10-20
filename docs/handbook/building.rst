@@ -249,8 +249,9 @@ What ``make`` judges
    (``toolchain.rst``). It reports 26 files, 26 objects, 1749347 instructions
    and no findings. The gate can fail: the negative control of the toolchain
    tests compiles a stock MIPS32 object, and the gate refuses it for its
-   architecture flags, for the load-linked and store-conditional pair and for
-   the MIPS32 instructions (``br2-external/tests/toolchain/negative-control``).
+   architecture flags, for the trap ``teq`` of MIPS II and for the MIPS32
+   instructions, and does not report the ``ll``, ``sc`` and ``sync`` that the
+   core runs (``br2-external/tests/toolchain/negative-control``).
 #. ``sha256sum -c SHA256SUMS`` in the images directory.
 
 The root filesystem
@@ -563,9 +564,12 @@ for one: ``-march=r3000`` with the toolchain of the build and ``-march=mips1``
 with the Debian compiler. The kernel's Makefile tries ``r3000`` first, before it
 adds ``-msoft-float``, and the Debian compiler's default floating-point mode
 refuses it; both mean MIPS I. The linked kernels hold 1283 and 1284 load-linked
-and store-conditional pairs, in code that runs only on a CPU that is found to
-have them (``cpu_has_llsc``, which the kernel tests at run time). The kernel is
-therefore not under the instruction-set gate yet
+and store-conditional pairs, behind ``cpu_has_llsc``, which the kernel tests at
+run time and which is true on this core since the probe marks it
+``MIPS_CPU_LLSC`` (the kernel's ``rtl9602c.rst``, "Identification and CPU
+class"). The gate allows those; it would refuse the code for coprocessor
+registers of other cores that the kernel holds behind such tests as well, and
+the kernel is therefore not under the instruction-set gate yet
 (``tools/isa-gate/README.rst``).
 
 Linked, ``vmlinux`` holds 4571004 bytes of code and read-only data, 1125132 of
