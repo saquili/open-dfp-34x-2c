@@ -2269,13 +2269,13 @@ ahead of the other by tc priority::
        priority assigned: the push's VID and its priority, which a push always
        names, so priority 0 is written rather than kept. A pop and a push of
        the other protocol are refused.
-     - T, I
+     - T, M
      - T: the KUnit case ``rtl9602c_test_vlan_rewrite`` reads back the
        modify's action word, ``0x00042c12``, with
-       ``RTL9602C_CLS_ACT_CPRI_SET`` added and the priority 0. I: not
-       measured on the board; 100 frames of C-VID 410 and priority 5 under the
-       rule of the example above, leaving the far side of the OLT as 1410 with
-       priority 0, would settle it.
+       ``RTL9602C_CLS_ACT_CPRI_SET`` added and the priority 0. M: through
+       the lab OLT, 100 frames of C-VID 410 and priority 5 under a pop and a
+       push of 2002 with priority 0 left the OLT as C-VID 2002 with priority
+       0, a single tag, 100 of 100.
    * - A C-tag that the actions write, pushed onto an untagged frame or put
        over the outer C-tag by ``vlan modify`` or by a pop and a push,
        followed by a ``vlan push`` of an S-tag, becomes one entry that acts on
@@ -2286,14 +2286,15 @@ ahead of the other by tc priority::
        divide its priorities, of the S-tag's priority: the outer tag's, as for
        every other rule. As the entry writes that priority, it stays one entry
        (the per-priority row below).
-     - T, I
+     - T, M
      - T: the KUnit cases ``rtl9602c_test_vlan_two_tags`` and
-       ``rtl9602c_test_vlan_two_tags_flow``. I: the two planes together in
-       one entry are not measured; untagged frames under the rule of the
-       example above leaving the far side of the OLT as S-VID 200 with
-       priority 3 in front of C-VID 410 with priority 5, and frames of S-VID
-       200 in front of C-VID 410 sent from there arriving untagged, would
-       settle it.
+       ``rtl9602c_test_vlan_two_tags_flow``. M: through the lab OLT, 100
+       frames per case: untagged frames of ``0x88b5`` under a push of C-VID
+       410 with priority 5 and of S-VID 2002 with priority 3, one entry of
+       pattern 1, left the OLT with ``0x88a8`` VID 2002 PCP 3 outside and
+       ``0x8100`` VID 410 PCP 5 inside; frames of ``0x88a8`` VID 200 in front
+       of ``0x8100`` VID 410 sent from the OLT's side under two pops on
+       S-VID 200, one entry of pattern 0, arrived at the host untagged.
    * - The priority fields of the two planes hold more than an assignment:
        ``RTL9602C_CLS_ACT_SPRI_SET`` is the low bit of a field at bits 20:18
        of action word 0, and ``RTL9602C_CLS_ACT_CPRI_SET`` of one at bits
@@ -2317,14 +2318,18 @@ ahead of the other by tc priority::
        behind the tags or the outer tag's TPID, is not known yet. The rules
        keep tc's order, so a rule on an EtherType ahead of one on every
        untagged frame takes the frames of its EtherType.
-     - T, I
+     - T, M
      - T: the KUnit cases ``rtl9602c_test_vlan_etype``, which reads the
        EtherType out of the keys, and ``rtl9602c_test_cf_planes``, which
-       reads the planes. I: not measured; PPPoE discovery and session frames
-       and IPv4 frames from the host under the rules of the example above,
-       arriving at the far side of the OLT in VLANs 35, 35 and 10, 100 of each,
-       would settle it, and all three in VLAN 10 with the last rule at
-       ``pref 5`` instead.
+       reads the planes. M: through the lab OLT, 100 frames per case and none
+       unmarked. Upstream, under pushes of 2002 on ``0x8863`` and on
+       ``0x8864`` (entries 32 and 33), untagged PPPoE discovery and session
+       frames left the OLT as C-VID 2002 with their own EtherType.
+       Downstream, under a push of 777 on ``0x88b5`` on ``pon``, untagged
+       ``0x88b5`` arrived at the host as C-VID 777 and ``0x88b6`` untagged.
+       With a push of 2001 on every untagged frame at ``pref 5``, ahead of
+       the PPPoE rules at ``pref 10`` and ``11``, untagged IPv4 and ``0x8863``
+       both left in VLAN 2001 and none in 2002.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress rules (the classifier
        acts on ingress); any key but the VLAN tags, with the basic and control
        keys, and the EtherType of an untagged frame, with the PPPoE key; an
@@ -2370,7 +2375,12 @@ ahead of the other by tc priority::
        the host as 410; frames of 1410 upstream, of 410 downstream and untagged
        ones crossed unchanged, and with the rules deleted every frame crossed
        as sent. Before the driver set the tag action and the PON enable, the
-       same entries changed nothing.
+       same entries changed nothing. With the rules in entries of the
+       classifier's pattern 1, 100 frames of C-VID 410 and PCP 5 under a
+       translation to 2002 left the OLT as 2002 with PCP 5, a single tag,
+       none of C-VID 411 arriving in 2002, and 100 of 2002 sent from the
+       OLT's side under a translation to 410 on ``pon`` arrived at the host
+       as 410, a single tag.
    * - The switch recognises an S-tag only on a port in S-VLAN uplink mode
        (``RTL9602C_SVLAN_UPLINK_PORTS``), and the driver puts the SFP and PON
        ports in it, with every frame without an S-tag passing as it came (see
@@ -2413,15 +2423,17 @@ ahead of the other by tc priority::
        over its port's stream entry. The rules of a pattern keep the order of
        their tc priorities, so of two rules that match one frame the one tc
        takes first applies.
-     - T, I
+     - T, M
      - T: with an earlier driver, which took the rules from the bottom of its
        128 entries, the stream entry read back at the top index (see "Bridging
        the GEM ports"), and routing tests in which the routed port's stream
        entry is found where the driver put it; the KUnit cases
        ``rtl9602c_test_cf_order`` and ``rtl9602c_test_cf_patterns`` for the
-       order and the patterns. I: the entries of pattern 1, and the order
-       across the two patterns, are not yet on the board (see the *acl-qos*
-       page, "Open questions").
+       order and the patterns. M: the ``cf`` view with the stream entry
+       ``VALID`` at 255 and rules at tc priorities 3, 5, 10 and 11 at 32, 33,
+       34 and 35; a rule on an S-tag at the bottom of pattern 0 rewrote
+       S-VID 200 to 300 on all 100 frames that the stream entry at 255
+       matched too (see the *acl-qos* page, "Entries and rules").
    * - An upstream rule therefore carries the stream itself: when an upstream
        GEM interface claims the VID that the rule's modify or push writes (see
        "Bridging the GEM ports"), the entry also sets
@@ -2531,15 +2543,17 @@ class* page).
      - M
      - On a board provisioned by an OLT, the one entry read back at index 127,
        the top of the 128 entries an earlier driver used (the driver now takes
-       255, the top of pattern 1), matching ingress port 0 and assigning the
-       upstream flow (debugfs ``rtl9602c/cf``); upstream frames from the host
-       arrive at the OLT. A second upstream GEM interface (Port-ID 300, made by
-       hand on the same T-CONT) that joined took the entry, and 200 untagged
-       frames from the host were counted in its upstream octets; when it left
-       the bridge, and again when it was deleted while in it, the entry named
-       the first interface's flow again and the frames arrived at the OLT.
-       Before the driver chose another interface, no entry remained once it had
-       left, and every upstream frame from the host was lost.
+       255, the top of pattern 1, where it read ``VALID`` and 100 of 100
+       untagged frames from the host left the lab OLT untagged), matching
+       ingress port 0 and assigning the upstream flow (debugfs
+       ``rtl9602c/cf``); upstream frames from the host arrive at the OLT. A
+       second upstream GEM interface (Port-ID 300, made by hand on the same
+       T-CONT) that joined took the entry, and 200 untagged frames from the
+       host were counted in its upstream octets; when it left the bridge, and
+       again when it was deleted while in it, the entry named the first
+       interface's flow again and the frames arrived at the OLT. Before the
+       driver chose another interface, no entry remained once it had left, and
+       every upstream frame from the host was lost.
    * - Once VLANs are claimed, one entry for each port and claimed VLAN instead,
        matching the ingress port and the C-tag's VID and assigning that VLAN's
        flow, with no entry for a VLAN that no upstream GEM interface claims. A
@@ -2814,29 +2828,12 @@ Assumptions the driver depends on
        it that keeps the priority; frames of each priority from the host,
        counted in each port's upstream octets; the eight entries in ``cf``,
        and back to one when one interface takes every priority.
-   * - The rules on a C-tag or an untagged frame, in entries of the
-       classifier's pattern 1, match and act as the measured ones did in
-       pattern 0, and a rule on an S-tag in pattern 0 takes precedence over
-       its port's stream entry at the top of pattern 1 ("VLAN tag operations";
-       the *acl-qos* page, "The classifier").
-     - The frame tests of "VLAN tag operations" and of "Bridging the GEM
-       ports" again, with ``cf`` showing the rules at 32 upwards and the
-       stream entries at 255 downwards.
-   * - An entry of pattern 1 compares the EtherType of an untagged frame in
-       rule word 1, bits 15:0 ("VLAN tag operations").
-     - The PPPoE and IPv4 frames of the example of "VLAN tag operations"; and
-       downstream, untagged frames of ``0x88b5`` and ``0x88b6`` under a push
-       of VID 777 on ``0x88b5``, only the first arriving tagged.
-   * - ``RTL9602C_CLS_ACT_CPRI_SET`` with the priority 0 writes priority 0, so
-       a pop and a push give a translated tag priority 0 ("VLAN tag
-       operations").
-     - Frames of C-VID 410 and priority 5 under a pop and a push of 1410 with
-       priority 0, read at the far side of the OLT.
-   * - One classifier entry acts on both tags, its C-tag plane and its S-tag
-       plane, and leaves the S-tag in front of the C-tag ("VLAN tag
-       operations").
-     - Untagged frames under a push of C-VID 410 and of S-VID 200, read at the
-       far side of the OLT, and the two pops of the way back.
+   * - A rule on a C-tag that names a priority, in an entry of the
+       classifier's pattern 1, compares it as the measured rules did in
+       pattern 0 ("VLAN tag operations"; the *acl-qos* page, "The
+       classifier").
+     - A translation with ``vlan_prio 5`` in its match, in pattern 1, under
+       frames of priority 5 and 2: only the first translated.
 
 Questions the code does not depend on
 -------------------------------------
