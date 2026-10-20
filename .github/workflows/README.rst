@@ -48,8 +48,24 @@ left on device". The runner's disk holds tools that no build here uses, so every
 job that builds mounts their directories into its container -- .NET
 (``/usr/share/dotnet``), the Android tools (``/usr/local/lib/android``), GHC
 (``/opt/ghc``) and the runner's cache of tools (``/opt/hostedtoolcache``) -- and
-removes what they hold in its first step, "Make room on the runner", which
-prints the free space before and after.
+removes what they hold: ``toolchain.yml`` in its first step, "Make room on the
+runner", and ``image.yml`` and ``release.yml`` in the background of the step
+that builds, which needs that room only later; removing it first took five of
+their minutes. Each prints the free space before and after.
+
+What a build of the images takes, and what is kept
+==================================================
+
+A build of the images with the pinned toolchain took 32 minutes on a hosted
+runner, of which 13 went to building CMake for the host and 4 to the archive
+of ``linux/``. The jobs install CMake from Debian, which Buildroot takes in
+place of its own when it is new enough, and keep two things between runs with
+``actions/cache``: the archive of ``linux/`` (``build/kernel``), under the id
+of the tree it is made from, which ``tools/kernel-archive`` takes as it would
+the one it makes; and the downloads (``build/dl``), under the files of the
+packages that name them, which Buildroot checks against their hashes and the
+toolchain's fetch against its pin. A cache holds nothing that the commit does
+not determine.
 
 The pinned toolchain
 ====================

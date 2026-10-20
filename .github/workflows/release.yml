@@ -42,8 +42,8 @@ jobs:
     container:
       image: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
       # The runner's own tools that a build here does not use, mounted so that
-      # the first step can remove them: a build needs more of the runner's
-      # disk than it has free otherwise.
+      # the build step can remove them as it runs: a build needs more of the
+      # runner's disk than it has free otherwise.
       volumes:
         - /usr/share/dotnet:/runner-unused/dotnet
         - /usr/local/lib/android:/runner-unused/android
@@ -62,11 +62,6 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Make room on the runner
-        run: |
-          df -h / | tail -n 1
-          rm -rf /runner-unused/*/* || true
-          df -h / | tail -n 1
       - name: Install the tools
         # As image.yml: what Buildroot needs of its host, the cross binutils
         # and compiler for the gate's negative control, and the user-mode
@@ -76,17 +71,43 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates git python3 \
             patch xz-utils make gcc g++ libc6-dev binutils perl bzip2 gzip cpio \
             unzip rsync file bc findutils gawk wget sed diffutils tar debianutils \
-            bison flex binutils-mips-linux-gnu gcc-mips-linux-gnu qemu-user
+            bison flex binutils-mips-linux-gnu gcc-mips-linux-gnu qemu-user cmake zstd
           git config --global --add safe.directory '*'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: The tree of linux/
+        id: linux
+        run: echo "tree=$(git rev-parse HEAD:linux)" >> "$GITHUB_OUTPUT"
+      - name: The archive of linux/, kept by its tree
+        # tools/kernel-archive makes the same archive from the same tree and
+        # takes the one it finds; making it again costs four minutes.
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: build/kernel
+          key: kernel-archive-${{ steps.linux.outputs.tree }}
+      - name: The downloads, kept by the packages that name them
+        # Buildroot checks every download against its hash, and fetches what
+        # is missing; the pinned toolchain is checked against its pin.
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: build/dl
+          key: dl-${{ hashFiles('buildroot/VERSION', 'buildroot/patches/**', 'br2-external/package/**', 'br2-external/configs/**', 'br2-external/toolchain/PIN') }}
+          restore-keys: dl-
       - name: Build the images
         # make judges what it built: the images fit their partitions, the
         # instruction-set gate passes over the root filesystem tree, and the
         # digests check.
+        # The runner's own tools go in the background while it builds: the
+        # build needs their room only later, and taking them first cost five
+        # minutes.
         run: |
+          df -h / | tail -n 1
+          rm -rf /runner-unused/*/* &
+          cleaner=$!
           grep -v '^#' br2-external/toolchain/PIN
           start=$(date +%s)
           make IMAGE_OUT="$PWD/build/image-${{ matrix.build }}"
+          wait "$cleaner" || true
+          df -h / | tail -n 1
           echo "the build took $(( $(date +%s) - start )) seconds"
           echo "toolchain: $(cat build/image-${{ matrix.build }}/.toolchain)"
           cat build/image-${{ matrix.build }}/images/SHA256SUMS
