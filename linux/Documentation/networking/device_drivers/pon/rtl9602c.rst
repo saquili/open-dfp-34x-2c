@@ -2121,11 +2121,24 @@ Documentation/networking/dsa/rtl9602c-bridging.rst).
        port left the VLAN, its priority 5 went up neither.
    * - An upstream VLAN rule names the flow that claims its frames: those of
        the VLAN they leave in, of the priority the rule writes or else the one
-       it matches. A rule into a divided VLAN that keeps a priority it does not
-       match takes the flow of priority 0, with a warning: one entry cannot
-       choose among several flows.
+       it matches.
      - I
      - The driver's choice; not exercised.
+   * - A rule into a divided VLAN that keeps a priority it neither matches nor
+       writes takes one classifier entry per priority, as one entry names one
+       stream: each also matches its priority and names the flow that claims
+       it, or no stream for a priority no flow claims, as a mapper discards
+       it. When a GEM interface joins, leaves or changes its VLANs or
+       priorities, the rules are laid out again: a rule into a VLAN that
+       comes to be divided takes the eight entries, and one into a VLAN no
+       longer divided gives up all but one. So one rule is enough; rules that
+       each match one priority stay one entry each.
+     - I
+     - The driver's KUnit cases check the entries it composes and their
+       layout; not yet on the board. Two GEM interfaces dividing a VLAN's
+       priorities and a translation into it, with frames of each priority
+       counted in each port's upstream octets, would settle it (see "Open
+       questions").
 
 The OMCI channel
 ================
@@ -2635,11 +2648,18 @@ Known limitations
   stays attached, strict and unshaped, and its T-CONT stays on.
 - A VLAN rule (tc flower, offloaded to the classifier) that sends frames into
   a VLAN whose priorities several GEM ports divide, and that keeps a priority
-  it neither matches nor writes, puts all its frames on the GEM port of
-  priority 0. Management that wants each priority on its own GEM port gives
-  such a rule one copy per priority, each matching it. Frames the CPU sends
-  into such a VLAN go up every GEM port of the VLAN the software bridge floods
-  them to.
+  it neither matches nor writes, takes eight of the classifier's 128 usable
+  entries, one per priority (see "Bridges and VLANs"). A new such rule that
+  finds fewer than eight free is refused with ``-ENOSPC``; a rule that has
+  its entry already, into a VLAN that comes to be divided, keeps one entry
+  when there is no room for the other seven, and puts all its frames on the
+  GEM port of priority 0, with a warning. So does a rule that rewrites an
+  S-tag while it matches the C-tag behind it, since one entry compares the
+  VID and the priority of one tag. The entries per priority have not been
+  measured. An untagged frame takes the priority of the tag a rule pushes,
+  never one derived from its DSCP, as a mapper's unmarked frame option may
+  (ITU-T G.988 clause 9.3.10). Frames the CPU sends into such a VLAN go up
+  every GEM port of the VLAN the software bridge floods them to.
 - The rates and weights a queue is given are approximations: rates go in
   units of 1024 bytes per second, a weight of 1 shares less exactly than
   larger ones, and the ports that share a queue share one limit, the sum of
@@ -2788,6 +2808,13 @@ Assumptions the driver depends on
        T-CONTs ("GEM ports as network interfaces").
      - Two upstream GEM ports in different VLANs, each on a granted T-CONT,
        sending in both VLANs.
+   * - That a translation into a VLAN whose priorities GEM interfaces divide,
+       written as one entry per priority, sends each priority up the GEM port
+       that claims it and drops a priority none claims ("Bridges and VLANs").
+     - Two GEM interfaces on one granted T-CONT, one with priorities 0 to 3 and
+       one with 4 and 5, both in the translation's VLAN; frames of each
+       priority from the host, counted in each port's upstream octets; and the
+       eight entries in the ``cf`` view.
    * - That an extended OMCI message arrives with the same four trailing bytes
        ("The OMCI channel"), and that a message received outside O5 must be
        dropped.

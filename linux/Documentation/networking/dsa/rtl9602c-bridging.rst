@@ -2148,9 +2148,10 @@ direction, puts an S-tag in front of a C-tag and takes it off again (IEEE
 802.1ad), rewrites a tag, and sets a tag's priority. The driver offers these
 operations as tc flower rules on the ingress of a user port, one vlan action
 each or two pops, which the OMCI daemon installs, and turns each rule into one
-entry of the classifier. The classifier's entry format and the sequence that programs an
-entry are on the *acl-qos* page; VLAN membership (``port_vlan_add``) is a
-different block.
+entry of the classifier, or into one per priority where GEM interfaces divide
+the VLAN that the rule leads into (below). The classifier's entry format and
+the sequence that programs an entry are on the *acl-qos* page; VLAN membership
+(``port_vlan_add``) is a different block.
 
 A translation from VID 410 to VID 1410, a C-tag of VID 410 and priority 5 given
 to untagged frames from the subscriber side, and that tag taken off frames from
@@ -2333,6 +2334,33 @@ taken off again downstream::
        and 3002, a translation of 3005 to 3002 named the second interface's
        flow and one of 3006 to 3001 the first's, and the 200 frames of each
        were counted in that port's upstream octets.
+   * - Where the upstream GEM interfaces of the VLAN that a rule writes divide
+       its priorities (see "Bridging the GEM ports"), the stream depends on the
+       priority a frame leaves with. A rule that writes a priority, a push
+       among them, or that matches one keeps its one entry, with the stream of
+       that priority. A rule that keeps any priority, a ``vlan modify`` with
+       priority 0 that matches none, becomes eight entries instead, one for
+       each priority of the tag it matches, the C-tag or the S-tag. Each has
+       the stream of its priority, or none for a priority that no GEM
+       interface takes, whose frames are then lost, as a mapper discards them.
+       The entries follow the GEM interfaces: a rule into a VLAN that comes to
+       be divided takes the eight, and gives up seven when one interface takes
+       the VLAN whole again. A rule that rewrites an S-tag and matches the
+       C-tag behind it stays one entry, with the stream of priority 0 and a
+       warning; so does a rule already in place whose VLAN comes to be divided
+       when the classifier has no room for seven more. A new rule that finds
+       fewer than eight entries free is refused with ``-ENOSPC`` and the
+       message ``the classifier has no room for this rule's eight entries, one
+       for each priority of the VLAN it leads into``. Downstream nothing
+       changes: a downstream rule names no stream, and the frames of all the
+       GEM ports of a VLAN reach it alike, as a mapper sends them all to its
+       root.
+     - P, I
+     - P for the mapper, ITU-T G.988 clause 9.3.10: a priority whose pointer
+       is null is discarded, and downstream every GEM port leads to the root.
+       I for the entries, as the *acl-qos* page describes them ("What the
+       driver writes"), checked by the driver's KUnit cases; not yet on the
+       board (see "Open questions").
 
 Bridging the GEM ports
 ======================
@@ -2410,10 +2438,14 @@ class* page).
    * - Once VLANs are claimed, one entry for each port and claimed VLAN instead,
        matching the ingress port and the C-tag's VID and assigning that VLAN's
        flow, with no entry for a VLAN that no upstream GEM interface claims. A
-       VLAN travels up one GEM interface only: a second upstream GEM interface
-       in the same VLAN is refused when the VLAN is added (``-EBUSY``, ``VLAN
-       <v> already travels up another GEM interface``), and a GEM interface that
-       leaves the bridge gives up the VLANs that it claimed.
+       priority of a VLAN travels up one GEM interface only: upstream GEM
+       interfaces may share a VLAN with disjoint priorities
+       (``IFLA_GEM_PBITS``), and the VLAN then gets one entry per claimed
+       priority, which also matches the C-tag's priority (see the *PON* page,
+       "Bridges and VLANs"); a GEM interface that would take a priority
+       another holds is refused (``-EBUSY``, ``VLAN <v> priority <p> already
+       travels up another GEM interface``), and a GEM interface that leaves
+       the bridge gives up the VLANs that it claimed.
      - M
      - The OLT's GEM interface (Port-ID 256) claiming VLAN 3001 and the second
        interface of the row above 3002: entries 127 and 126 matched the two
@@ -2424,7 +2456,8 @@ class* page).
        and frames of VLAN 3003 were counted in neither. The OLT forwarded no
        frame of Port-ID 300, which it had not provisioned. A claim of 3001 for
        the second interface was refused with the message; when it left the
-       bridge, its entry went and the frames of 3002 got no stream.
+       bridge, its entry went and the frames of 3002 got no stream. The
+       division of a VLAN by priority is measured on the *PON* page.
    * - A subscriber port outside the GEM bridge (a routed port) gets one entry
        that matches its ingress port and assigns the flow that its routed
        interface is sent in, when an address on a GEM interface makes one (see
@@ -2659,6 +2692,14 @@ Assumptions the driver depends on
        one in the CAM ("Structure").
      - The same steps repeated until it happens again, with the flush's
        registers read around it.
+   * - A rule that keeps any priority, into a VLAN whose priorities GEM
+       interfaces divide, sends each priority up its own GEM port through its
+       eight entries, and loses a priority no GEM interface takes ("VLAN tag
+       operations").
+     - Two GEM interfaces dividing a VLAN's priorities and a translation into
+       it that keeps the priority; frames of each priority from the host,
+       counted in each port's upstream octets; the eight entries in ``cf``,
+       and back to one when one interface takes every priority.
 
 Questions the code does not depend on
 -------------------------------------

@@ -2070,8 +2070,11 @@ struct rtl9602c_priv {
 	 * @cf_xlate: each VLAN rule's entry as composed, without the stream;
 	 * the VLAN whose upstream GEM interface gives an upstream rule its
 	 * stream, VLAN_N_VID for none; the port the rule is on, so that the
-	 * stream can be chosen again when the streams change; and its
-	 * template, RTL9602C_CLS_TMPL_C or _S
+	 * stream can be chosen again when the streams change; its template,
+	 * RTL9602C_CLS_TMPL_C or _S; and the priority the entry adds to the
+	 * rule's match when the rule is written as one entry per priority
+	 * (rtl9602c_cf_xlate_split()), -1 for none. The entries of one rule
+	 * share its cookie and port.
 	 */
 	struct rtl9602c_cf_xlate {
 		u32 value;
@@ -2080,6 +2083,7 @@ struct rtl9602c_priv {
 		u16 out_vid;
 		u8 port;
 		u8 tmpl;
+		s8 pcp;
 	} cf_xlate[RTL9602C_CLS_ENTRIES];
 
 	/**

@@ -1352,6 +1352,15 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        writes, or else the one the rule's port's stream entry gives. Classes
        ``0x3f``.
      - The bottom of the usable range, upwards.
+   * - Upstream VLAN rule into a VLAN whose priorities GEM interfaces divide,
+       that keeps a priority it neither matches nor writes: eight entries
+     - As the upstream VLAN rule, and one priority each
+       (``RTL9602C_CLS_RULE_PRI``) of the tag of the rule's template: the
+       C-tag of a rule on a C-tag, the S-tag of a rule on an S-tag.
+     - The operation of the rule, and the stream of the GEM interface that
+       claims that priority of the VID the operation writes; no stream for a
+       priority no interface claims. Classes ``0x3f``.
+     - The bottom of the usable range, upwards.
    * - Downstream VLAN rule
      - Downstream; no tag, or a C-tag with the VID and the priority the rule
        names and no S-tag, or an S-tag with the VID and the priority of the
@@ -1392,8 +1401,9 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        and 125; 200 of 200 frames of 3001 crossed translated to 3002 and back,
        and the sessions carried 933 Mb/s down and 929 up in hardware.
    * - A VLAN rule of tc flower (see the *bridging* page, "VLAN tag
-       operations") becomes one entry: the tag bits, and the VID and priority
-       the rule names, compared on the template of their tag; the direction taken from the port (the PON
+       operations") becomes one entry (or eight, next row): the tag bits, and
+       the VID and priority the rule names, compared on the template of their
+       tag; the direction taken from the port (the PON
        port is downstream, every other port upstream), and for an upstream rule
        the port compared; the tag operation of its action; the action classes
        as in the table above; and the entry taken from the bottom of the usable
@@ -1411,6 +1421,29 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        its VID, and with the port's stream delivered them translated (see the
        C-tag rows above); the pushes and pops of the *bridging* page reached
        the OLT side with the port's stream.
+   * - An upstream VLAN rule into a VLAN whose priorities upstream GEM
+       interfaces divide (see the *PON* page, "Bridges and VLANs"), that keeps
+       a priority it neither matches nor writes, becomes eight entries, one
+       per priority, as one entry names one stream. Each is the rule's entry
+       with that priority compared on the rule's template and the stream of
+       the flow that claims the priority, or no stream for a priority no flow
+       claims (``rtl9602c_cf_xlate_split()``, ``rtl9602c_cf_xlate_entry()``).
+       A rule that rewrites an S-tag and matches the C-tag behind it stays one
+       entry, as an entry compares the VID and priority of one tag. Each change
+       of the stream entries lays the upstream rules out again, after the
+       stream entries (``rtl9602c_cf_xlate_relayout()``): a rule takes its
+       eight entries from the bottom of the usable range, keeping those it
+       has, and gives up all but its lowest when its VLAN is no longer
+       divided; the entries given up are retired after the rules are written.
+       A new rule that finds fewer than eight free is refused with
+       ``-ENOSPC``; a rule with an entry already keeps one, which gives the
+       flow of priority 0, with a warning in the kernel log. The entries of a
+       rule are told apart by its cookie and its port, as a rule of a block
+       that several ports share reaches the driver once per port.
+     - I
+     - The KUnit cases ``rtl9602c_test_cf_*`` of ``rtl9602c-offload-test.c``
+       check the entries composed and the layout, the depth limit included;
+       not yet on the board (see "Open questions").
    * - The upstream and downstream directions are the only ones the classifier
        sees: a frame from the SFP port to the CPU crosses neither, so a
        translation cannot be observed on it.
@@ -3210,6 +3243,13 @@ Assumptions the driver depends on
    * - The entries from ``RTL9602C_CLS_CTRL_LAYOUT1_START`` up use another rule
        layout, and the driver's depth limit is right ("Entries and rules").
      - A frame test of an entry above the boundary.
+   * - An upstream VLAN rule written as one entry per priority sends each
+       priority up the GEM port of its entry's stream, and drops a priority
+       whose entry has none ("What the driver writes").
+     - Two GEM interfaces dividing a VLAN's priorities, a translation into it
+       that keeps the priority, and frames of each priority from the host,
+       counted in each port's upstream octets; the eight entries read in
+       ``cf``.
    * - The multicast, ARP, DHCP and IGMP storm-control classes police their own
        frames ("Storm control").
      - Each class offered its own frames at a set rate.
