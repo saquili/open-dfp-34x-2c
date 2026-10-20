@@ -322,3 +322,53 @@ Dark. The choice is on the page before its first paint, so that a dark page
 never flashes light: ``src/theme-boot.js`` puts it there, a script of its own
 that the page loads before anything else, since pond's
 Content-Security-Policy runs no script written into the page.
+
+Reads and changes
+=================
+
+Every value a page shows comes from a read of the stick's, and most reads are
+made again every few seconds. A page shows a read's states the same way as
+every other page (``pond/web/src/components/Read.tsx``):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - State
+     - What the page shows
+   * - First load
+     - A spinner and "Reading from the stick…" where the values will stand
+       (``Reading``). The live figures, which every page shows, stand in for
+       the page until their first answer, and who is signed in for the panel.
+   * - Failed, nothing to show
+     - Why, in red, and *Try again*, in place of the values (``QueryState``,
+       ``QueryNote``). For the live figures, the bar over the page says it:
+       the stick does not answer, or it answered without its state.
+   * - Failed, an answer before
+     - The last answer stays, and a line over it says that the last read
+       failed, why, the time of the answer shown, and *Try again*. A read
+       made every few seconds goes on being made; the line goes with the
+       next answer.
+   * - Read again
+     - Nothing on the page: a read that takes longer than a poll usually does
+       shows a spinner in the bar over every page (``Busy``), so that a poll
+       never makes a page move.
+
+A read that only adds to what a page shows (the devices' names beside the
+forwards, the interfaces beside the connections) says nothing while it is
+read, only that it failed. A value the stick has no software for, which pond
+does not know (404), is said in words of its own, not as a failure.
+
+A change of a setting, once asked for:
+
+* while it is sent, its button is disabled and the line at the form's end
+  says "Saving…" with a spinner; a second click sends nothing;
+* when pond refuses it, or the stick does not answer, why, in red, where it
+  was asked for: at the form's end, or in the row whose button asked (remove,
+  move), or in the notice whose button asked (keep, confirm); pond gives one
+  reason for a change, so a field's error under the field is the panel's own
+  check, made before anything is sent;
+* when it is taken, the form says *Saved* with a tick, or closes, or the row
+  goes; and the panel reads again exactly what the change makes stale, as
+  ``REFRESH`` in ``pond/web/src/api/config.ts`` lists it, the reads on the
+  page at once. Signing in and out forgets every read of the session before.
