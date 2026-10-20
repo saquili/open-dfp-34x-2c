@@ -174,6 +174,15 @@ class PostBuild(unittest.TestCase):
         self.assertFalse(os.path.lexists(os.path.join(etc, "resolv.conf")))
         self.assertEqual(self.run_script().returncode, 0)  # and a second run has nothing to do
 
+    def test_busyboxs_own_dhcp_script_goes(self):
+        scripts = os.path.join(self.target, "usr", "share", "udhcpc")
+        os.makedirs(os.path.join(scripts, "default.script.d"))
+        with open(os.path.join(scripts, "default.script"), "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\n/sbin/ifconfig $interface up\n")
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertFalse(os.path.lexists(scripts))
+        self.assertEqual(self.run_script().returncode, 0)  # and a second run has nothing to do
+
     def test_the_tools_of_diagnosis_are_not_left_in_the_flash_image(self):
         self.make_tools()
         self.make_iproute2()

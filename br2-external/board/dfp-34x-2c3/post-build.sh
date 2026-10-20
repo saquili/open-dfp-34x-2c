@@ -105,6 +105,10 @@ rm -rf "$1/usr/share/libubox"
 # configuration. The skeleton links /etc/resolv.conf to a file in /tmp that
 # nothing writes.
 rm -f "$1/etc/resolv.conf"
+# udhcpc, BusyBox's DHCP client, runs with onu-dhcpc as its script
+# (onu-apply). The build system installs BusyBox's own script beside it,
+# which calls ifconfig and route, applets the image does not have.
+rm -rf "$1/usr/share/udhcpc"
 
 # The programs share one C library (docs/adr/0008). The build system installs
 # it whole, with every function it offers, and libgcc_s, which no program
