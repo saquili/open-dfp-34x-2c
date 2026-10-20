@@ -137,12 +137,13 @@ every reset that is not a commit leads to the committed bank.
 ``onu-trial``, which the boot script starts first, waits for omcid to run as
 one process across two looks five seconds apart (procd starts one that
 crashed again after 2 s), for the status daemon to answer on the host link,
-and for the PON to reach O5, operation, unless the receiver has no light:
-without a fibre the PON says nothing about the new system. When all hold it
-runs ``onu-update commit``, which sets ``sw_commit`` to the running bank,
-removes the trial's mark and switches the loader's multicast listener off
-(``mupgrade_en``). When they do not hold within 300 seconds it restarts
-the stick, and forces the restart when procd has not carried it out in 30 s.
+and for the PON to reach O5, operation, unless the receiver has no light or
+the OLT keeps the ONU disabled, in O7: then the PON says nothing about the new
+system. When all hold it runs ``onu-update commit``, which sets ``sw_commit``
+to the running bank, removes the trial's mark and switches the loader's
+multicast listener off (``mupgrade_en``). When they do not hold within 300
+seconds it restarts the stick, and forces the restart when procd has not
+carried it out in 30 s.
 What it found is in ``/run/onu-trial`` and its log in ``/run/onu-trial.log``.
 
 The environment as this system uses it

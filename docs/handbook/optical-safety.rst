@@ -62,7 +62,8 @@ silence an ONU for good with the emergency stop.
    Disable_Serial_Number with the ONU's serial number: the ONU goes to O7 from
    any state, asserts TX_DISABLE and gives back its ONU-ID, and stays there
    until an enable for its serial number or for every ONU (P: ITU-T G.984.3
-   clause 9.2.3.6 and clause 10.2.5.1). A test build forced the laser driver on
+   clause 9.2.3.6 and clause 10.2.5.1), across a restart as well (below,
+   "What it cannot do"). A test build forced the laser driver on
    through the module's own configuration table: in O7, after an injected
    Disable_Serial_Number, the module's indication of light stayed clear in all
    130 reads, 10 ms apart, with the driver forced on (M: ``rtl9602c-gpon.rst``,
@@ -125,10 +126,15 @@ What it cannot do
   laser from a busy one. An ONU that sends out of turn is left to the OLT, which
   disables it (``rtl9602c-gpon.rst``, "Known limitations"). In O7 TX_DISABLE
   keeps the laser dark even with its driver forced on (M, above).
-* **A disabled ONU does not stay disabled across a restart.** The standard has
-  the disabled state survive a power-off; the driver keeps no state, and a
-  restarted stick is enabled again until the OLT disables it again
-  (``rtl9602c-gpon.rst``, "Known limitations").
+* **A disabled ONU stays disabled across a restart only through the store.**
+  The standard has the disabled state survive a power-off (P: ITU-T G.984.3
+  clause 10.2.4 and clause 11.1.2). ``pon keep`` keeps the OLT's disable in
+  the configuration store, and the boot gives it to the PON driver before the
+  PON comes up, which then comes up in O7 with the laser off. Without a store
+  that can be written a restarted stick is enabled again, and a kernel that
+  cannot take the disable leaves the PON down; ``pon enable`` forgets the
+  disable by hand (I: not run on the board; ``onu-utils/README.rst``,
+  ``pon``, and ``rtl9602c-gpon.rst``, "Known limitations").
 * **Before the kernel's probe.** Between power-up and the driver's request of
   the line, the transmitter is as the loader and the module leave it; nothing
   here measured it (I: a trace of the line from power-up would settle it).
