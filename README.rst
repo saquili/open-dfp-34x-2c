@@ -36,7 +36,8 @@ Realtek RTL9601D chip, an OMCI daemon that talks to the OLT, and a small set
 of programs that set the stick up, update it and show its state.
 
 The DFP-34X-2C2 and the DFP-34X-2C3 are this same stick, the 2C2 with a UPC
-optical connector and the 2C3 with an APC one. One image is for both.
+optical connector and the 2C3 with an APC one. One image is for both, but so
+far it has run on the 2C3 only: on a 2C2 it has not been tried yet.
 
 ::
 
@@ -247,7 +248,9 @@ were installed on a stick through the shipped firmware's page, by hand
        (by hand)
    * - The panel's copy of the whole flash
      - ⚪ Not on a stick yet
-     - Tested on the build machine (``onu-utils/tests/test_onu_update.sh``)
+     - Tested on the build machine (``onu-utils/tests/test_onu_update.sh``).
+       The copy over ssh was taken on a stick on 2026-10-11, and written back
+       from a RAM boot on 2026-10-12 (``docs/handbook/backup.rst``)
    * - Releases built by the release workflow, twice and compared, with a
        pinned toolchain release
      - 🟡 Bench
@@ -364,17 +367,26 @@ Before you install
   page was, ``192.168.1.1/24`` unless it was changed there (`Reaching the
   panel`_). The host link itself has no address of the stick's: the OLT's
   services may put it in a bridge.
-* **Copy the whole flash first.** The panel's System page does it with one
-  button, "Copy the whole flash", and asks for root's password; ssh does it
-  too (`backup.rst <docs/handbook/backup.rst>`__). Keep the copy private: it
-  holds the unit's registration identity.
+* **Copy the whole flash right after the install**, before the first
+  ``update.bin``. Take it over ssh and compare its SHA-256 digest with the
+  stick's, the way that was tried on a stick (`backup.rst
+  <docs/handbook/backup.rst>`__); the panel's button "Copy the whole flash"
+  makes the same copy, but has not been tried on a stick yet. Keep the copy
+  private: it holds the unit's registration identity. The install has
+  already written over the other bank, so the copy does not hold what that
+  bank held before (`install-guide.rst <docs/handbook/install-guide.rst>`__,
+  step 6).
 * **The way back.** While the other bank holds the shipped firmware, the
   same page has "Go back to the shipped firmware (system A)", or B, which
   makes it the bank that starts, with its own settings.
 * **The first update overwrites the shipped firmware.** The panel names the
   bank that holds it and asks before it writes over it; ``onu-update write``
   on the command line does not ask (`updating.rst
-  <docs/handbook/updating.rst>`__, "The first update").
+  <docs/handbook/updating.rst>`__, "The first update"). Going back to the
+  shipped firmware after it takes the copy of the whole flash, the serial
+  console, a host port at 2500BASE-X and a RAM image built from the sources,
+  which no release carries (`backup.rst <docs/handbook/backup.rst>`__,
+  "Writing it back"; `recovery.rst <docs/handbook/recovery.rst>`__).
 * **Builds from before 2026-10-11 erased the shipped firmware's files** in
   the partition ``config``. The system now keeps its settings in a file of
   its own beside them, and does not write theirs.
