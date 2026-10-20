@@ -123,12 +123,13 @@ push. Its input "release", on by default, says whether it makes a release.
     name of the directory and two values computed from the contents
     (``br2-external/README.rst`` says which). The second build and the
     comparison run whatever the result of the steps before them. With the
-    toolchain as the defconfig builds it, the gate reports findings in two
-    functions of the libraries (``br2-external/README.rst`` lists them), and
-    the step holds them to a list: it passes when the findings are exactly
-    the list in ``br2-external/tests/toolchain/known-findings.txt``, fails
-    when one is new, gone or different, and shows that its comparison can
-    fail by running it against a list without one of the functions. The
+    toolchain as the defconfig builds it, the gate reports findings in one
+    function of libgcc (``br2-external/README.rst`` says which), and the
+    step holds them to a list: it passes when the findings are exactly the
+    list in ``br2-external/tests/toolchain/known-findings.txt``, fails when
+    one is new, gone or different, and shows that its comparison can fail
+    by running it against a list without the function's group in
+    ``libgcc.a``. The
     files of the release are the tarball of the first build,
     ``open-dfp-34x-2c-toolchain.tar.gz``, the sources and licences of
     everything in it (``make legal-info`` of that build) as one archive, and

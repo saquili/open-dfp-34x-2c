@@ -114,7 +114,7 @@ jobs:
           t="$TOOLCHAIN_A/bin/mips-buildroot-linux-uclibc"
           "$t-gcc" --version | head -n 1
           "$t-ld" --version | head -n 1
-          "$t-gcc" -v 2>&1 | grep -o -e '--with-[a-z0-9-]*=[a-z0-9]*' -e '--without-[a-z]*' | tr '\n' ' '; echo
+          "$t-gcc" -v 2>&1 | grep -o -e '--with-[a-z0-9-]*=[a-z0-9]*' -e '--with-llsc' -e '--without-[a-z]*' | tr '\n' ' '; echo
           sysroot=$("$t-gcc" -print-sysroot)
           grep -e LINUX_VERSION_MAJOR -e LINUX_VERSION_PATCHLEVEL -e LINUX_VERSION_SUBLEVEL \
             "$sysroot/usr/include/linux/version.h"
@@ -131,11 +131,12 @@ jobs:
         # the binaries; run under qemu-mips against their expected output.
         run: br2-external/tests/toolchain/run "$TOOLCHAIN_A" build/toolchain-tests
       - name: The instruction-set gate over the toolchain's target objects
-        # Two functions of the toolchain's libraries hold instructions that
+        # One function of the toolchain's libraries holds instructions that
         # the gate refuses (br2-external/README.rst). The step passes when the
         # findings are exactly the list in known-findings.txt, and fails when
         # one is new, gone or different. The comparison is shown to be able to
-        # fail: a list without one of the functions is not the findings.
+        # fail: a list without the function's group in libgcc.a is not the
+        # findings.
         run: |
           br2-external/tests/toolchain/target-objects "$TOOLCHAIN_A" > /tmp/target-objects.txt
           wc -l < /tmp/target-objects.txt
@@ -146,7 +147,7 @@ jobs:
           [ "$gate" -le 1 ] || exit "$gate"
           known=br2-external/tests/toolchain/known-findings.txt
           br2-external/tests/toolchain/compare-findings "$known" "$TOOLCHAIN_A" /tmp/gate.out
-          grep -v '| _test_and_set |' "$known" > /tmp/fewer-findings.txt
+          grep -v '| _speculation_barrier.o |' "$known" > /tmp/fewer-findings.txt
           control=0
           br2-external/tests/toolchain/compare-findings /tmp/fewer-findings.txt "$TOOLCHAIN_A" \
             /tmp/gate.out > /dev/null || control=$?
