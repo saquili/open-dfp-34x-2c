@@ -64,32 +64,6 @@ exception-vector area at its start, and the two kernel load addresses the
 upstream MIPS tree uses above that area.
 """
 
-# --- History that predates the gates ----------------------------------------
-
-[[allow]]
-gate = "commit-message"
-rules = ["subject-prefix", "body-line-length"]
-commits = [
-    "8e8b550689bf04445ea08c697946c98ceac321f8",
-    "40ff8824737b57402aca9d0ddeb4b38ab5b10a5b",
-    "8bb3cf7894cbd376e0ec9942481cdcfe95418ccd",
-    "1a66b4c08e522fe2237bd4097fe39ba56ada3a09",
-]
-reason = """
-The four founding commits were written before the commit-message gate
-existed: three subjects lack a component prefix and some body lines run one
-or two columns past 75. Published history is never rewritten (ADR 0007), so
-these commits are accepted as they are; later commits follow the rule.
-"""
-
-[[allow]]
-gate = "one-component"
-commits = ["1a66b4c08e522fe2237bd4097fe39ba56ada3a09"]
-reason = """
-The skeleton commit created the placeholder README of every top-level
-directory at once, founding the component layout that this rule protects. It
-adds nothing but those placeholders and the MAINTAINERS file.
-"""
 
 # --- Third-party code carried unchanged -------------------------------------
 
