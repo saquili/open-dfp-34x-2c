@@ -1155,6 +1155,13 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 check '! kill -0 "$waiting" 2>/dev/null'
 check '[ -e "$ONU_ROOT/run/network.d/ses1" ]'
+# The session comes up behind it: netifd's event runs an onu-apply of its
+# own, which holds the lock while it lasts.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+	logged "session 1: IPv4 up" && [ ! -L "$lock" ] && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "session 1: IPv4 up"'
 check '[ ! -L "$ONU_ROOT/run/onu-apply.again" ] && [ ! -L "$lock" ]'
 # A lock whose holder is gone is taken over; dhcp6d's change is a sync too.
 "$REAL_SLEEP" 0 &
