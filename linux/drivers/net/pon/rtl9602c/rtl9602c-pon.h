@@ -172,6 +172,8 @@ struct rtl9602c_pon {
 	u32 gpon_fec_frame;
 	/** @gpon_fec_frame_valid: whether @gpon_fec_frame holds a read */
 	bool gpon_fec_frame_valid;
+	/** @gpon_us_fec: the upstream bursts carry FEC, as last logged */
+	bool gpon_us_fec;
 
 	/** @gpon_status: the status last reported, counters zeroed */
 	struct pon_dev_status gpon_status;

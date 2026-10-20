@@ -677,7 +677,8 @@ those of the facts that carry each step.
 18. Enable the downstream GTC interrupts, then the two sub-blocks at the top
     level. Purpose: PLOAM messages from the interrupt. (T, M)
 19. Write the laser lead and lag. Purpose: burst timing. (M)
-20. Enable the upstream GTC interrupts. (M)
+20. Enable the upstream GTC interrupts. Purpose: among them a change of the
+    upstream FEC state (see "FEC and encryption"). (M, I for the FEC event)
 21. Enable the burst power save, in the GTC under the write key and then in the
     GEM framer. (I)
 22. Write the upstream PTI codes. Purpose: GEM data upstream. (T)
@@ -2167,10 +2168,12 @@ signal-detect and burst-merge registers that the bring-up writes.
        run, and in normal O5, under the test OLT's allocation of 15417 of the
        19440 bytes of every upstream frame, set in runs of up to 24 reads.
    * - What bits 8 and 9 detect where the optics' signal detect reaches the
-       MAC, what bit 10 reports, and which events bits 2, 5 and 7 of the enable
-       select, are not established.
+       MAC, what bit 10 reports, and which events bits 5 and 7 of the enable
+       select, are not established. Bit 2 is taken to be a change of the
+       upstream FEC state (see "FEC and encryption").
      - I
-     - A burst keyed with the laser disabled (bit 9).
+     - A burst keyed with the laser disabled (bit 9); an OLT that sets Use FEC
+       (bit 2).
    * - ``RTL9602C_GTC_US_CTRL`` (``0x705014``, locked): the driver sets
        ``RTL9602C_GTC_US_CTRL_IND_NORMAL_PLOAM`` (bit 10: a queued normal PLOAM
        message is flagged as waiting in the burst header's Ind field) and
@@ -2938,14 +2941,28 @@ FEC and encryption
 
 G.984.3 lets the OLT switch on forward error correction in both directions, and
 provides encryption of the downstream GEM payload. The driver sets one FEC
-detection threshold and carries the ONU's side of the key exchange: on
-Request_Key it makes a new key, sends it to the OLT and writes it into the MAC
-as the next key, holding back a switch set up for the key before; on
-Key_Switching_Time it writes the superframe from which that key applies; on
-Encrypted_Port-ID it marks the flow bound to that Port-ID for decryption. It
-zeroes both keys at bring-up and when the ONU gives up its ONU-ID. What it
-leaves out is under "Known limitations", and the rows here state what the
-driver does and what is assumed.
+detection threshold, follows the upstream FEC state that the MAC reports, and
+carries the ONU's side of the key exchange: on Request_Key it makes a new key,
+sends it to the OLT and writes it into the MAC as the next key, holding back a
+switch set up for the key before; on Key_Switching_Time it writes the
+superframe from which that key applies; on Encrypted_Port-ID it marks the flow
+bound to that Port-ID for decryption. It zeroes both keys at bring-up and when
+the ONU gives up its ONU-ID. What it leaves out is under "Known limitations",
+and the rows here state what the driver does and what is assumed.
+
+Upstream FEC is asked for in the bandwidth map: the OLT sets the Use FEC flag of
+the ONU's allocations, and the ONU then adds the parity of RS(255,239) to its
+bursts and says so with the FEC bit of the burst header's Ind field. The driver
+sets nothing for it, as no setting that switches it has been found yet; the MAC
+is taken to answer the flag by itself. ``rtl9602c_gpon_us_fec_sync()`` reads
+the state the MAC reports, ``RTL9602C_GTC_US_IRQ_FEC`` in
+``RTL9602C_GTC_US_IRQ_STAT``, under ``gpon_lock``: from the interrupt thread
+when the upstream latch holds that bit, and from the worker every
+``RTL9602C_GPON_POLL_MS``. It logs each change once, as
+``<GPON> upstream FEC on`` or ``<GPON> upstream FEC off``, and the ``us`` line
+of the ``gpon`` view shows the word and the bit. The PON class has no attribute
+for the upstream FEC state (Documentation/networking/pon.rst), so it is not
+reported there.
 
 The MAC holds two keys, the active one and the next one. A key is written a
 16-bit word at a time (``rtl9602c_gpon_key_write()``), under ``gpon_lock``:
@@ -2977,13 +2994,19 @@ into the next key, then into the active key.
      - Tag
      - Checked by
    * - Downstream FEC is signalled by the FEC bit of the Ident field, with a
-       four-frame hysteresis at the ONU; upstream FEC is requested per
-       allocation by the Use FEC flag and is not used outside O5. Encryption is
-       128-bit AES in counter mode over GEM payloads, with keys the ONU
-       generates on Request_Key and switches to at Key_Switching_Time.
+       four-frame hysteresis at the ONU. Upstream FEC is requested by the Use
+       FEC flag (bit 9 of an allocation's Flags), the same for every Alloc-ID
+       of an ONU; the ONU acts on it at once, adds 16 parity bytes to every 239
+       data bytes from the BIP byte on, and confirms with the FEC bit (bit 6)
+       of the burst header's Ind field. An ONU that does not support upstream
+       FEC ignores the flag and reports FEC off. No upstream FEC is used
+       outside O5. Encryption is 128-bit AES in counter mode over GEM
+       payloads, with keys the ONU generates on Request_Key and switches to at
+       Key_Switching_Time.
      - P
-     - ITU-T G.984.3 clause 13.2.3, clause 13.1.2.2, clause 13.4, clause 12.2,
-       clause 12.3 and clause 12.4.
+     - ITU-T G.984.3 clause 13.2.3, clause 8.1.3.6.2, clause 8.2.2.3,
+       clause 13.1.2.2, clause 13.3.1.1, clause 13.3.3.1 and clause 13.4;
+       clause 12.2, clause 12.3 and clause 12.4.
    * - Downstream FEC: ``RTL9602C_GTC_DS_IRQ_FEC`` shows whether the line
        carries FEC (the ``ds`` line of the ``gpon`` view). The driver writes
        ``RTL9602C_GTC_DS_CTRL_FEC_DET_THR`` (bits 3:1 of
@@ -2992,10 +3015,31 @@ into the next key, then into the active key.
      - I
      - Required: unverified; the test OLT's downstream FEC setting is not
        recorded. An OLT with downstream FEC on would settle it.
-   * - That no upstream FEC is needed (see "Known limitations"): a grant's Use
-       FEC flag is only displayed (the ``bwmap`` view).
+   * - Upstream FEC: the MAC codes a burst with FEC, and sets the FEC bit of
+       its Ind field, when the ONU's allocations carry the Use FEC flag, with
+       nothing for the driver to set. A setting that switches upstream FEC has
+       not been found yet: the upstream GTC control word
+       (``RTL9602C_GTC_US_CTRL``), the transmit mode
+       (``RTL9602C_GTC_US_TX_MODE``) and the upstream GEM registers were
+       looked at. The driver writes none, and shows a grant's flag in the
+       ``bwmap`` view (``RTL9602C_BWMAP_ALLOC_FEC``).
      - I
-     - An OLT that sets Use FEC.
+     - An OLT that sets Use FEC: the ``us`` line of the ``gpon`` view reads
+       ``fec 1`` while the ``bwmap`` view shows the flag, the kernel log says
+       ``upstream FEC on`` once, and the OLT receives the ONU's bursts as
+       FEC-coded, with the FEC bit set, and keeps the ONU in O5.
+   * - ``RTL9602C_GTC_US_IRQ_STAT`` (``0x705008``) holds the upstream
+       conditions present now: ``RTL9602C_GTC_US_IRQ_FEC`` (bit 2) is set while
+       the bursts carry FEC. Bit 2 of ``RTL9602C_GTC_US_IRQ_LATCH`` latches its
+       changes, and ``RTL9602C_GTC_US_IRQ_EN_DEF`` (``0xa4``) enables them. The
+       driver reads bit 2 of the status as a level, from the interrupt thread
+       when the latch holds bit 2 and from the worker, logs each change once,
+       starting from off at each bring-up, and prints the word and the bit on
+       the ``us`` line of the ``gpon`` view.
+     - I
+     - An OLT that sets Use FEC, with the ``us`` line and the ``bwmap`` view's
+       FEC column read together, and the ``ploamlog`` ring's upstream latch
+       events at each change of the flag.
    * - Request_Key (identifier 13, directed, in O5) is answered with a new
        random key under the next key index (1 for the first): Encryption_Key
        messages (identifier 5) on the normal queue, octet 3 the index, octet 4
@@ -3189,12 +3233,14 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
      - Tag
      - Checked by
    * - ``gpon`` (mode 0400): ``top`` is ``RTL9602C_GPON_IRQ_STAT``; ``ds`` is
-       ``RTL9602C_GTC_DS_IRQ_STAT`` with its LOS, LOF, LOM and FEC bits; ``onu``
-       is ``RTL9602C_ONU_CTRL`` with the ONU-ID and the state; ``los`` is
-       ``RTL9602C_GTC_DS_LOS`` with its ``cdr`` and ``optical`` loss bits (1 is
-       loss); ``sig`` is ``RTL9602C_SERDES_PON_RX_STAT`` with its signal bit
-       (``signok``, 1 is present) and its sync bit (``lecsync``); ``frame`` is
-       the superframe counter; ``tod`` is the time of day the OLT gave last,
+       ``RTL9602C_GTC_DS_IRQ_STAT`` with its LOS, LOF, LOM and FEC bits; ``us``
+       is ``RTL9602C_GTC_US_IRQ_STAT`` with its FEC bit (see "FEC and
+       encryption"); ``onu`` is ``RTL9602C_ONU_CTRL`` with the ONU-ID and the
+       state; ``los`` is ``RTL9602C_GTC_DS_LOS`` with its ``cdr`` and
+       ``optical`` loss bits (1 is loss); ``sig`` is
+       ``RTL9602C_SERDES_PON_RX_STAT`` with its signal bit (``signok``, 1 is
+       present) and its sync bit (``lecsync``); ``frame`` is the superframe
+       counter; ``tod`` is the time of day the OLT gave last,
        its frame and TstampN, whether the clock is still to take it, and
        ``RTL9602C_GTC_DS_TOD_SUPERFRAME`` (see "The time of day"); then come
        the totals of the counters (``cntr``:
@@ -3289,8 +3335,12 @@ Known limitations
   exchange and the marking of a flow work as far as the driver's side goes,
   but whether the MAC decrypts what an OLT encrypts with the key sent depends
   on the key's octet order in the MAC, which is an assumption (see "FEC and
-  encryption"). Nothing is set up for upstream FEC, and downstream FEC has only
-  its detection threshold and its counters.
+  encryption").
+- Upstream FEC is left to the MAC, which is taken to answer the OLT's Use FEC
+  flag by itself: no setting that switches it has been found yet, and no OLT
+  tried has been seen to set the flag. The driver logs and shows the state the
+  MAC reports, and the PON class does not carry it. Downstream FEC has only its
+  detection threshold and its counters.
 - The driver raises no signal-fail or signal-degrade alarm: it reports the BIP
   errors in bits, and the OMCI daemon judges both from them.
 - Transmit power levelling follows Change_Power_Level in O4 and O5 only: the
@@ -3451,9 +3501,11 @@ Assumptions the driver depends on
    * - That ``0x70118c``, ``0x701190`` and ``0x701194`` count the bytes and
        codewords FEC corrected and the codewords it could not ("Counters").
      - An OLT with downstream FEC on, and a fibre attenuated towards errors.
-   * - That no upstream FEC is needed ("FEC and encryption", "Known
-       limitations").
-     - An OLT that sets Use FEC.
+   * - That the MAC codes upstream FEC, and sets the FEC bit of the Ind field,
+       by itself when the OLT's allocations ask for it ("FEC and encryption",
+       "Known limitations").
+     - An OLT that sets Use FEC: the ``us`` line of the ``gpon`` view, the
+       kernel log, and the OLT's view of the ONU's bursts.
    * - That no encryption is needed ("FEC and encryption", "Known limitations").
      - An OLT that encrypts a Port-ID.
 
@@ -3485,10 +3537,14 @@ Questions the code does not depend on
        timing").
      - Ranging with other values and comparing the delay the OLT assigns.
    * - What the upstream signal-detect bits detect where the optics' signal
-       detect reaches the MAC, what bit 10 reports, and what the enable bits
-       select ("Upstream timing").
+       detect reaches the MAC, what bit 10 reports, and what enable bits 5 and
+       7 select ("Upstream timing").
      - A board that brings the signal detect to the MAC, and a burst keyed with
        the laser disabled.
+   * - That bit 2 of ``RTL9602C_GTC_US_IRQ_STAT`` is the upstream FEC state
+       and bit 2 of the upstream latch a change of it ("FEC and encryption").
+     - An OLT that sets Use FEC, with the ``bwmap`` view's FEC column read
+       beside the ``us`` line.
    * - What the capture fields other than the T-CONT, PLOAMu, valid, StartTime
        and StopTime hold ("The bandwidth map").
      - An OLT granting FEC or DBRu, or several allocations in one burst.

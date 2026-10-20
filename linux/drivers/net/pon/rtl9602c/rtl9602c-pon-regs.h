@@ -480,6 +480,16 @@ enum {
 #define RTL9602C_GTC_US_IRQ_EN	0x705004
 #define RTL9602C_GTC_US_IRQ_EN_DEF	0x00a4
 
+/*
+ * Upstream conditions present now, at the bits of the latch. FEC is taken to
+ * be set while the bursts carry FEC, which the OLT asks for with the Use FEC
+ * flag of its allocations (ITU-T G.984.3 clause 13.3.3), and the latch's FEC
+ * bit, one of those EN_DEF enables, to mark a change of it. Not verified: no
+ * OLT that sets the flag has been tried.
+ */
+#define RTL9602C_GTC_US_IRQ_STAT	0x705008
+#define RTL9602C_GTC_US_IRQ_FEC	BIT(2)
+
 /* Burst power save in the GTC, under the write key; not verified. */
 #define RTL9602C_GTC_US_POWERSAVE	0x70526c
 #define RTL9602C_GTC_US_POWERSAVE_EN	BIT(0)

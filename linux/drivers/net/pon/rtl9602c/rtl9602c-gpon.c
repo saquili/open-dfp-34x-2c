@@ -35,9 +35,11 @@
  * that encrypts the OMCC and every data Port-ID and asks for a new key once a
  * day, the traffic is decrypted throughout. REI reports go up at the interval
  * BER_Interval sets, Change_Power_Level steps the transmit power level, and
- * Dying_Gasp is sent before an orderly restart. Nothing is set up for upstream
- * FEC, there is no signal-fail or signal-degrade alarm, and what makes the MAC
- * send the Dying_Gasp template it holds by itself is not known.
+ * Dying_Gasp is sent before an orderly restart. Upstream FEC is taken to be the
+ * MAC's own answer to the OLT's grants, with nothing for the driver to set; the
+ * driver logs and shows the state the MAC reports. There is no signal-fail or
+ * signal-degrade alarm, and what makes the MAC send the Dying_Gasp template it
+ * holds by itself is not known.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
@@ -1207,6 +1209,32 @@ static void rtl9602c_gpon_ds_sync(struct rtl9602c_pon *p)
 	default:
 		break;
 	}
+}
+
+/*
+ * Follow the upstream FEC state (G.984.3 clause 13.3.3): the OLT asks for FEC
+ * with the Use FEC flag of its allocations, and the MAC is taken to code it
+ * into the bursts, and to set the FEC bit of their Ind field, by itself; no
+ * setting that switches it has been found yet. RTL9602C_GTC_US_IRQ_FEC reports
+ * the state, and each change is logged once. It is read as a level, so a call
+ * after a missed change still finds it right.
+ */
+static void rtl9602c_gpon_us_fec_sync(struct rtl9602c_pon *p)
+{
+	bool fec;
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	if (!p->gpon_up)
+		return;
+
+	fec = rtl9602c_pon_r(p, RTL9602C_GTC_US_IRQ_STAT) &
+	      RTL9602C_GTC_US_IRQ_FEC;
+	if (fec == p->gpon_us_fec)
+		return;
+
+	p->gpon_us_fec = fec;
+	pr_info("<GPON> upstream FEC %s\n", fec ? "on" : "off");
 }
 
 /*
@@ -2567,8 +2595,12 @@ void rtl9602c_gpon_work(struct work_struct *w)
 	if (p->ponmac_up)
 		rtl9602c_ploam_log_usq(p);
 
-	/* A change of LOS or LOF that the interrupt did not report. */
+	/*
+	 * A change of LOS or LOF, or of the upstream FEC state, that the
+	 * interrupt did not report.
+	 */
 	rtl9602c_gpon_ds_sync(p);
+	rtl9602c_gpon_us_fec_sync(p);
 
 	/* TO1: back to O2, where the next Upstream_Overhead starts over. */
 	if (p->gpon_to1 && time_after(jiffies, p->gpon_to1)) {
@@ -2634,7 +2666,8 @@ void rtl9602c_gpon_irq(struct rtl9602c_pon *p)
 	 * unread, it keeps the source asserted and the thread re-enters without
 	 * end (measured on this board). Its two signal-detect bits say that the
 	 * optics' signal detect disagreed with a burst or stayed asserted too
-	 * long; what exactly they detect is not verified.
+	 * long; what exactly they detect is not verified. Its FEC bit is taken
+	 * to mark a change of the upstream FEC state, which is then read.
 	 */
 	if (top & RTL9602C_GPON_IRQ_GTC_US) {
 		u32 us = rtl9602c_pon_r(p, RTL9602C_GTC_US_IRQ_LATCH);
@@ -2647,6 +2680,12 @@ void rtl9602c_gpon_irq(struct rtl9602c_pon *p)
 			dev_warn_ratelimited(p->dev,
 					     "<GPON> signal detect disagrees with the burst (latch %#x)\n",
 					     us);
+
+		if (us & RTL9602C_GTC_US_IRQ_FEC) {
+			mutex_lock(&p->gpon_lock);
+			rtl9602c_gpon_us_fec_sync(p);
+			mutex_unlock(&p->gpon_lock);
+		}
 	}
 
 	if (!(top & RTL9602C_GPON_IRQ_GTC_DS))
@@ -2884,8 +2923,10 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 				RTL9602C_GTC_US_LASER_OFF_LAG_DEF));
 
 	/*
-	 * Upstream GTC interrupts; which events bits 2, 5 and 7 enable is not
-	 * known. Their latch must be read (rtl9602c_gpon_irq()).
+	 * Upstream GTC interrupts: bit 2 is taken to be a change of the
+	 * upstream FEC state (RTL9602C_GTC_US_IRQ_FEC); which events bits 5
+	 * and 7 enable is not known. Their latch must be read
+	 * (rtl9602c_gpon_irq()).
 	 */
 	rtl9602c_pon_w(p, RTL9602C_GTC_US_IRQ_EN, RTL9602C_GTC_US_IRQ_EN_DEF);
 
@@ -3064,6 +3105,7 @@ int rtl9602c_gpon_start(struct rtl9602c_pon *p)
 	memset(&p->gpon_stats, 0, sizeof(p->gpon_stats));
 	p->gpon_bip_blocks = 0;
 	p->gpon_fec_frame_valid = false;
+	p->gpon_us_fec = false;
 	p->gpon_state_since = get_jiffies_64();
 
 	err = rtl9602c_gpon_bringup(p);
@@ -3126,12 +3168,14 @@ void rtl9602c_gpon_stop(struct rtl9602c_pon *p)
 /*
  * gpon: the downstream and the activation at a glance, from the registers at
  * every read: the top-level interrupt status; the downstream conditions present
- * now, with whether the line carries FEC; the state and ONU-ID the MAC holds;
- * the loss bits of the clock recovery and of the optical module's LOS input,
- * 1 for loss; the PON receiver's signal bit, 1 for a signal, and its sync bit,
- * whose meaning is not known (it reads 0 on a framed downstream); and the
- * superframe counter, which advances 8000 times a second, once per 125 us
- * frame, while the downstream is framed and not at all otherwise. Then the
+ * now, with whether the line carries FEC; the upstream ones, with whether the
+ * bursts carry FEC as the MAC reports it (not verified); the state and ONU-ID
+ * the MAC holds; the loss bits of the clock recovery and of the optical
+ * module's LOS input, 1 for loss; the PON receiver's signal bit, 1 for a
+ * signal, and its sync bit, whose meaning is not known (it reads 0 on a framed
+ * downstream); and the superframe counter, which advances 8000 times a second,
+ * once per 125 us frame, while the downstream is framed and not at all
+ * otherwise. Then the
  * counter totals since bring-up, which a read brings up to date, and the REI
  * reports: the BER interval the OLT set, 0 for none, and the reports sent since
  * the ONU entered O5; and the encryption: the index of the last key sent, 0 for
@@ -3150,9 +3194,10 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	u8 key_index;
 	struct pon_dev_stats c;
 	u64 bip_blocks;
-	u32 sts, onu, los, sig;
+	u32 sts, us, onu, los, sig;
 
 	sts = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_STAT);
+	us = rtl9602c_pon_r(p, RTL9602C_GTC_US_IRQ_STAT);
 	onu = rtl9602c_pon_r(p, RTL9602C_ONU_CTRL);
 	los = rtl9602c_pon_r(p, RTL9602C_GTC_DS_LOS);
 
@@ -3162,6 +3207,8 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 		   !!(sts & RTL9602C_GTC_DS_IRQ_LOF),
 		   !!(sts & RTL9602C_GTC_DS_IRQ_LOM),
 		   !!(sts & RTL9602C_GTC_DS_IRQ_FEC));
+	seq_printf(s, "us    %08x  fec %u\n", us,
+		   !!(us & RTL9602C_GTC_US_IRQ_FEC));
 	seq_printf(s, "onu   %08x  id %lu state %lu\n", onu,
 		   FIELD_GET(RTL9602C_ONU_CTRL_ONUID, onu),
 		   FIELD_GET(RTL9602C_ONU_CTRL_STATE, onu));
