@@ -860,6 +860,49 @@ static void rtl9602c_test_cf_gather(struct kunit *test)
 						    TEST_COOKIE(10), 0));
 }
 
+/*
+ * The planes of an entry. A rule that names the EtherType of an untagged
+ * frame compares it in rule word 1, below the valid bit: a push of VID 777
+ * onto the downstream frames of EtherType 0x88b5. A translation of 410 that
+ * names none has the words measured for it, nothing compared in word 1.
+ */
+static void rtl9602c_test_cf_planes(struct kunit *test)
+{
+	struct rtl9602c_priv *p = rtl9602c_test_cf_priv(test);
+	struct rtl9602c_cf_txn t = {};
+	struct rtl9602c_cf_xlate x;
+	struct rtl9602c_cf_entry e;
+	u32 zeros[2], ones[2];
+
+	x = rtl9602c_test_cf_rule(RTL9602C_PORT_PON, 0, 777);
+	x.value = 0;
+	x.care = RTL9602C_CLS_RULE_CTAG | RTL9602C_CLS_RULE_STAG;
+	x.etype = 0x88b5;
+	KUNIT_EXPECT_TRUE(test, rtl9602c_cf_xlate_p1(&x));
+	KUNIT_ASSERT_EQ(test, rtl9602c_cf_xlate_layout(p, &x, TEST_COOKIE(1),
+						       &t), 1);
+	rtl9602c_cf_xlate_entry(p, TEST_P1, &e);
+	KUNIT_EXPECT_EQ(test, e.value1, 0x88b5U);
+	KUNIT_EXPECT_EQ(test, e.care1, (u32)RTL9602C_CLS_RULE1_ETYPE);
+	rtl9602c_cf_planes(&e, zeros, ones);
+	KUNIT_EXPECT_EQ(test, ones[0], 0x80000000U);
+	KUNIT_EXPECT_EQ(test, zeros[0], 0x00000018U);
+	KUNIT_EXPECT_EQ(test, ones[1], 0x000188b5U);
+	KUNIT_EXPECT_EQ(test, zeros[1], 0x0000774aU);
+
+	x = rtl9602c_test_cf_rule(0, 410, 1410);
+	KUNIT_ASSERT_EQ(test, rtl9602c_cf_xlate_layout(p, &x, TEST_COOKIE(2),
+						       &t), 1);
+	rtl9602c_cf_xlate_entry(p, TEST_P1 + 1, &e);
+	KUNIT_EXPECT_EQ(test, e.care1, 0U);
+	rtl9602c_cf_planes(&e, zeros, ones);
+	KUNIT_EXPECT_EQ(test, ones[0], 0x000cd008U);
+	KUNIT_EXPECT_EQ(test, zeros[0], (x.care | RTL9602C_CLS_RULE_DS) &
+					~x.value);
+	KUNIT_EXPECT_EQ(test, ones[1], (u32)RTL9602C_CLS_RULE_VALID);
+	KUNIT_EXPECT_EQ(test, zeros[1], 0U);
+}
+
 /* A vlan action of a VLAN rule, as tc flower hands it over. */
 struct rtl9602c_test_vlan_act {
 	enum flow_action_id id;
@@ -1030,6 +1073,131 @@ static void rtl9602c_test_vlan_two_tags_flow(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rtl9602c_cf_xlate_flow(p, &x), 6);
 }
 
+/* The keys of a flower rule that rtl9602c_flower_vlan_match() reads. */
+struct rtl9602c_test_keys {
+	struct flow_dissector_key_control control;
+	struct flow_dissector_key_basic basic;
+	struct flow_dissector_key_vlan vlan;
+	struct flow_dissector_key_vlan cvlan;
+	struct flow_dissector_key_num_of_vlans nvlans;
+	struct flow_dissector_key_pppoe pppoe;
+};
+
+/* A flower rule with no action, its keys and masks, as flower builds it. */
+struct rtl9602c_test_rule {
+	struct flow_dissector d;
+	struct rtl9602c_test_keys key;
+	struct rtl9602c_test_keys mask;
+	struct flow_rule rule;
+};
+
+/*
+ * The match of @r, which uses the keys @used besides the control and basic
+ * keys that flower always uses, into @x and @outer.
+ */
+static int rtl9602c_test_match(struct rtl9602c_test_rule *r, u64 used,
+			       struct rtl9602c_cf_xlate *x, u16 *outer)
+{
+	r->d.used_keys = used | BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL) |
+			 BIT_ULL(FLOW_DISSECTOR_KEY_BASIC);
+	r->d.offset[FLOW_DISSECTOR_KEY_CONTROL] =
+		offsetof(struct rtl9602c_test_keys, control);
+	r->d.offset[FLOW_DISSECTOR_KEY_BASIC] =
+		offsetof(struct rtl9602c_test_keys, basic);
+	r->d.offset[FLOW_DISSECTOR_KEY_VLAN] =
+		offsetof(struct rtl9602c_test_keys, vlan);
+	r->d.offset[FLOW_DISSECTOR_KEY_CVLAN] =
+		offsetof(struct rtl9602c_test_keys, cvlan);
+	r->d.offset[FLOW_DISSECTOR_KEY_NUM_OF_VLANS] =
+		offsetof(struct rtl9602c_test_keys, nvlans);
+	r->d.offset[FLOW_DISSECTOR_KEY_PPPOE] =
+		offsetof(struct rtl9602c_test_keys, pppoe);
+	r->rule.match.dissector = &r->d;
+	r->rule.match.key = &r->key;
+	r->rule.match.mask = &r->mask;
+	memset(x, 0, sizeof(*x));
+	return rtl9602c_flower_vlan_match(&r->rule, x, outer, NULL);
+}
+
+/*
+ * The EtherType of an untagged frame, named in full, is matched: one from the
+ * basic key, and a PPPoE session's from the PPPoE key, where flower carries
+ * it, without its session or PPP protocol. One named in part, a length, one
+ * behind a C-tag and an IP protocol are refused.
+ */
+static void rtl9602c_test_vlan_etype(struct kunit *test)
+{
+	const u64 nv = BIT_ULL(FLOW_DISSECTOR_KEY_NUM_OF_VLANS);
+	const u64 ppp = BIT_ULL(FLOW_DISSECTOR_KEY_PPPOE);
+	const u64 vl = BIT_ULL(FLOW_DISSECTOR_KEY_VLAN);
+	struct rtl9602c_test_rule *r;
+	struct rtl9602c_cf_xlate x;
+	u16 outer;
+
+	r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, r);
+
+	r->mask.nvlans.num_of_vlans = 0xff;
+	r->key.basic.n_proto = htons(0x88b5);
+	r->mask.basic.n_proto = htons(0xffff);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv, &x, &outer), 0);
+	KUNIT_EXPECT_EQ(test, x.etype, 0x88b5);
+	KUNIT_EXPECT_EQ(test, outer, 0);
+	KUNIT_EXPECT_EQ(test, x.care,
+			(u32)(RTL9602C_CLS_RULE_CTAG | RTL9602C_CLS_RULE_STAG));
+	KUNIT_EXPECT_EQ(test, x.value, 0U);
+	KUNIT_EXPECT_TRUE(test, rtl9602c_cf_xlate_p1(&x));
+
+	r->mask.basic.n_proto = htons(0xfff8);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv, &x, &outer),
+			-EOPNOTSUPP);
+	r->key.basic.n_proto = htons(0x05dc);
+	r->mask.basic.n_proto = htons(0xffff);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv, &x, &outer),
+			-EOPNOTSUPP);
+	r->key.basic.n_proto = 0;
+	r->mask.basic.n_proto = 0;
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv, &x, &outer), 0);
+	KUNIT_EXPECT_EQ(test, x.etype, 0);
+
+	r->key.pppoe.type = htons(ETH_P_PPP_SES);
+	r->mask.pppoe.type = htons(0xffff);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv | ppp, &x, &outer), 0);
+	KUNIT_EXPECT_EQ(test, x.etype, ETH_P_PPP_SES);
+	r->mask.pppoe.session_id = htons(0xffff);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv | ppp, &x, &outer),
+			-EOPNOTSUPP);
+	r->mask.pppoe.session_id = 0;
+	r->key.pppoe.ppp_proto = htons(PPP_IP);
+	r->mask.pppoe.ppp_proto = htons(0xffff);
+	r->key.basic.n_proto = htons(ETH_P_IP);
+	r->mask.basic.n_proto = htons(0xffff);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv | ppp, &x, &outer),
+			-EOPNOTSUPP);
+
+	memset(r, 0, sizeof(*r));
+	r->mask.nvlans.num_of_vlans = 0xff;
+	r->key.basic.ip_proto = IPPROTO_UDP;
+	r->mask.basic.ip_proto = 0xff;
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, nv, &x, &outer),
+			-EOPNOTSUPP);
+
+	memset(r, 0, sizeof(*r));
+	r->key.vlan.vlan_tpid = htons(ETH_P_8021Q);
+	r->mask.vlan.vlan_tpid = htons(0xffff);
+	r->key.vlan.vlan_id = 410;
+	r->mask.vlan.vlan_id = VLAN_VID_MASK;
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, vl, &x, &outer), 0);
+	KUNIT_EXPECT_EQ(test, outer, ETH_P_8021Q);
+	KUNIT_EXPECT_EQ(test, x.etype, 0);
+	r->key.vlan.vlan_eth_type = htons(ETH_P_IP);
+	r->mask.vlan.vlan_eth_type = htons(0xffff);
+	r->key.basic.n_proto = htons(ETH_P_IP);
+	r->mask.basic.n_proto = htons(0xffff);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_match(r, vl, &x, &outer),
+			-EOPNOTSUPP);
+}
+
 static struct kunit_case rtl9602c_offload_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_napt_example),
 	KUNIT_CASE(rtl9602c_test_napt_rem_hash),
@@ -1047,9 +1215,11 @@ static struct kunit_case rtl9602c_offload_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_cf_patterns),
 	KUNIT_CASE(rtl9602c_test_cf_order),
 	KUNIT_CASE(rtl9602c_test_cf_gather),
+	KUNIT_CASE(rtl9602c_test_cf_planes),
 	KUNIT_CASE(rtl9602c_test_vlan_rewrite),
 	KUNIT_CASE(rtl9602c_test_vlan_two_tags),
 	KUNIT_CASE(rtl9602c_test_vlan_two_tags_flow),
+	KUNIT_CASE(rtl9602c_test_vlan_etype),
 	{ }
 };
 

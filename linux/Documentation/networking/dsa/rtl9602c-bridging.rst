@@ -2145,7 +2145,8 @@ G.988 terms (clause 9.3.13, the extended VLAN tagging operation configuration
 data), a rule that matches one C-VID and assigns another. The same managed
 entity also gives an untagged frame a tag and takes it off again in the other
 direction, puts an S-tag in front of a C-tag and takes it off again (IEEE
-802.1ad), rewrites a tag, and sets a tag's priority. The driver offers these
+802.1ad), rewrites a tag, and sets a tag's priority, and a rule may take only
+the untagged frames of one EtherType. The driver offers these
 operations as tc flower rules on the ingress of a user port, one vlan action
 each or a few that together make one tag operation, which the OMCI daemon
 installs, and turns each rule into one entry of the classifier, or into one per
@@ -2188,6 +2189,17 @@ priority 3 upstream, and both tags taken off again downstream::
             action vlan push id 200 priority 3 protocol 802.1ad
     tc filter add dev pon ingress protocol 802.1ad flower skip_sw \
             vlan_id 200 vlan_ethtype 802.1Q action vlan pop action vlan pop
+
+Untagged PPPoE frames, discovery and session, given a C-tag of VID 35 ahead
+of every other untagged frame, given VID 10; one rule for each EtherType,
+ahead of the other by tc priority::
+
+    tc filter add dev sfp ingress pref 10 protocol 0x8863 flower skip_sw \
+            num_of_vlans 0 action vlan push id 35
+    tc filter add dev sfp ingress pref 11 protocol 0x8864 flower skip_sw \
+            num_of_vlans 0 action vlan push id 35
+    tc filter add dev sfp ingress pref 20 protocol all flower skip_sw \
+            num_of_vlans 0 action vlan push id 10
 
 .. list-table::
    :header-rows: 1
@@ -2295,22 +2307,42 @@ priority 3 upstream, and both tags taken off again downstream::
      - Not measured, and not driven. Each value under frames of two
        priorities in two tags, both ways, read at the far side of the OLT,
        would settle it.
+   * - A rule on an untagged frame may name its EtherType, in full:
+       ``protocol`` with the EtherType, which flower carries in its basic key,
+       or ``protocol 0x8864``, a PPPoE session, which it carries in its PPPoE
+       key and which the rule then matches by the EtherType alone. The rule's
+       entry, of the classifier's pattern 1, compares it in rule word 1 (see
+       the *acl-qos* page, "Entries and rules"). A rule on a tag names none:
+       which EtherType the classifier compares on a tagged frame, the one
+       behind the tags or the outer tag's TPID, is not known yet. The rules
+       keep tc's order, so a rule on an EtherType ahead of one on every
+       untagged frame takes the frames of its EtherType.
+     - T, I
+     - T: the KUnit cases ``rtl9602c_test_vlan_etype``, which reads the
+       EtherType out of the keys, and ``rtl9602c_test_cf_planes``, which
+       reads the planes. I: not measured; PPPoE discovery and session frames
+       and IPv4 frames from the host under the rules of the example above,
+       arriving at the far side of the OLT in VLANs 35, 35 and 10, 100 of each,
+       would settle it, and all three in VLAN 10 with the last rule at
+       ``pref 5`` instead.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress rules (the classifier
-       acts on ingress); any key but the VLAN tags (with the basic and control
-       keys), or an EtherType behind them; a VID or priority with a partial
-       mask; a DEI match; ``num_of_vlans`` other than 0, or with a VLAN key; an
-       outer tag that is neither 802.1Q nor 802.1ad, or with no protocol; a
-       second tag behind an outer C-tag, or anything but a C-tag behind an
-       S-tag; the VID or priority of both an S-tag and the C-tag behind it;
-       more than one action, but two pops on an S-tag, a pop and a push of the
-       outer tag's protocol, and a C-tag written with an S-tag pushed in front
-       of it (the rows above); any action but ``vlan modify``, ``push`` and
-       ``pop`` (a drop, trap or pass goes to the ACL, and ``police`` on a
-       destination-address match to storm control, both on the *acl-qos*
-       page); a modify of an untagged frame, or of a C-tag into anything but a
-       C-tag; a C-tag pushed onto a tagged frame, or an S-tag onto a frame
-       with one; a pop of an untagged frame. With no free entry: ``-ENOSPC``
-       and the message ``the classifier is full``.
+       acts on ingress); any key but the VLAN tags, with the basic and control
+       keys, and the EtherType of an untagged frame, with the PPPoE key; an
+       EtherType behind a tag, one in part, a length (below ``0x0600``), a PPPoE
+       session's number or PPP protocol, and an IP protocol; a VID or priority
+       with a partial mask; a DEI match; ``num_of_vlans`` other than 0, or with
+       a VLAN key; an outer tag that is neither 802.1Q nor 802.1ad, or with no
+       protocol; a second tag behind an outer C-tag, or anything but a C-tag
+       behind an S-tag; the VID or priority of both an S-tag and the C-tag
+       behind it; more than one action, but two pops on an S-tag, a pop and a
+       push of the outer tag's protocol, and a C-tag written with an S-tag
+       pushed in front of it (the rows above); any action but ``vlan modify``,
+       ``push`` and ``pop`` (a drop, trap or pass goes to the ACL, and
+       ``police`` on a destination-address match to storm control, both on the
+       *acl-qos* page); a modify of an untagged frame, or of a C-tag into
+       anything but a C-tag; a C-tag pushed onto a tagged frame, or an S-tag
+       onto a frame with one; a pop of an untagged frame. With no free entry:
+       ``-ENOSPC`` and the message ``the classifier is full``.
      - M
      - ``num_of_vlans 1`` with a VID, a pop with ``num_of_vlans 0``, a C-tag
        pushed onto a C-tag, an S-tag pushed onto an S-tag, two pops on a
@@ -2732,6 +2764,10 @@ Known limitations
   there.
 - A router of the second protocol behind a GEM port that is a router port
   already takes effect at the next group change (see "Multicast snooping").
+- A rule matches the EtherType of an untagged frame only (see "VLAN tag
+  operations"); one behind a tag is refused until it is known which EtherType
+  the classifier compares on a tagged frame. A rule names one EtherType, so
+  PPPoE, discovery and session, takes two rules.
 - The tc rules on an S-tag have 32 classifier entries to themselves, eight
   for a rule written per priority, and the other rules 224, shared with the
   stream entries (see the *acl-qos* page, "The classifier"): a rule on an
@@ -2786,6 +2822,11 @@ Assumptions the driver depends on
      - The frame tests of "VLAN tag operations" and of "Bridging the GEM
        ports" again, with ``cf`` showing the rules at 32 upwards and the
        stream entries at 255 downwards.
+   * - An entry of pattern 1 compares the EtherType of an untagged frame in
+       rule word 1, bits 15:0 ("VLAN tag operations").
+     - The PPPoE and IPv4 frames of the example of "VLAN tag operations"; and
+       downstream, untagged frames of ``0x88b5`` and ``0x88b6`` under a push
+       of VID 777 on ``0x88b5``, only the first arriving tagged.
    * - ``RTL9602C_CLS_ACT_CPRI_SET`` with the priority 0 writes priority 0, so
        a pop and a push give a translated tag priority 0 ("VLAN tag
        operations").
@@ -2835,6 +2876,12 @@ Questions the code does not depend on
        the outer or the inner tag's priority, the internal priority, a
        priority from the DSCP ("VLAN tag operations").
      - Each value under frames of two priorities in two tags, both ways.
+   * - Which EtherType an entry of pattern 1 compares on a frame with a C-tag:
+       the one behind the tag, or the tag's TPID ("VLAN tag operations"; the
+       driver refuses an EtherType behind a tag).
+     - In a test build that takes such a rule, a translation of C-VID 410 on
+       ``vlan_ethtype 0x8864``, with frames of VLAN 410 of ``0x8864`` and of
+       IPv4: only the first translated says the EtherType behind the tag.
    * - What the S-VLAN block's other fields do, and whether a bridge VLAN takes
        the S-tag of its VID off frames leaving by its untagged ports ("The
        S-VLAN block").

@@ -227,36 +227,55 @@ static int rtl9602c_nat_tbl_write(struct rtl9602c_priv *p, unsigned int table,
 
 /*
  * A classifier entry as composed here: the bits of rule word 0 to compare and
- * their values, the direction, and the three action words.
+ * their values, those of rule word 1 below RTL9602C_CLS_RULE_VALID, the
+ * direction, and the three action words.
  */
 struct rtl9602c_cf_entry {
 	u32 value;
 	u32 care;
+	u32 value1;
+	u32 care1;
 	bool downstream;
 	u32 act[3];
 	u8 tmpl;
 };
 
 /*
- * A classifier rule is two entries of the rule table: @idx holds the bits that
- * must be 0 (care and not value), @idx + RTL9602C_CLS_RULE_ONES_PLANE those
- * that must be 1; a bit clear in both is not compared. The direction bit is
- * always compared, so an entry matches frames of one direction only. The ones
- * plane carries the valid bit and goes last, so that no frame meets a
- * half-written entry.
+ * The two planes of entry @e's rule, two words each: @zeros the bits that must
+ * be 0 (care and not value), @ones those that must be 1 and the valid bit. A
+ * bit clear in both is not compared. The direction bit is always compared, so
+ * an entry matches frames of one direction only.
  */
-static int rtl9602c_cf_program(struct rtl9602c_priv *p, unsigned int idx,
-			       const struct rtl9602c_cf_entry *e)
+static void rtl9602c_cf_planes(const struct rtl9602c_cf_entry *e, u32 *zeros,
+			       u32 *ones)
 {
 	u32 care = e->care | RTL9602C_CLS_RULE_DS;
 	u32 value = (e->value & e->care) |
 		    (e->downstream ? RTL9602C_CLS_RULE_DS : 0);
+	u32 care1 = e->care1 & RTL9602C_CLS_RULE1_ETYPE;
+
+	zeros[0] = care & ~value;
+	zeros[1] = care1 & ~e->value1;
+	ones[0] = value;
+	ones[1] = RTL9602C_CLS_RULE_VALID | (e->value1 & care1);
+}
+
+/*
+ * A classifier rule is two entries of the rule table: @idx holds the zeros
+ * plane, @idx + RTL9602C_CLS_RULE_ONES_PLANE the ones plane
+ * (rtl9602c_cf_planes()). The ones plane carries the valid bit and goes last,
+ * so that no frame meets a half-written entry.
+ */
+static int rtl9602c_cf_program(struct rtl9602c_priv *p, unsigned int idx,
+			       const struct rtl9602c_cf_entry *e)
+{
+	u32 zeros[2], ones[2];
 	u32 plane[3];
 	int err;
 
-	plane[0] = care & ~value;
-	plane[1] = 0;
-	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_CLS_RULE, idx, plane, 2);
+	rtl9602c_cf_planes(e, zeros, ones);
+	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_CLS_RULE, idx,
+				   zeros, 2);
 	if (err)
 		return err;
 
@@ -278,10 +297,9 @@ static int rtl9602c_cf_program(struct rtl9602c_priv *p, unsigned int idx,
 		     BIT(idx % 32),
 		     e->tmpl == RTL9602C_CLS_TMPL_S ? BIT(idx % 32) : 0);
 
-	plane[0] = value;
-	plane[1] = RTL9602C_CLS_RULE_VALID;
 	return rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_CLS_RULE,
-				    idx + RTL9602C_CLS_RULE_ONES_PLANE, plane, 2);
+				    idx + RTL9602C_CLS_RULE_ONES_PLANE, ones,
+				    2);
 }
 
 static bool rtl9602c_port_is_downstream(int port)
@@ -374,7 +392,9 @@ static int rtl9602c_cf_xlate_flow(const struct rtl9602c_priv *p,
  * entry gives, which the frame would have taken without the rule. Without a
  * stream the frame reaches the PON MAC without a GEM port and is lost
  * (measured on this board). An entry of a rule written per priority also
- * matches its priority, in the tag of the rule's template.
+ * matches its priority, in the tag of the rule's template; that of a rule on
+ * the EtherType of an untagged frame, which takes an entry of pattern 1,
+ * compares it in rule word 1.
  */
 static void rtl9602c_cf_xlate_entry(const struct rtl9602c_priv *p,
 				    unsigned int idx,
@@ -393,6 +413,10 @@ static void rtl9602c_cf_xlate_entry(const struct rtl9602c_priv *p,
 	if (x->pcp >= 0) {
 		e->value |= FIELD_PREP(RTL9602C_CLS_RULE_PRI, x->pcp);
 		e->care |= RTL9602C_CLS_RULE_PRI;
+	}
+	if (x->etype) {
+		e->value1 = FIELD_PREP(RTL9602C_CLS_RULE1_ETYPE, x->etype);
+		e->care1 = RTL9602C_CLS_RULE1_ETYPE;
 	}
 
 	if (!e->downstream) {
@@ -3397,9 +3421,55 @@ static void rtl9602c_flower_tag_fill(const struct flow_match_vlan *m,
 }
 
 /*
+ * The EtherType a VLAN rule names, into @etype, 0 for none: that of the basic
+ * key, or for a PPPoE session the type of the PPPoE key, where flower carries
+ * it (as in rtl9602c_acl_replace()). It is matched in full, it is an EtherType
+ * and not a length (0x0600 and up), and a PPPoE session is matched by it
+ * alone, with no session or PPP protocol.
+ */
+static int rtl9602c_flower_etype(struct flow_rule *rule, u16 *etype,
+				 struct netlink_ext_ack *extack)
+{
+	struct flow_match_basic basic;
+	__be16 key, mask;
+
+	flow_rule_match_basic(rule, &basic);
+	key = basic.key->n_proto;
+	mask = basic.mask->n_proto;
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PPPOE)) {
+		struct flow_match_pppoe ppp;
+
+		flow_rule_match_pppoe(rule, &ppp);
+		if (ppp.mask->session_id || ppp.mask->ppp_proto || mask) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "a PPPoE session is matched by its EtherType alone, not by its session or PPP protocol");
+			return -EOPNOTSUPP;
+		}
+		key = ppp.key->type;
+		mask = ppp.mask->type;
+	}
+
+	*etype = 0;
+	if (!mask)
+		return 0;
+	if (mask != htons(0xffff)) {
+		NL_SET_ERR_MSG_MOD(extack, "an EtherType is matched in full");
+		return -EOPNOTSUPP;
+	}
+	if (ntohs(key) < ETH_P_802_3_MIN) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "a value below 0x0600 is a length, not an EtherType");
+		return -EOPNOTSUPP;
+	}
+	*etype = ntohs(key);
+	return 0;
+}
+
+/*
  * The tags a VLAN rule matches, from its flower keys:
  *
- * - an untagged frame, num_of_vlans 0: neither tag;
+ * - an untagged frame, num_of_vlans 0: neither tag, and the frame's EtherType
+ *   if the rule names one, in rule word 1 of an entry of pattern 1;
  * - an outer C-tag (802.1Q): a C-tag and no S-tag, with the tag's VID and
  *   priority if the rule names them, from template RTL9602C_CLS_TMPL_C;
  * - an outer S-tag (802.1ad), which the SFP and PON ports recognise
@@ -3410,8 +3480,10 @@ static void rtl9602c_flower_tag_fill(const struct flow_match_vlan *m,
  *
  * The switch counts no tags, so a rule on a tag takes no number of tags, and
  * an S-tag rule matches a frame with a C-tag behind the S-tag or without one.
- * Fills @x's match and template, and @outer with the protocol of the outer
- * tag, 0 for an untagged frame.
+ * Which EtherType the classifier compares on a tagged frame, that behind the
+ * tags or the TPID of the outer one, is not known yet, so a rule on a tag
+ * names none. Fills @x's match and template, and @outer with the protocol of
+ * the outer tag, 0 for an untagged frame.
  */
 static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 				      struct rtl9602c_cf_xlate *x, u16 *outer,
@@ -3419,6 +3491,7 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 {
 	struct flow_match_vlan vlan, cvlan;
 	struct flow_match_basic basic;
+	u16 etype;
 	int err;
 
 	if (rule->match.dissector->used_keys &
@@ -3426,18 +3499,22 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 	      BIT_ULL(FLOW_DISSECTOR_KEY_BASIC) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_VLAN) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_CVLAN) |
-	      BIT_ULL(FLOW_DISSECTOR_KEY_NUM_OF_VLANS))) {
+	      BIT_ULL(FLOW_DISSECTOR_KEY_NUM_OF_VLANS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_PPPOE))) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "this classifier matches the VLAN tags and nothing else");
+				   "this classifier matches the VLAN tags, and the EtherType of an untagged frame, and nothing else");
 		return -EOPNOTSUPP;
 	}
 
 	flow_rule_match_basic(rule, &basic);
-	if (basic.mask->n_proto || basic.mask->ip_proto) {
+	if (basic.mask->ip_proto) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "what follows the tags is not matched; drop the EtherType behind them");
+				   "what follows the EtherType is not matched; drop the IP protocol");
 		return -EOPNOTSUPP;
 	}
+	err = rtl9602c_flower_etype(rule, &etype, extack);
+	if (err)
+		return err;
 
 	*outer = 0;
 	x->tmpl = RTL9602C_CLS_TMPL_C;
@@ -3451,8 +3528,9 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 					   "the switch counts no tags; num_of_vlans 0, alone, matches an untagged frame");
 			return -EOPNOTSUPP;
 		}
-		/* Untagged: neither tag. */
+		/* Untagged: neither tag, and the EtherType the rule names. */
 		x->care |= RTL9602C_CLS_RULE_CTAG | RTL9602C_CLS_RULE_STAG;
+		x->etype = etype;
 		return 0;
 	}
 	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN)) {
@@ -3472,6 +3550,11 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 	}
 
 	if (vlan.key->vlan_tpid == htons(ETH_P_8021Q)) {
+		if (etype) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "an EtherType is matched on an untagged frame only; which one the classifier compares behind a tag is not known yet");
+			return -EOPNOTSUPP;
+		}
 		if (vlan.mask->vlan_eth_type ||
 		    flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CVLAN)) {
 			NL_SET_ERR_MSG_MOD(extack,
@@ -3495,8 +3578,8 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 	*outer = ETH_P_8021AD;
 	x->value |= RTL9602C_CLS_RULE_STAG;
 	x->care |= RTL9602C_CLS_RULE_STAG;
-	if (vlan.mask->vlan_eth_type &&
-	    vlan.key->vlan_eth_type != htons(ETH_P_8021Q)) {
+	if ((vlan.mask->vlan_eth_type &&
+	     vlan.key->vlan_eth_type != htons(ETH_P_8021Q)) || etype) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "behind an S-tag only a C-tag is matched, not an EtherType");
 		return -EOPNOTSUPP;

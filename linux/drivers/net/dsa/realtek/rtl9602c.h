@@ -1136,8 +1136,13 @@ enum rtl9602c_ptp_tc {
 					 RTL9602C_CLS_RULE_STAG | \
 					 RTL9602C_CLS_RULE_VID)
 
-/* Rule word 1, in the ones plane. */
+/*
+ * Rule word 1: VALID, in the ones plane; below it, in an entry of pattern 1 on
+ * template 0, the EtherType of the frame (not verified). The driver writes
+ * ETYPE only in entries of pattern 1, as pattern 0 holds other keys there.
+ */
 #define RTL9602C_CLS_RULE_VALID		BIT(16)
+#define RTL9602C_CLS_RULE1_ETYPE		GENMASK(15, 0)
 
 /*
  * Action word 1: assign the C-VID (CVID_SET with CVID) and the C-tag's
@@ -2090,9 +2095,9 @@ struct rtl9602c_priv {
 	 * stream can be chosen again when the streams change; its template,
 	 * RTL9602C_CLS_TMPL_C or _S; the priority the entry adds to the
 	 * rule's match when the rule is written as one entry per priority
-	 * (rtl9602c_cf_xlate_split()), -1 for none; and the rule's tc
-	 * priority, which orders the rules of a pattern. The entries of one
-	 * rule share its cookie and port.
+	 * (rtl9602c_cf_xlate_split()), -1 for none; the rule's tc priority,
+	 * which orders the rules of a pattern; and the EtherType it compares,
+	 * 0 for none. The entries of one rule share its cookie and port.
 	 */
 	struct rtl9602c_cf_xlate {
 		u32 value;
@@ -2100,6 +2105,7 @@ struct rtl9602c_priv {
 		u32 act[3];
 		u16 out_vid;
 		u16 prio;
+		u16 etype;
 		u8 port;
 		u8 tmpl;
 		s8 pcp;

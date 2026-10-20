@@ -1240,6 +1240,20 @@ Entries and rules
      - T
      - As for the ingress-port key; after ``tc filter del`` of a translation the
        entry no longer shows ``VALID`` in the ``cf`` view.
+   * - Rule word 1 of an entry of pattern 1 on template 0,
+       ``RTL9602C_CLS_RULE1_ETYPE`` (bits 15:0), is the frame's EtherType. The
+       driver compares it for a VLAN rule on an untagged frame that names one,
+       which takes an entry of pattern 1: in the zeros plane the bits of the
+       EtherType that are 0, in the ones plane those that are 1, beside
+       ``RTL9602C_CLS_RULE_VALID``; for ``0x88b5`` the words ``0x0000774a``
+       and ``0x000188b5``. It writes nothing below the valid bit in any other
+       entry, as pattern 0 holds other keys there.
+     - T, I
+     - T: the KUnit case ``rtl9602c_test_cf_planes`` reads the planes of
+       such an entry. I: not measured; 100 untagged frames of ``0x88b5`` and
+       100 of ``0x88b6`` from the network side under a push of VID 777 on
+       ``0x88b5``, only the first arriving at the host with the tag, would
+       settle it (the *bridging* page, "Open questions").
    * - Rule word 0: ``RTL9602C_CLS_RULE_CTAG`` (bit 3) is set when the frame
        carries a C-tag, at its front or behind an S-tag, and
        ``RTL9602C_CLS_RULE_VID`` (bits 22:11) holds the VLAN ID of the tag that
@@ -1413,10 +1427,10 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - The stream of that VLAN's GEM interface. Classes ``0x3f``.
      - The top of pattern 1, downwards.
    * - Upstream VLAN rule
-     - Upstream; the ingress port; no tag, or a C-tag with the VID and the
-       priority the rule names and no S-tag, or an S-tag with the VID and the
-       priority of the S-tag or of the C-tag behind it, and that C-tag if the
-       rule names one.
+     - Upstream; the ingress port; no tag, with the EtherType if the rule
+       names one, or a C-tag with the VID and the priority the rule names and
+       no S-tag, or an S-tag with the VID and the priority of the S-tag or of
+       the C-tag behind it, and that C-tag if the rule names one.
      - The C-tag or S-tag operation of the rule, or both (see "Entries and
        rules"), and the stream of the GEM interface that claims the VID the
        operation writes in the outer tag, or else the one the rule's port's
@@ -1433,9 +1447,10 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        priority no interface claims. Classes ``0x3f``.
      - As the upstream VLAN rule; the eight lie together.
    * - Downstream VLAN rule
-     - Downstream; no tag, or a C-tag with the VID and the priority the rule
-       names and no S-tag, or an S-tag with the VID and the priority of the
-       S-tag or of the C-tag behind it, and that C-tag if the rule names one.
+     - Downstream; no tag, with the EtherType if the rule names one, or a
+       C-tag with the VID and the priority the rule names and no S-tag, or an
+       S-tag with the VID and the priority of the S-tag or of the C-tag behind
+       it, and that C-tag if the rule names one.
      - The C-tag or S-tag operation of the rule, or both. Classes ``0x1f``.
      - As the upstream VLAN rule.
 
@@ -1557,8 +1572,9 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
 Writing one entry, ``rtl9602c_cf_program()``, in order:
 
 1. Write the zeros plane at index i: word 0 = care and not value, with
-   ``RTL9602C_CLS_RULE_DS`` always in the care set; word 1 = 0. Purpose: the
-   bits that must be 0 are in place first. (T)
+   ``RTL9602C_CLS_RULE_DS`` always in the care set; word 1 = the bits of the
+   EtherType compared that are 0, or 0 when none is (``rtl9602c_cf_planes()``).
+   Purpose: the bits that must be 0 are in place first. (T; the EtherType I)
 2. Write the three action words at i. Purpose: they go before the rule is
    valid, so that no frame meets half of an entry. (T)
 3. Write ``RTL9602C_CLS_ACT_EN(i)``. Purpose: the action classes that apply.
@@ -1567,7 +1583,8 @@ Writing one entry, ``rtl9602c_cf_program()``, in order:
    for template 0. Purpose: the tag whose VID and priority the rule compares.
    (M)
 5. Write the ones plane at i + ``0x100``: word 0 = value, word 1 =
-   ``RTL9602C_CLS_RULE_VALID``. Purpose: the valid bit goes last. (T)
+   ``RTL9602C_CLS_RULE_VALID`` and the bits of the EtherType compared that are
+   1. Purpose: the valid bit goes last. (T; the EtherType I)
 
 Retiring entry i writes both words of its ones plane as 0
 (``rtl9602c_cf_invalidate()``). Purpose: the valid bit goes and the entry stops.
@@ -3367,6 +3384,12 @@ Assumptions the driver depends on
        bridged and routed traffic, through entries of pattern 1 after setup
        wrote 224, with ``cf`` showing them at 32 upwards and the stream
        entries at 255 downwards.
+   * - An entry of pattern 1 on template 0 compares the EtherType of an
+       untagged frame in rule word 1, bits 15:0 ("Entries and rules").
+     - Untagged frames of ``0x88b5`` and ``0x88b6`` from the network side
+       under a push of VID 777 on ``0x88b5``, only the first arriving tagged;
+       PPPoE and IPv4 frames from the host under the rules of the *bridging*
+       page's example.
    * - The lowest matching entry applies across the two patterns, so that a
        VLAN rule on an S-tag in pattern 0 takes precedence over the port's
        stream entry at the top of pattern 1 ("Entries and rules").
@@ -3426,10 +3449,11 @@ Questions the code does not depend on
      - A rule whose action raises the interrupt.
    * - Whether in pattern 1 the VID and priority are those of the outer tag
        whatever the templates say, which only a rule of pattern 1 on an S-tag
-       would show; and what the fields of pattern 1 that the driver does not
-       write compare: the TOS octet or GEM index in bits 30:23, the EtherType
-       in word 1, and the inner tag's TCI on template 1 ("Entries and
-       rules").
+       would show; what the fields of pattern 1 that the driver does not write
+       compare, the TOS octet or GEM index in bits 30:23 and the inner tag's
+       TCI on template 1; and which EtherType word 1 holds for a tagged frame,
+       the one behind the tags or the outer TPID, as the driver compares it
+       only for untagged frames ("Entries and rules").
      - Entries of pattern 1 written by hand in a test build, with frames that
        differ in the field alone.
    * - The value of ``RTL9602C_CLS_CTRL_PATTERN1_NUM`` out of reset, which an
