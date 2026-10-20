@@ -28,7 +28,8 @@ I2C client driver bound by the IC's device tree node. It does five things:
 - It offers the optics to the GPON MAC through the PON class
   (Documentation/networking/pon.rst): the MAC asserts TX_DISABLE below O3 and
   releases it from O3 on, prepares the transmitter before every activation, and
-  asks for the transmit power levels the OLT sets.
+  asks for the transmit power levels that the OLT sets and that the ONU takes
+  itself before it is ranged.
 - Before every activation it turns the laser driver's automatic
   extinction-ratio loop off, so that the modulation of the laser runs from the
   value the module loads at power-up. This is the modulation hold.
@@ -186,8 +187,9 @@ Where the code is
        names, waiting for their driver. ``rtl9602c_gpon_apply_state()`` drives
        TX_DISABLE at every change of the ONU state,
        ``rtl9602c_gpon_bringup()`` prepares the optics after the MAC reset, and
-       Change_Power_Level and Upstream_Overhead ask for transmit power levels,
-       which ``rtl9602c_gpon_power_work()`` sets.
+       Upstream_Overhead, the ONU's own levelling in O3, Change_Power_Level and
+       the end of a session ask for transmit power levels, which
+       ``rtl9602c_gpon_power_work()`` sets.
    * - ``drivers/net/pon/Kconfig``, ``Makefile``
      - ``CONFIG_PON_GN25L95`` and ``CONFIG_PON_GN25L95_STORE``.
    * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``, ``dfp-34x-2c3.dts``
@@ -1140,8 +1142,10 @@ Transmit power levelling
 ========================
 
 ITU-T G.984.2 gives the ONU's transmitter three power levels, the level modes:
-0, normal, and 1 and 2, 3 dB and 6 dB below it. The OLT moves an ONU between
-them with Change_Power_Level (see
+0, normal, and 1 and 2, 3 dB and 6 dB below it. The ONU starts each activation
+at the mode the OLT's Upstream_Overhead names, takes the next mode itself after
+unanswered serial-number requests, and the OLT moves it between them with
+Change_Power_Level (see "Transmit power level" in
 Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst). The driver
 makes level mode 0 the power the module came with and sets the lower modes
 from it, in the configuration table of "The modulation hold", shown and kept
@@ -1251,9 +1255,11 @@ unset, with the optics where they are.
        next kernel takes the settings it finds for the module's own: booted
        with the optics at mode 2, a kernel logged ``modulation held at 19.8 mA
        (modulation DAC 2f80, ...)``. At an orderly restart, power-off or
-       halt the driver puts mode 0 back (``gn25l95_shutdown()``); a reset that
-       shuts no device down, such as the watchdog's, leaves the lower level
-       until the module loses power.
+       halt the driver puts mode 0 back (``gn25l95_shutdown()``), and the
+       GPON MAC asks for mode 0 whenever the ONU stops sending, below O3 and
+       in O7; a reset that shuts no device down, such as the watchdog's, taken
+       while the ONU sends at a lower level leaves that level until the module
+       loses power.
      - M, I
      - M: the hold's log after a warm reboot from mode 2 without the restore;
        with it, as a restart notifier of the switch driver before the split
@@ -1261,7 +1267,7 @@ unset, with the optics where they are.
        back at level mode 0 before the restart``, and the next kernel held the
        modulation at 39.0 mA (``5f80``) and sent 1661 uW. I: the restore as
        the driver's shutdown, which runs after the restart notifiers, has not
-       been run.
+       been run, nor has the GPON MAC's request for mode 0 below O3 and in O7.
 
 Setting a level (``gn25l95_set_power_level()``, called from the GPON MAC's
 work, ``rtl9602c_gpon_power_work()``, which the MAC queues for each request and
@@ -1434,7 +1440,9 @@ prefix ``rtl9602c-switch:``, and the GPON MAC with ``<GPON>``.
      - ``transmit power level not restored to mode 0``
    * - A power level was not set
      - ``<GPON> transmit power level mode <n> not set (<error>); the ONU stays
-       at mode <m>``, from the GPON MAC.
+       at mode <m>``, from the GPON MAC, rate-limited. Before the ONU is
+       ranged, ``-61`` (``ENODATA``) says that the mode has not been measured
+       since probe.
    * - Shutdown, a lower level was set
      - ``transmit power back at level mode 0 before the restart``, or ``not put
        back at`` in place of ``back at`` when it failed, also when PERSIST
@@ -1496,9 +1504,17 @@ Known limitations
 - A watchdog reset, or any reset that shuts no device down, with the
   transmit power at level mode 1 or 2 leaves the module there, and the next
   kernel takes that level for the module's own until the module loses power
-  (see "Transmit power levelling"): a level the OLT asks for then is counted
-  down from the lower one. The extinction ratio at the lower levels
-  is not measured.
+  (see "Transmit power levelling"): a level asked for then is counted down
+  from the lower one. The ONU sends at a lower level only from O3 to O6, at
+  the mode the OLT names or asks for or, in O3, at the one it took itself
+  after unanswered serial-number requests; below O3 and in O7 the GPON MAC
+  asks for mode 0. The extinction ratio at the lower levels is not measured.
+- Before the ONU is ranged a lower level is set only at a set point kept from
+  a measurement since probe, and the module measures a level only when the
+  OLT asks for it with Change_Power_Level in O4 or O5. Until it has, the
+  default mode of Upstream_Overhead and the ONU's own steps leave the optics
+  at mode 0, and Serial_Number_ONU says so. A kept set point is not measured
+  again until Change_Power_Level asks for its mode.
 - A PON bring-up writes a byte that the module keeps only when A2h byte 127
   holds another page than ``02h``: before it has read PERSIST, the modulation
   hold writes ``02h`` there, and it puts the page back at the end. At rest the

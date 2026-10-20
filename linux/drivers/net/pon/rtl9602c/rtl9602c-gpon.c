@@ -34,10 +34,12 @@
  * and Encrypted_Port-ID turns it on or off for a Port-ID. On an operator's OLT
  * that encrypts the OMCC and every data Port-ID and asks for a new key once a
  * day, the traffic is decrypted throughout. REI reports go up at the interval
- * BER_Interval sets, Change_Power_Level steps the transmit power level, and
- * Dying_Gasp is sent before an orderly restart. Upstream FEC is taken to be the
- * MAC's own answer to the OLT's grants, with nothing for the driver to set; the
- * driver logs and shows the state the MAC reports. There is no signal-fail or
+ * BER_Interval sets. The transmit power level starts at the mode
+ * Upstream_Overhead names, steps to the next every ten serial-number requests
+ * that bring no ONU-ID, and follows Change_Power_Level from O4 on. Dying_Gasp
+ * is sent before an orderly restart. Upstream FEC is taken to be the MAC's own
+ * answer to the OLT's grants, with nothing for the driver to set; the driver
+ * logs and shows the state the MAC reports. There is no signal-fail or
  * signal-degrade alarm, and what makes the MAC send the Dying_Gasp template it
  * holds by itself is not known.
  */
@@ -705,10 +707,10 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_pon *p, const u8 *msg,
  * Arm the Serial_Number_ONU template (G.984.3 clause 9.2.4.1), which the MAC
  * sends by itself in answer to every serial-number request: no ONU-ID yet, the
  * serial number, GEM transport supported and the transmit power level the ONU
- * sends at, high for level mode 0 and lower by one for each mode below. The
- * random delay is left 0; that the MAC inserts one and writes it into the
- * message is an assumption, not verified. Nothing is armed until a serial
- * number is set.
+ * sends at, the mode the optics last said they are at: high for level mode 0
+ * and lower by one for each mode below. The random delay is left 0; that the
+ * MAC inserts one and writes it into the message is an assumption, not
+ * verified. Nothing is armed until a serial number is set.
  */
 static void rtl9602c_gpon_arm_sn(struct rtl9602c_pon *p)
 {
@@ -723,7 +725,7 @@ static void rtl9602c_gpon_arm_sn(struct rtl9602c_pon *p)
 
 	msg[RTL9602C_PLOAM_SN_ONU_FLAGS] = RTL9602C_PLOAM_SN_ONU_GEM |
 		FIELD_PREP(RTL9602C_PLOAM_SN_ONU_POWER_LEVEL,
-			   RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH - p->gpon_power_mode);
+			   RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH - p->gpon_power_set);
 
 	rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_SN_ONU);
 }
@@ -817,8 +819,11 @@ void rtl9602c_gpon_power_work(struct work_struct *work)
  * @err: 0, or why @asked was not set
  *
  * On a failure the ONU stays at @mode, unless a newer mode has been asked
- * for meanwhile, which the next run of the work sets; the failure is logged.
- * The Serial_Number_ONU template is armed again with the mode.
+ * for meanwhile, which the next run of the work sets; the failure is logged,
+ * rate-limited, since in O3 the ONU may ask for a mode every few
+ * serial-number requests. The Serial_Number_ONU template is armed again with
+ * the mode, and in O3 the serial-number requests are counted again from none:
+ * those answered so far were answered at the old level.
  *
  * Context: process context; takes gpon_lock.
  */
@@ -826,13 +831,39 @@ void rtl9602c_gpon_power_applied(struct rtl9602c_pon *p, u8 asked, u8 mode,
 				 int err)
 {
 	mutex_lock(&p->gpon_lock);
+	p->gpon_power_set = mode;
 	if (err && p->gpon_power_mode == asked) {
-		pr_warn("<GPON> transmit power level mode %u not set (%d); the ONU stays at mode %u\n",
-			asked, err, mode);
+		pr_warn_ratelimited("<GPON> transmit power level mode %u not set (%d); the ONU stays at mode %u\n",
+				    asked, err, mode);
 		p->gpon_power_mode = mode;
 	}
+	if (p->gpon_state == RTL9602C_ONU_O3_SERIAL_NUMBER)
+		p->gpon_sn_answered = 0;
 	rtl9602c_gpon_arm_sn(p);
 	mutex_unlock(&p->gpon_lock);
+}
+
+/*
+ * The ONU's own power levelling (G.984.3 clause 10.5.1): in O3, once
+ * RTL9602C_GPON_SN_REQUEST_THRESHOLD serial-number requests have been answered
+ * at the present level and no Assign_ONU-ID has come, the next mode, modulo
+ * 3, which gpon_power_work then sets. Leaving O3, for O4 on Assign_ONU-ID or
+ * for any other state, ends it. Called by the worker after the counters.
+ */
+static void rtl9602c_gpon_power_sn(struct rtl9602c_pon *p)
+{
+	u8 mode = p->gpon_power_mode;
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	if (p->gpon_state != RTL9602C_ONU_O3_SERIAL_NUMBER ||
+	    !rtl9602c_gpon_power_sn_step(&p->gpon_sn_answered, &mode))
+		return;
+	pr_info_ratelimited("<GPON> %u serial-number requests answered and no ONU-ID: transmit power level mode %u -> %u\n",
+			    RTL9602C_GPON_SN_REQUEST_THRESHOLD,
+			    p->gpon_power_mode, mode);
+	p->gpon_power_mode = mode;
+	queue_work(system_wq, &p->gpon_power_work);
 }
 
 /*
@@ -913,13 +944,15 @@ void rtl9602c_gpon_operstate(struct rtl9602c_pon *p)
  * on this board; the ranging-request, error, overflow and GEM frame counts are
  * taken to be what their names say, which is not verified. The BIP errors
  * reported are the bits, G.984.3's ERR; the frames are kept for the gpon view.
+ * The serial-number requests counted in O3 are those the ONU answered, which
+ * its own power levelling counts too.
  *
  * Context: gpon_lock held.
  */
 void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p)
 {
 	struct pon_dev_stats *s = &p->gpon_stats;
-	u32 active, ploam_fail, bwm_fail, ds, frame, frames;
+	u32 active, sn, ploam_fail, bwm_fail, ds, frame, frames;
 
 	lockdep_assert_held(&p->gpon_lock);
 
@@ -927,7 +960,10 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p)
 		return;
 
 	active = rtl9602c_pon_r(p, RTL9602C_GPON_CNT_ACTIVATION);
-	s->sn_requests += FIELD_GET(RTL9602C_GPON_CNT_ACTIVATION_SN, active);
+	sn = FIELD_GET(RTL9602C_GPON_CNT_ACTIVATION_SN, active);
+	s->sn_requests += sn;
+	if (p->gpon_state == RTL9602C_ONU_O3_SERIAL_NUMBER)
+		p->gpon_sn_answered += sn;
 	s->ranging_requests += FIELD_GET(RTL9602C_GPON_CNT_ACTIVATION_RANGING, active);
 
 	s->ploam_rx += rtl9602c_pon_r(p, RTL9602C_GPON_CNT_PLOAM_RX);
@@ -974,8 +1010,8 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p)
  * activation state, whose numbers 1 to 5 are the class's O1 to O5; the ONU-ID
  * unless unassigned; the OMCC's Port-ID while it is bound; the Alloc-IDs of
  * T-CONTs 0 to 15 in use, the default Alloc-ID not among them; the counter
- * totals, brought up to date; the transmit power level, the one
- * Serial_Number_ONU carries; how long the ONU has been in its state; in O5,
+ * totals, brought up to date; the transmit power level the optics are at, as
+ * Serial_Number_ONU carries it; how long the ONU has been in its state; in O5,
  * the equalization delay of Ranging_Time; and the alarms.
  *
  * The alarms are the levels in RTL9602C_GTC_DS_IRQ_STAT, the conditions present
@@ -1021,7 +1057,7 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_pon *p,
 	st->stats = p->gpon_stats;
 	st->have_stats = true;
 
-	st->power_level = PON_POWER_LEVEL_HIGH - p->gpon_power_mode;
+	st->power_level = PON_POWER_LEVEL_HIGH - p->gpon_power_set;
 	st->have_power_level = true;
 
 	st->onu_state_ms = jiffies64_to_msecs(get_jiffies_64() -
@@ -1154,6 +1190,18 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_pon *p, u8 state)
 	 */
 	pon_optics_tx_disable(p->optics, state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
 			      state > RTL9602C_ONU_O5_OPERATION);
+
+	/*
+	 * Below O3 and in O7 the ONU sends nothing, and the next O3 starts at
+	 * the mode the next Upstream_Overhead names: the optics go back to
+	 * mode 0 meanwhile, so that a lower level outlasts no session.
+	 */
+	if ((state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
+	     state == RTL9602C_ONU_O7_EMERGENCY_STOP) &&
+	    (p->gpon_power_mode || p->gpon_power_set)) {
+		p->gpon_power_mode = 0;
+		queue_work(system_wq, &p->gpon_power_work);
+	}
 
 	if (state == RTL9602C_ONU_O5_OPERATION) {
 		p->gpon_rei_sent = 0;
@@ -2087,12 +2135,12 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
 			return;
 		rtl9602c_gpon_set_overhead(p, msg);
 		/*
-		 * Every activation starts at transmit power level mode 0, which
-		 * the optics go back to if an earlier session left them lower;
-		 * the default mode the OLT names here needs the power measured
-		 * in bursts, which come often only from O4 on.
+		 * The serial-number requests are answered at the default
+		 * transmit power level mode the message names (G.984.3 clause
+		 * 10.5.1), from which the ONU's own levelling counts.
 		 */
-		p->gpon_power_mode = 0;
+		p->gpon_power_mode = rtl9602c_gpon_power_mode_of(msg);
+		p->gpon_sn_answered = 0;
 		queue_work(system_wq, &p->gpon_power_work);
 		rtl9602c_gpon_arm_sn(p);
 		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O3_SERIAL_NUMBER);
@@ -2504,16 +2552,11 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
 		 * '11' ask for nothing, and neither does a step past either end.
 		 */
 		u8 ind = msg[RTL9602C_PLOAM_CPL_IND] & RTL9602C_PLOAM_CPL_IND_MASK;
-		u8 mode = p->gpon_power_mode;
+		u8 mode = rtl9602c_gpon_power_cpl(p->gpon_power_mode, ind);
 
 		if (p->gpon_state != RTL9602C_ONU_O4_RANGING &&
 		    p->gpon_state != RTL9602C_ONU_O5_OPERATION)
 			return;
-		if (ind == RTL9602C_PLOAM_CPL_IND_INCREASE && mode)
-			mode--;
-		else if (ind == RTL9602C_PLOAM_CPL_IND_DECREASE &&
-			 mode < RTL9602C_GPON_POWER_MODE_MAX)
-			mode++;
 		pr_info("<GPON> Change_Power_Level %s: transmit power level mode %u -> %u\n",
 			ind == RTL9602C_PLOAM_CPL_IND_INCREASE ? "up" :
 			ind == RTL9602C_PLOAM_CPL_IND_DECREASE ? "down" : "neither",
@@ -2584,9 +2627,10 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
  * nothing; activation cannot rely on it, since a message dispatched this late
  * misses the ranging request that follows Assign_ONU-ID (measured on this
  * board). Once the PON MAC is built it records changes of the upstream PLOAM
- * queues. It expires TO1, takes the counters, every RTL9602C_GEM_CNTR_POLLS
- * runs the GEM ports' too, and sends the PON class the ONU's status when that
- * has changed.
+ * queues. It expires TO1, takes the counters, steps the transmit power level
+ * after unanswered serial-number requests in O3, every RTL9602C_GEM_CNTR_POLLS
+ * runs the GEM ports' counters too, and sends the PON class the ONU's status
+ * when that has changed.
  */
 void rtl9602c_gpon_work(struct work_struct *w)
 {
@@ -2626,6 +2670,7 @@ void rtl9602c_gpon_work(struct work_struct *w)
 	}
 
 	rtl9602c_gpon_cntr_sync(p);
+	rtl9602c_gpon_power_sn(p);
 	if (++p->gem_cntr_polls >= RTL9602C_GEM_CNTR_POLLS) {
 		p->gem_cntr_polls = 0;
 		rtl9602c_gem_cntr_sync_all(p);
@@ -2787,6 +2832,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 	 * failure is logged and bring-up goes on.
 	 */
 	p->gpon_power_mode = 0;
+	p->gpon_power_set = 0;
+	p->gpon_sn_answered = 0;
 	err = pon_optics_start(p->optics);
 	if (err)
 		pr_warn("<GPON> the optics did not prepare the transmitter (%d)\n", err);
@@ -3184,11 +3231,13 @@ void rtl9602c_gpon_stop(struct rtl9602c_pon *p)
  * otherwise. Then the
  * counter totals since bring-up, which a read brings up to date, and the REI
  * reports: the BER interval the OLT set, 0 for none, and the reports sent since
- * the ONU entered O5; and the encryption: the index of the last key sent, 0 for
- * none, "waiting" while the MAC has not yet switched to it, the superframe of
- * the last Key_Switching_Time with the register, and how many Port-IDs the OLT
- * has encrypted. Last each GEM T-CONT as n=B/M, B the Alloc-ID it holds and M
- * the one management mapped it to, "-" for none. No key is shown, and no
+ * the ONU entered O5; the transmit power level mode the optics are at, the one
+ * asked for, and the serial-number requests answered at it in O3 towards the
+ * ONU's own next step; and the encryption: the index of the last key sent, 0
+ * for none, "waiting" while the MAC has not yet switched to it, the superframe
+ * of the last Key_Switching_Time with the register, and how many Port-IDs the
+ * OLT has encrypted. Last each GEM T-CONT as n=B/M, B the Alloc-ID it holds and
+ * M the one management mapped it to, "-" for none. No key is shown, and no
  * register is written.
  */
 static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
@@ -3196,8 +3245,8 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	struct rtl9602c_pon *p = s->private;
 	u16 bound[RTL9602C_GEM_NUM_TCONT], map[RTL9602C_GEM_NUM_TCONT];
 	unsigned int rei_ms, rei_sent, aes_ports, n;
-	u32 key_switch;
-	u8 key_index;
+	u32 key_switch, sn_answered;
+	u8 key_index, power_set, power_mode;
 	struct pon_dev_stats c;
 	u64 bip_blocks;
 	u32 sts, us, onu, los, sig;
@@ -3246,6 +3295,9 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	rei_sent = p->gpon_rei_sent;
 	key_index = p->gpon_key_index;
 	key_switch = p->gpon_key_switch;
+	power_set = p->gpon_power_set;
+	power_mode = p->gpon_power_mode;
+	sn_answered = p->gpon_sn_answered;
 	aes_ports = bitmap_weight(p->gpon_aes_ports, RTL9602C_GPON_NUM_PORTID);
 	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
 		bound[n] = rtl9602c_gpon_tcont_holds(p, n);
@@ -3263,6 +3315,9 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	seq_printf(s, "gem   %llu non-idle frames, BIP errors %llu bits in %llu frames\n",
 		   c.gem_frames, c.bip_errors, bip_blocks);
 	seq_printf(s, "rei   every %u ms, %u sent\n", rei_ms, rei_sent);
+	seq_printf(s, "power level mode %u, asked %u; %u of %u serial-number requests answered at it in O3\n",
+		   power_set, power_mode, sn_answered,
+		   RTL9602C_GPON_SN_REQUEST_THRESHOLD);
 	seq_printf(s, "aes   key %u%s, switch at superframe %u (register %08x), %u Port-IDs encrypted\n",
 		   key_index,
 		   rtl9602c_pon_r(p, RTL9602C_GPON_AES_KEY_WORD) &

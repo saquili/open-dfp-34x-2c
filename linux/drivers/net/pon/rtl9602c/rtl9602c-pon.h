@@ -220,9 +220,19 @@ struct rtl9602c_pon {
 	/**
 	 * @gpon_power_mode: the transmit power level mode the ONU is to send
 	 * at, 0 normal to 2 (ITU-T G.984.2 clause 8.3.2); the optics follow it
-	 * in @gpon_power_work, and Serial_Number_ONU declares it
+	 * in @gpon_power_work
 	 */
 	u8 gpon_power_mode;
+	/**
+	 * @gpon_power_set: the mode the optics are at, as they last said; the
+	 * mode Serial_Number_ONU declares and the PON class is told
+	 */
+	u8 gpon_power_set;
+	/**
+	 * @gpon_sn_answered: the serial-number requests answered in O3 at the
+	 * present level, towards RTL9602C_GPON_SN_REQUEST_THRESHOLD
+	 */
+	u32 gpon_sn_answered;
 	/**
 	 * @gpon_power_work: has the optics set @gpon_power_mode, and takes what
 	 * they set (rtl9602c_gpon_power_applied())
@@ -446,6 +456,9 @@ unsigned int rtl9602c_gpon_boh_bytes_of(const u8 *ovh, u8 type3);
 u8 rtl9602c_gpon_boh_len_of(const u8 *ovh, u8 type3);
 void rtl9602c_gpon_eqd_split(u32 eqd, u32 *frames, u32 *bits);
 u32 rtl9602c_gpon_tod_delta_ns(u32 bits);
+u8 rtl9602c_gpon_power_mode_of(const u8 *ovh);
+u8 rtl9602c_gpon_power_cpl(u8 mode, u8 ind);
+bool rtl9602c_gpon_power_sn_step(u32 *answered, u8 *mode);
 const char *rtl9602c_ploam_ds_name(u8 id);
 const char *rtl9602c_ploam_us_name(u8 id);
 void rtl9602c_gem_rate_units(u64 cir, u64 pir, bool limited, u32 *cir_u,

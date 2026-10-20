@@ -599,6 +599,13 @@ enum {
 #define RTL9602C_GPON_POWER_MODE_MAX		2
 
 /*
+ * The ONU's own power levelling (ITU-T G.984.3 clause 10.5.1): after this many
+ * serial-number requests answered in O3 without an Assign_ONU-ID, the
+ * recommended SN_Request_Threshold, the ONU takes the next level mode.
+ */
+#define RTL9602C_GPON_SN_REQUEST_THRESHOLD	10
+
+/*
  * Dying_Gasp (ITU-T G.984.3 clause 9.2.4.3) is sent at least this many times,
  * each copy given this long to leave the urgent queue.
  */
@@ -665,7 +672,9 @@ enum {
 /*
  * Upstream_Overhead (ITU-T G.984.3 clause 9.2.3.1). PRE_EQD_EN, in the flags
  * octet, says that the pre-assigned delay applies; the delay is in units of
- * 32 bytes, which PRE_EQD_SHIFT turns into bits.
+ * 32 bytes, which PRE_EQD_SHIFT turns into bits. POWER_MODE, pp, is the
+ * default transmit power level mode: 0 normal, 1 and 2 3 dB and 6 dB below
+ * it, 3 reserved.
  */
 #define RTL9602C_PLOAM_OVERHEAD_GUARD_BITS		2
 #define RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS		3
@@ -677,6 +686,7 @@ enum {
 #define RTL9602C_PLOAM_OVERHEAD_EXTRA_SN_SHIFT	2
 #define RTL9602C_PLOAM_OVERHEAD_EXTRA_SN_MASK	0x3
 #define RTL9602C_PLOAM_OVERHEAD_PRE_EQD_EN		BIT(5)
+#define RTL9602C_PLOAM_OVERHEAD_POWER_MODE		GENMASK(1, 0)
 #define RTL9602C_PLOAM_OVERHEAD_PRE_EQD_HI		10
 #define RTL9602C_PLOAM_OVERHEAD_PRE_EQD_LO		11
 #define RTL9602C_PLOAM_OVERHEAD_PRE_EQD_SHIFT	8

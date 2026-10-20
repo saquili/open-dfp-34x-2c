@@ -4,12 +4,13 @@
  * register, apart so that they can be tested (rtl9602c-pon-test.c, which this
  * file includes with CONFIG_PON_RTL9602C_KUNIT_TEST): the parsing of the
  * serial number and the password, the length of a burst's overhead, the
- * split of the equalization delay, the units of a queue's rates, and the names
- * of the PLOAM messages.
+ * split of the equalization delay, the transmit power level modes, the units
+ * of a queue's rates, and the names of the PLOAM messages.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
 
+#include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/compiler.h>
 #include <linux/errno.h>
@@ -132,6 +133,68 @@ void rtl9602c_gpon_eqd_split(u32 eqd, u32 *frames, u32 *bits)
 {
 	*frames = eqd / RTL9602C_GPON_EQD_FRAME_BITS;
 	*bits = eqd % RTL9602C_GPON_EQD_FRAME_BITS;
+}
+
+/**
+ * rtl9602c_gpon_power_mode_of() - the default transmit power level mode
+ * @ovh: an Upstream_Overhead message's octets
+ *
+ * The mode the ONU starts from in O3 (ITU-T G.984.3 clause 9.2.3.1 and clause
+ * 10.5.1): pp of the flags octet, 0 the normal level and 1 and 2 3 dB and
+ * 6 dB below it. '11' is reserved and gives mode 0.
+ *
+ * Return: the mode, 0 to RTL9602C_GPON_POWER_MODE_MAX.
+ */
+u8 rtl9602c_gpon_power_mode_of(const u8 *ovh)
+{
+	u8 mode = FIELD_GET(RTL9602C_PLOAM_OVERHEAD_POWER_MODE,
+			    ovh[RTL9602C_PLOAM_OVERHEAD_FLAGS]);
+
+	return mode > RTL9602C_GPON_POWER_MODE_MAX ? 0 : mode;
+}
+
+/**
+ * rtl9602c_gpon_power_cpl() - the mode Change_Power_Level asks for
+ * @mode: the transmit power level mode the ONU is at
+ * @ind: octet 3 of the message
+ *
+ * ITU-T G.984.3 clause 9.2.3.16: '10' increases the power, one mode down, and
+ * '01' decreases it, one mode up; '00' and '11' ask for nothing, and neither
+ * does a step past mode 0 or RTL9602C_GPON_POWER_MODE_MAX.
+ *
+ * Return: the mode to set, @mode when nothing changes.
+ */
+u8 rtl9602c_gpon_power_cpl(u8 mode, u8 ind)
+{
+	ind &= RTL9602C_PLOAM_CPL_IND_MASK;
+	if (ind == RTL9602C_PLOAM_CPL_IND_INCREASE && mode)
+		return mode - 1;
+	if (ind == RTL9602C_PLOAM_CPL_IND_DECREASE &&
+	    mode < RTL9602C_GPON_POWER_MODE_MAX)
+		return mode + 1;
+	return mode;
+}
+
+/**
+ * rtl9602c_gpon_power_sn_step() - the ONU's own power levelling
+ * @answered: the serial-number requests answered in O3 at the present level
+ * @mode: the transmit power level mode the ONU is at
+ *
+ * ITU-T G.984.3 clause 10.5.1: once the ONU has answered
+ * RTL9602C_GPON_SN_REQUEST_THRESHOLD serial-number requests without an
+ * Assign_ONU-ID, it takes the next mode, modulo 3 (0, 1, 2, 0, ...), and
+ * counts again from none. Requests counted beyond the threshold were answered
+ * at the old level and do not count towards the next step.
+ *
+ * Return: true when @mode changed, with @answered back at 0.
+ */
+bool rtl9602c_gpon_power_sn_step(u32 *answered, u8 *mode)
+{
+	if (*answered < RTL9602C_GPON_SN_REQUEST_THRESHOLD)
+		return false;
+	*answered = 0;
+	*mode = (*mode + 1) % (RTL9602C_GPON_POWER_MODE_MAX + 1);
+	return true;
 }
 
 /**

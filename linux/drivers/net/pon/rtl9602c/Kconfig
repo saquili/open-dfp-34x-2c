@@ -43,7 +43,7 @@ config PON_RTL9602C_KUNIT_TEST
 	  KUnit tests of the calculations of the driver that touch no
 	  register: the parsing of the serial number and the password, the
 	  length of a burst's overhead, the split of the equalization delay,
-	  the units of a queue's rates and the numbering of T-CONTs and their
-	  queues.
+	  the transmit power level modes, the units of a queue's rates and the
+	  numbering of T-CONTs and their queues.
 
 	  If unsure, say N.

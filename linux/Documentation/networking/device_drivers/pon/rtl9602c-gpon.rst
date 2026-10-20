@@ -70,9 +70,11 @@ of each step.
    templates armed and the GPON interrupt source enabled, and the ONU moves on
    to O2 once LOS and LOF have cleared.
 2. The OLT broadcasts Upstream_Overhead. The driver programs the burst overhead
-   and the pre-assigned delay from it, releases TX_DISABLE and moves to O3. The
-   MAC answers each discovery grant, an allocation to Alloc-ID 254 with the
-   PLOAMu flag, with the Serial_Number_ONU template.
+   and the pre-assigned delay from it, asks the optics for the transmit power
+   level it names, releases TX_DISABLE and moves to O3. The MAC answers each
+   discovery grant, an allocation to Alloc-ID 254 with the PLOAMu flag, with
+   the Serial_Number_ONU template. After every ten answers with no ONU-ID the
+   ONU takes the next power level itself.
 3. The OLT sends Assign_ONU-ID carrying the ONU's serial number. The driver
    writes the ONU-ID, binds the default Alloc-ID, which equals the ONU-ID, and
    moves to O4. The OLT then sends the new ONU-ID a ranging request, which the
@@ -118,8 +120,9 @@ the driver's use of them is described with the state machine.
    * - Upstream_Overhead, broadcast
      - O2
      - O3
-     - Programs the burst overhead and the pre-assigned delay, arms the
-       Serial_Number_ONU template again, releases TX_DISABLE and arms TO1.
+     - Programs the burst overhead and the pre-assigned delay, asks for the
+       default transmit power level mode it names, arms the Serial_Number_ONU
+       template again, releases TX_DISABLE and arms TO1.
    * - Assign_ONU-ID carrying the ONU's serial number
      - O3
      - O4
@@ -160,7 +163,7 @@ the driver's use of them is described with the state machine.
      - any but O7
      - O7
      - Asserts TX_DISABLE and gives back the ONU-ID, the Alloc-IDs and the
-       OMCC.
+       OMCC; asks for transmit power level mode 0, as on entering O1 and O2.
    * - Disable_Serial_Number enabling this ONU's serial number, or every ONU
      - O7
      - O2
@@ -393,6 +396,19 @@ name the others.
    * - ``<GPON> burst length: p B pre-ranging, r after; overhead x/y``
      - info
      - Extended_Burst_Length was acted on in O3.
+   * - ``<GPON> 10 serial-number requests answered and no ONU-ID: transmit
+       power level mode m -> n``
+     - info, rate-limited
+     - The ONU's own levelling took the next mode in O3.
+   * - ``<GPON> Change_Power_Level up: transmit power level mode m -> n``, or
+       ``down``, or ``neither``
+     - info
+     - Change_Power_Level was acted on in O4 or O5.
+   * - ``<GPON> transmit power level mode n not set (err); the ONU stays at
+       mode m``
+     - warning, rate-limited
+     - The optics did not set the mode asked for; ``-61`` before O4 when they
+       have not measured it since probe.
    * - ``<GPON> ONU-ID N assigned; written T us after the interrupt``
      - info
      - Assign_ONU-ID was acted on in O3, its writes done T us after the
@@ -1172,7 +1188,10 @@ and then asks for the transition. The transition
    registers and unbind the default Alloc-ID, the Alloc-IDs in T-CONTs 0 to 15
    and the OMCC. Purpose: deactivation and an emergency stop discard them. (M)
 7. Drive TX_DISABLE: released in O3 to O5, asserted in every other state. (M)
-8. Log the transition, and on leaving O5 how long the ONU was in it. Purpose: a
+8. Below O3 and in O7, ask for transmit power level mode 0 if the ONU is at a
+   lower mode or has asked for one. Purpose: the ONU sends nothing there, and
+   a lower level outlasts no session (see "Transmit power level"). (I)
+9. Log the transition, and on leaving O5 how long the ONU was in it. Purpose: a
    console line costs about 9 ms, so the log comes after the writes that have to
    meet the 750 us. (M)
 
@@ -1337,6 +1356,142 @@ The report to the PON class follows the log line
        from the interrupt every activation reached O5. ITU-T G.984.3 clause 9.2
        and clause 10.2.5.2.
 
+Transmit power level
+--------------------
+
+The ONU's transmitter has three power levels, the level modes of ITU-T G.984.2:
+0, the normal level, and 1 and 2, 3 dB and 6 dB below it. The driver keeps two
+modes: the one it asks the optics for, ``gpon_power_mode``, and the one the
+optics last said they are at, ``gpon_power_set``, which Serial_Number_ONU
+declares and the PON class reports. ``rtl9602c_gpon_power_work()`` has the
+optics set the mode asked for, outside ``gpon_lock``, and
+``rtl9602c_gpon_power_applied()`` takes what they set. In O4 and O5, where the
+ONU sends often, the optics measure the power as they set it; in the other
+states the ONU sends at most its answers to serial-number requests, and the
+optics set only what they can without measuring (see "Transmit power
+levelling" in Documentation/networking/device_drivers/pon/gn25l95.rst).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 12 48
+
+   * - Event
+     - State
+     - Mode asked for
+   * - Bring-up
+     - O1
+     - 0; the optics' preparation puts it back too.
+   * - Upstream_Overhead
+     - O2, then O3
+     - The default mode of its flags octet, pp; the count of answered
+       serial-number requests starts from none.
+   * - ``RTL9602C_GPON_SN_REQUEST_THRESHOLD`` (10) serial-number requests
+       answered at the present level and no Assign_ONU-ID
+     - O3
+     - The next mode, modulo 3: 0, 1, 2, 0 (``rtl9602c_gpon_power_sn()``,
+       from the worker); the count starts again from none once the optics
+       have answered.
+   * - Change_Power_Level
+     - O4, O5
+     - One mode up or down, within 0 to 2 (see "PLOAM receive").
+   * - Entering O1, O2 or O7
+     - O1, O2, O7
+     - 0, when the ONU is at a lower mode or has asked for one.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Upstream_Overhead carries the default ONU transmit power level mode in
+       bits 1:0 of its flags octet, pp (``RTL9602C_PLOAM_OVERHEAD_POWER_MODE``):
+       ``00`` mode 0, normal; ``01`` mode 1, normal less 3 dB; ``10`` mode 2,
+       normal less 6 dB; ``11`` reserved. Mode 0 is the highest, the reverse of
+       the coding of Serial_Number_ONU. The ONU takes it on Upstream_Overhead
+       in O2, with the delimiter and the pre-assigned delay.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.1 (note 4), clause 10.1.2 and clause 10.2.2
+       b).
+   * - The driver asks for the mode pp names, and for mode 0 when pp is the
+       reserved ``11`` (``rtl9602c_gpon_power_mode_of()``). The test OLT names
+       mode 0 (flags ``0x20``).
+     - T
+     - ``rtl9602c_test_power_mode_of`` (KUnit); the ONU reaches O5 on the test
+       OLT at mode 0. A mode other than 0 has not been run on the board.
+   * - The ONU-activated power levelling: in O3 the ONU counts the
+       serial-number requests it answers without receiving Assign_ONU-ID.
+       Initially it uses the mode Upstream_Overhead named; once the count meets
+       or exceeds SN_Request_Threshold, recommended 10, it increments its
+       operating power level modulo 3 (..., 0, 1, 2, 0, 1, 2, ...) and goes on
+       answering, and it repeats this until it receives Assign_ONU-ID or a
+       disable message. The OLT-activated power levelling is
+       Change_Power_Level, in O4 and O5.
+     - P
+     - ITU-T G.984.3 clause 10.5.1, clause 10.5.2, clause 10.2.1,
+       clause 10.2.5.3 a) and Table 10-1.
+   * - The driver adds the serial-number requests of
+       ``RTL9602C_GPON_CNT_ACTIVATION_SN`` that come in O3 into
+       ``gpon_sn_answered`` (``rtl9602c_gpon_cntr_sync()``); the worker, every
+       50 ms, asks for the next mode once the count reaches
+       ``RTL9602C_GPON_SN_REQUEST_THRESHOLD`` and sets the count to 0
+       (``rtl9602c_gpon_power_sn_step()``). Requests counted beyond the
+       threshold, and those answered before the optics have answered for the
+       new mode, do not count towards the next step. Upstream_Overhead starts
+       the count from none; leaving O3 ends the levelling, for O4 on
+       Assign_ONU-ID and for O2, O1 or O7 on TO1, a loss of the downstream or
+       Disable_Serial_Number.
+     - T
+     - ``rtl9602c_test_power_sn_step`` (KUnit). Not run on the board: the test
+       OLT assigns the ONU-ID at the first answered request.
+   * - The requests the MAC counts in O3 are those it answered with the
+       Serial_Number_ONU template; a request counted and left unanswered would
+       make the ONU step early.
+     - I
+     - The ``ploam-auto`` count of the ``uscntr`` view, the PLOAMs sent from
+       the templates, rising by as many as ``sn-requests`` in O3.
+   * - "Increments its operating power level modulo 3" is read as counting the
+       mode numbers of Upstream_Overhead, 0 to 1 to 2 and back to 0: normal,
+       3 dB down, 6 dB down, normal. Clause 10.5.1 starts from
+       Upstream_Overhead's mode and does not say which coding it counts in; in
+       the coding of Serial_Number_ONU the cycle from the normal level would
+       run high, low, medium.
+     - I
+     - An OLT that relies on the ONU's own levelling, or a later edition of the
+       clause.
+   * - The ONU answers serial-number requests at the mode the optics are at,
+       and Serial_Number_ONU's TT declares that mode, not the one asked for:
+       before the optics have answered, and when they could not set a mode, the
+       ONU stays at the mode they are at and says so.
+     - P
+     - ITU-T G.984.3 clause 9.2.4.1: TT is the transmit power level mode used
+       by the ONU.
+   * - Before O4 the optics set a lower mode only at a set point kept from a
+       measurement since probe, which only Change_Power_Level in O4 or O5
+       makes; until then a default mode of 1 or 2, or a step, leaves the ONU at
+       mode 0 with ``transmit power level mode <n> not set (-61); the ONU stays
+       at mode 0``.
+     - I
+     - Not run on the board: an injected Upstream_Overhead naming mode 1 in O2,
+       before and after an injected Change_Power_Level has measured mode 1 in
+       O5.
+   * - Below O3 and in O7 the ONU sends nothing, so the level does not matter
+       there; the driver asks for mode 0 on entering O1, O2 or O7, so that a
+       lower level is kept only while the ONU sends, from O3 to O6.
+     - P, I
+     - P: ITU-T G.984.3 clause 10.2.2 a), b) and g). I: not run on the board;
+       the ``power`` line of the ``gpon`` view after an injected
+       Disable_Serial_Number at mode 1 would show it.
+   * - TO1 bounds O3 and O4 at 10 s, and Upstream_Overhead starts each O3 at
+       the default mode, so a step needs ten answered requests within one pass
+       through O3: an OLT that asks less often than once a second never makes
+       the ONU step. The test OLT's requests counted 8 in 8 s once O3 was
+       written (see "The activation state machine").
+     - P, M
+     - P: ITU-T G.984.3 clause 10.2.1. M: the ``sn-requests`` count of the
+       ``gpon`` view.
+
 PLOAM receive
 =============
 
@@ -1388,7 +1543,8 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
    * - Upstream_Overhead (1)
      - All ONUs
      - O2
-     - Burst overhead and pre-assigned delay; O3.
+     - Burst overhead, pre-assigned delay and default transmit power level
+       mode; O3.
    * - Extended_Burst_Length (20)
      - All ONUs
      - O3
@@ -1461,13 +1617,14 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
      - The ONU-ID or all ONUs
      - O4, O5
      - One transmit power level mode up ('10') or down ('01'), within modes 0
-       to 2, which the optics then set (see "Transmit power levelling" in
-       Documentation/networking/device_drivers/pon/gn25l95.rst); '00',
-       '11' and a step past either end change nothing. Each is logged; none is
-       acknowledged, as G.984.3 asks for no acknowledgment (clause 9.2.3.16
-       and clause 10.5.2). Injected in O5, down twice and up twice, they took
-       Serial_Number_ONU's flags octet through ``05``, ``04``, ``05`` and
-       ``06`` with the power.
+       to 2 (``rtl9602c_gpon_power_cpl()``), which the optics then set,
+       measuring it (see "Transmit power level", and "Transmit power
+       levelling" in Documentation/networking/device_drivers/pon/gn25l95.rst);
+       '00', '11' and a step past either end change nothing. Each is logged;
+       none is acknowledged, as G.984.3 asks for no acknowledgment
+       (clause 9.2.3.16 and clause 10.5.2). Injected in O5, down twice and up
+       twice, they took Serial_Number_ONU's flags octet through ``05``,
+       ``04``, ``05`` and ``06`` with the power.
    * - Sleep_Allow (24)
      - The ONU-ID or all ONUs
      - None
@@ -1599,12 +1756,10 @@ count from 0, so the offset is the octet number less one):
        equalization delay to the pre-assigned delay when e is set and to 0
        otherwise, so that a zero delay named by the OLT is used as zero (see
        "Upstream timing"); and keeps the message for the length computation and
-       zeroes both stored type 3 lengths. Every activation starts at transmit
-       power level mode 0: the optics go back to it if an earlier session left
-       them lower, and the default mode the flags octet names is not taken,
-       since the optics measure the power only in bursts, which come often only
-       from O4 on. The Serial_Number_ONU template is then armed again and the
-       state becomes O3. Every field of the message is logged.
+       zeroes both stored type 3 lengths. It asks for the default transmit
+       power level mode the flags octet names (see "Transmit power level"). The
+       Serial_Number_ONU template is then armed again and the state becomes
+       O3. Every field of the message is logged.
      - T
      - The ONU reaches O5 on an OLT; the test OLT's flags octet is ``0x20``: e
        set with a zero delay.
@@ -1869,10 +2024,11 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
        GEM transport supported (``RTL9602C_PLOAM_SN_ONU_GEM``, bit 2), and TT,
        the transmit power level the ONU sends at
        (``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL``, bits 1:0):
-       ``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH`` (2, high) less the level
-       mode, so 2 at mode 0. It is armed at bring-up, on Upstream_Overhead, on
-       Assign_ONU-ID, when a serial number is set and when the optics have set
-       a level, and not at all while no serial number is set.
+       ``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH`` (2, high) less the mode the
+       optics last said they are at, so 2 at mode 0. It is armed at bring-up,
+       on Upstream_Overhead, on Assign_ONU-ID, when a serial number is set and
+       whenever the optics have answered a request for a level, and not at all
+       while no serial number is set.
      - P
      - ITU-T G.984.3 clause 9.2.4.1; the ONU reaches O5 on an OLT.
    * - The random delay of the serial-number response (0 to 48 us, new for each
@@ -3162,10 +3318,11 @@ serial number that the ONU presents to the OLT is the devlink parameter
        driver's numbers 1 to 5 equal the class's O1 to O5), the ONU-ID unless it
        is 255, the OMCC Port-ID when bound, the Alloc-IDs of T-CONTs 0 to 15 in
        use, the totals of the counters, the transmit power level (high less the
-       level mode, as Serial_Number_ONU carries it), the time since the state
-       was entered (from ``jiffies_64``, so that a session of years does not
-       wrap it), in O5 the equalization delay that Ranging_Time set, LOS, LOF
-       and LOM from ``RTL9602C_GTC_DS_IRQ_STAT``, and the driver's PEE alarm.
+       mode the optics are at, as Serial_Number_ONU carries it), the time since
+       the state was entered (from ``jiffies_64``, so that a session of years
+       does not wrap it), in O5 the equalization delay that Ranging_Time set,
+       LOS, LOF and LOM from ``RTL9602C_GTC_DS_IRQ_STAT``, and the driver's PEE
+       alarm.
        With the PON down there is no state, no level, no alarm and no counter:
        an absent value, not a zero.
      - M
@@ -3253,9 +3410,11 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        maps accepted, CRC errors, overflows, non-idle GEM frames, the BIP
        errors in bits and the frames they were in); ``rei``, the BER interval
        in ms (0 while none is set) and the REI messages sent since the ONU
-       entered O5; ``aes``, the index of the last key sent (0 for none),
-       ``waiting`` while the MAC has not switched to the next key, the
-       superframe of the last Key_Switching_Time with
+       entered O5; ``power``, the transmit power level mode the optics are at,
+       the one asked for, and the serial-number requests answered at it in O3
+       of the ten that make the ONU step; ``aes``, the index of the last key
+       sent (0 for none), ``waiting`` while the MAC has not switched to the
+       next key, the superframe of the last Key_Switching_Time with
        ``RTL9602C_GPON_AES_SWITCH_TIME``, and the Port-IDs encrypted; last
        ``tcont``, each GEM T-CONT as ``n=B/M``, ``B`` the Alloc-ID it holds and
        ``M`` the one management mapped it to, ``-`` for none. No key is shown.
@@ -3347,11 +3506,16 @@ Known limitations
   detection threshold and its counters.
 - The driver raises no signal-fail or signal-degrade alarm: it reports the BIP
   errors in bits, and the OMCI daemon judges both from them.
-- Transmit power levelling follows Change_Power_Level in O4 and O5 only: the
-  default level mode of Upstream_Overhead and the ONU's own levelling after
-  unanswered serial-number requests (G.984.3 clause 10.5.1) are not done, since
-  the optics measure the power only in bursts. The test OLT sends no
-  Change_Power_Level, so the levels have been set only by injected messages.
+- Before O4 the optics set a lower transmit power level only at a set point
+  kept from a measurement since probe, and they measure a level only when
+  Change_Power_Level asks for it in O4 or O5: until then the default mode of
+  Upstream_Overhead and the ONU's own steps after unanswered serial-number
+  requests (G.984.3 clause 10.5.1) leave the ONU at mode 0, and
+  Serial_Number_ONU says so. The test OLT names mode 0, sends no
+  Change_Power_Level and assigns the ONU-ID at the first answered request, so
+  only injected messages have set a lower level, and the ONU's own steps have
+  run only in KUnit. With TO1 at 10 s, an OLT that asks for serial numbers
+  less often than once a second never makes the ONU step.
 - A laser that stays on by itself is not detected: the MAC's check of the
   optics' signal detect against the burst reports nothing on this board, and
   the module's own indication of light also rises in normal operation, for up
@@ -3512,6 +3676,19 @@ Assumptions the driver depends on
        kernel log, and the OLT's view of the ONU's bursts.
    * - That no encryption is needed ("FEC and encryption", "Known limitations").
      - An OLT that encrypts a Port-ID.
+   * - That the serial-number requests the MAC counts in O3 are those it
+       answered ("Transmit power level").
+     - The ``ploam-auto`` count of the ``uscntr`` view rising by as many as
+       ``sn-requests`` while the ONU answers in O3 without an ONU-ID.
+   * - That the ONU's own levelling counts the modes of Upstream_Overhead, 0,
+       1, 2, 0 ("Transmit power level").
+     - An OLT that relies on the ONU's own levelling, or a later edition of
+       G.984.3 clause 10.5.1.
+   * - That a lower level set before O4 from a kept set point reaches the
+       mode's power ("Transmit power level", and
+       Documentation/networking/device_drivers/pon/gn25l95.rst).
+     - The transmitted power in O5 after an injected Upstream_Overhead naming
+       a mode measured earlier, against that measurement.
 
 Questions the code does not depend on
 -------------------------------------

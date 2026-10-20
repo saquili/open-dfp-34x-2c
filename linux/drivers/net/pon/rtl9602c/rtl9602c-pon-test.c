@@ -3,8 +3,9 @@
  * KUnit tests of the calculations in rtl9602c-pon-calc.c, which includes this
  * file when CONFIG_PON_RTL9602C_KUNIT_TEST is set: the parsing of the serial
  * number and the password, the length of a burst's overhead, the split of the
- * equalization delay, the units of a queue's rates, the numbering of T-CONTs
- * and their queues, and the names of the PLOAM messages.
+ * equalization delay, the transmit power level modes, the units of a queue's
+ * rates, the numbering of T-CONTs and their queues, and the names of the PLOAM
+ * messages.
  */
 
 #include <kunit/test.h>
@@ -190,6 +191,78 @@ static void rtl9602c_test_boh_len(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_len_of(ovh, 255), RTL9602C_BURST_CFG_LEN_MAX);
 }
 
+static void rtl9602c_test_power_mode_of(struct kunit *test)
+{
+	u8 ovh[RTL9602C_GPON_PLOAM_BYTES] = {};
+
+	/* pp, bits 1:0 of the flags octet: modes 0, 1 and 2. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_mode_of(ovh), 0);
+	ovh[RTL9602C_PLOAM_OVERHEAD_FLAGS] = 0x01;
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_mode_of(ovh), 1);
+	ovh[RTL9602C_PLOAM_OVERHEAD_FLAGS] = 0x02;
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_mode_of(ovh), 2);
+
+	/* '11' is reserved: mode 0. */
+	ovh[RTL9602C_PLOAM_OVERHEAD_FLAGS] = 0x03;
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_mode_of(ovh), 0);
+
+	/* The other flags do not count: e set, as the test OLT sends it. */
+	ovh[RTL9602C_PLOAM_OVERHEAD_FLAGS] = 0x20;
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_mode_of(ovh), 0);
+	ovh[RTL9602C_PLOAM_OVERHEAD_FLAGS] = 0xfe;
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_mode_of(ovh), 2);
+}
+
+static void rtl9602c_test_power_cpl(struct kunit *test)
+{
+	const u8 up = RTL9602C_PLOAM_CPL_IND_INCREASE;
+	const u8 down = RTL9602C_PLOAM_CPL_IND_DECREASE;
+
+	/* More power is a lower mode, less power a higher one. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(1, up), 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(2, up), 1);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(0, down), 1);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(1, down), 2);
+
+	/* No step past either end. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(0, up), 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(2, down), 2);
+
+	/* '00' and '11' ask for nothing; the bits above ID do not count. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(1, 0), 1);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(1, 3), 1);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_power_cpl(1, 0xfc | down), 2);
+}
+
+static void rtl9602c_test_power_sn_step(struct kunit *test)
+{
+	u32 answered;
+	u8 mode = 0;
+	unsigned int i;
+
+	/* Below the threshold nothing changes. */
+	answered = RTL9602C_GPON_SN_REQUEST_THRESHOLD - 1;
+	KUNIT_EXPECT_FALSE(test, rtl9602c_gpon_power_sn_step(&answered, &mode));
+	KUNIT_EXPECT_EQ(test, mode, 0);
+	KUNIT_EXPECT_EQ(test, answered, RTL9602C_GPON_SN_REQUEST_THRESHOLD - 1);
+
+	/* At the threshold the next mode, modulo 3, counted again from none. */
+	for (i = 1; i <= 4; i++) {
+		answered = RTL9602C_GPON_SN_REQUEST_THRESHOLD;
+		KUNIT_EXPECT_TRUE(test, rtl9602c_gpon_power_sn_step(&answered, &mode));
+		KUNIT_EXPECT_EQ(test, mode, i % 3);
+		KUNIT_EXPECT_EQ(test, answered, 0);
+	}
+
+	/* Requests beyond the threshold make one step, and none carries over. */
+	mode = 2;
+	answered = 3 * RTL9602C_GPON_SN_REQUEST_THRESHOLD + 5;
+	KUNIT_EXPECT_TRUE(test, rtl9602c_gpon_power_sn_step(&answered, &mode));
+	KUNIT_EXPECT_EQ(test, mode, 0);
+	KUNIT_EXPECT_EQ(test, answered, 0);
+	KUNIT_EXPECT_FALSE(test, rtl9602c_gpon_power_sn_step(&answered, &mode));
+}
+
 static void rtl9602c_test_tod_delta(struct kunit *test)
 {
 	/* 200 us of round trip, 248832 bits: 0.500085 of it. */
@@ -342,6 +415,9 @@ static struct kunit_case rtl9602c_pon_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_boh_bytes),
 	KUNIT_CASE(rtl9602c_test_boh_len),
 	KUNIT_CASE(rtl9602c_test_eqd_split),
+	KUNIT_CASE(rtl9602c_test_power_mode_of),
+	KUNIT_CASE(rtl9602c_test_power_cpl),
+	KUNIT_CASE(rtl9602c_test_power_sn_step),
 	KUNIT_CASE(rtl9602c_test_tod_delta),
 	KUNIT_CASE(rtl9602c_test_rate_units),
 	KUNIT_CASE(rtl9602c_test_tcont_numbers),

@@ -46,12 +46,13 @@ and the MAC driver takes them by the firmware node its own firmware names
 (``devm_pon_optics_get()``), as a MAC takes an SFP cage. Through them the MAC
 asserts and releases the transmitter's disable input as the activation state
 requires, prepares the transmitter before an activation, and sets the transmit
-power level the OLT asks for (ITU-T G.984.2 clause 8.3.2). It says with each
-level whether the transmitter sends often enough for its power to be measured:
-before ranging the ONU sends only its answers to the OLT's serial-number
-requests, and optics that can set a level only by measuring it leave it unset
-there. A device link makes the driver core unbind the MAC before the optics go.
-A MAC whose firmware names no optics runs without them.
+power level (ITU-T G.984.2 clause 8.3.2) that the OLT asks for or that the ONU
+takes itself before it is ranged. It says with each level whether the
+transmitter sends often enough for its power to be measured: before ranging the
+ONU sends only its answers to the OLT's serial-number requests, and optics that
+can set a level only by measuring it leave it unset there. A device link makes
+the driver core unbind the MAC before the optics go. A MAC whose firmware names
+no optics runs without them.
 
 The class has no device tree node and no compatible string. It is created by
 the MAC driver's own registrations, and the device tree describes only the
@@ -1669,11 +1670,13 @@ claim a MAC in reset cannot make. The counters are the exception: inside the
        starts and builds its T-CONT entities from it; a changed count would
        show in its MIB upload.
    * - ``power-level`` is sent while the MAC transmits at one of the levels
-       the OLT sets with Change_Power_Level, coded as the power level of
-       Serial_Number_ONU: 2 high, 1 medium, 0 low (ITU-T G.984.3
-       clause 9.2.4.1). A daemon judges the transmitted power against limits
-       that follow the level, as the transmit power alarms of the ANI-G
-       (managed entity 263) need; each level is about 3 dB from the next.
+       that Upstream_Overhead, the ONU's own levelling before ranging and
+       Change_Power_Level set, coded as the power level of Serial_Number_ONU:
+       2 high, 1 medium, 0 low (ITU-T G.984.3 clause 9.2.4.1); it is the level
+       the optics are at, not the one asked for. A daemon judges the
+       transmitted power against limits that follow the level, as the transmit
+       power alarms of the ANI-G (managed entity 263) need; each level is about
+       3 dB from the next.
      - I
      - Design choice. The 3 dB is the step this driver measures (see the
        driver's page).
