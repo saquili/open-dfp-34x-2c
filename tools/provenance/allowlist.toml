@@ -318,7 +318,7 @@ This entry names it too.
 [[allow]]
 gate = "forbidden-words"
 rules = ["dev-kit"]
-paths = ["br2-external/configs/toolchain_defconfig", "tools/provenance/allowlist.toml"]
+paths = ["Makefile", "tools/provenance/allowlist.toml"]
 match = 'BR2_SDK_PREFIX'
 reason = """
 The build system's option that names the tarball of its "make sdk" target and
