@@ -1319,13 +1319,23 @@ The report to the PON class follows the log line
        takes an ONU in O7 to O2, as the OLT's enable would. The driver keeps no
        state across a restart or a rebind: user space sets the parameter
        again before the PON comes up.
-     - I
-     - Read from the code; the KUnit case ``rtl9602c_test_disable_sn`` checks
-       the decision on the message. On the board: a disable injected through
-       ``ploaminject`` in O5, then ``ip link set pon down`` and ``up``, then a
-       restart with the parameter set before ``up``; each time O7 with the
-       module's bias and transmitted power 0; then the enable injected, and O2
-       and O5 again.
+     - M
+     - Disable_Serial_Number injected through ``ploaminject``, with the ONU's
+       serial number as the OLT sends it. In O5 the parameter read false.
+       The disable: O7, the parameter true, transmitted power 0 uW and bias 0
+       mA. ``ip link set pon down`` and ``up``: ``O1 initial -> O7`` and ``the
+       OLT disabled this ONU before: it stays in O7 until the OLT enables
+       it``, power 0 and ``sn-requests`` 0 over 6 s. The enable for this
+       serial number: O5 2.2 s later, the parameter false, 1687 uW; the
+       enable for every ONU (octet 3 ``0x0f``) likewise. True set in O5:
+       refused, ``Device or resource busy``. False set in O7: ``enabled by
+       hand, not by the OLT``, and O5. With the PON down, true set, then
+       ``up``: ``kept disabled: the PON comes up in O7``, O7, power 0 and no
+       serial-number request; false set, and O5. The KUnit case
+       ``rtl9602c_test_disable_sn`` checks the decision on the message. A
+       restart with user space setting the parameter has not been run; the
+       driver's part of it is the bring-up with the parameter set while the
+       PON is down.
    * - Assign_ONU-ID carrying the ONU's own serial number, acted on only in O3,
        takes it to O4.
      - P
@@ -3646,7 +3656,8 @@ Known limitations
 - A disabled ONU stays in O7 across a restart only through user space: the
   driver keeps the disable across a take-down and a bring-up of the PON, and
   user space has to keep it across a restart and set ``gpon_disabled`` again
-  before the PON comes up. The bring-up in O7 has not been run on the board.
+  before the PON comes up. The bring-up in O7 with the parameter set while the
+  PON was down has been run on the board; a restart that sets it has not.
 - Dying_Gasp is sent before an orderly restart, and on the test OLT only its
   first copy leaves (see "PLOAM transmit"). What makes the MAC send the
   Dying_Gasp template it holds armed, and whether the supply-loss interrupt
@@ -3737,11 +3748,6 @@ Assumptions the driver depends on
    * - That the PON port is dormant below O5 and up in O5 ("The activation state
        machine").
      - ``ip link show pon`` in each state.
-   * - That a bring-up straight into O7 keeps the laser dark and still acts on
-       the Disable_Serial_Number that enables the ONU ("The activation state
-       machine").
-     - ``gpon_disabled`` set before ``ip link set pon up``: bias and transmitted
-       power 0 in O7, then an injected enable and the ONU in O5 again.
    * - That a write into a full upstream PLOAM queue overwrites its tail ("PLOAM
        transmit").
      - Filling a queue and reading its slot.

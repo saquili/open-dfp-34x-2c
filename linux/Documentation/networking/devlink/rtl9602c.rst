@@ -244,11 +244,12 @@ false, which user space that keeps a disable across a restart sets again.
    * - The driver registers 30 parameters, all of mode ``runtime``, at setup.
      - M, I
      - M: ``devlink dev param show platform/1b000000.switch`` listed the first
-       24 after boot, and every measurement below sets or reads one of them.
-       I: ``l3_ttl_decrement``, ``sfp_lane`` and ``sfp_lane_now``, added
-       since, are read from the code until they are listed after a boot, and
-       so is ``gpon_disabled``; ``ptp_transparent_clock`` and
-       ``ptp_path_delay_ns`` were listed.
+       24 after boot, and every measurement below sets or reads one of them;
+       ``ptp_transparent_clock`` and ``ptp_path_delay_ns`` were listed, and
+       ``gpon_disabled`` was read and set on the board (its row under "GPON
+       serial number"). I: ``l3_ttl_decrement``, ``sfp_lane`` and
+       ``sfp_lane_now``, added since, are read from the code until they are
+       listed after a boot.
    * - Every range check is made in the set callback, and a value too wide for
        its field is refused with ``-ERANGE``, not truncated.
      - M
@@ -991,12 +992,17 @@ To set the serial number, read it back and bring the interface up::
        DIS.
    * - ``gpon_disabled`` follows Disable_Serial_Number, ends a bring-up in O7
        when true, and takes the sets and refusals of its row.
-     - I
-     - Read from the code; not run on the board. A disable injected through
-       ``ploaminject`` and the parameter read true; ``ip link set pon down``
-       and ``up``, O7 again; a restart, the parameter set true before ``up``
-       and O7; true refused with ``-EBUSY`` while up; false while up and the
-       ONU in O2.
+     - M
+     - On the board, with Disable_Serial_Number injected through
+       ``ploaminject``: false in O5; true after the disable, in O7, with the
+       laser dark; ``ip link set pon down`` and ``up``, O7 again and no
+       serial-number request; false after the enable, and O5. True set while
+       up was refused with "Device or resource busy", and false set in O7
+       logged ``enabled by hand, not by the OLT`` and led to O5. True set
+       while the interface was down logged ``kept disabled: the PON comes up
+       in O7``, and ``up`` ended in O7. A restart, where user space sets the
+       parameter before ``up``, has not been run (see
+       Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst).
 
 The region frame_capture
 ========================
