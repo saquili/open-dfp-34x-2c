@@ -380,7 +380,11 @@ the build finds them in the bundle and in the stylesheet's imports
 other than MIT, ISC, BSD-2-Clause, BSD-3-Clause and 0BSD, stops the build.
 ``npm run dev:mock`` runs it against a mock stick inside the dev server, and
 ``npm run dev`` against a stick (``POND_TARGET`` names it, or the proxy in
-front of it, and the dev server stops without it).
+front of it, and the dev server stops without it). ``npm run build:demo``
+writes ``web/dist-demo``, the panel with the same mock stick answering it in
+the browser, for a static host (``POND_DEMO_BASE`` is the path it is served
+from); ``.github/workflows/demo.yml`` puts it on the repository's GitHub Pages
+site. Nothing of the mock reaches ``web/dist``, the panel the stick serves.
 
 Building and testing::
 

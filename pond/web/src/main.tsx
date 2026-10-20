@@ -11,6 +11,10 @@ import { I18nProvider } from "./i18n";
 import { makeRouter } from "./router";
 import "./styles.css";
 
+/* The demo build answers /api in the browser and says so; the stick's build drops this branch. */
+const DemoNotice =
+  import.meta.env.MODE === "demo" ? (await import("./mocks/demo")).DemoNotice : null;
+
 /* A request that finds the session gone sends the reader back to the sign-in. */
 function lostSession(error: unknown) {
   if (!(error instanceof AuthError)) return;
@@ -40,6 +44,7 @@ createRoot(mount).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
+        {DemoNotice && <DemoNotice />}
         <RouterProvider router={router} />
       </I18nProvider>
     </QueryClientProvider>

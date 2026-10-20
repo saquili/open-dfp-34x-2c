@@ -189,6 +189,8 @@ const tree = root.addChildren([signIn, forcedPassword, app.addChildren(pages)]);
 export function makeRouter(queryClient: QueryClient) {
   return createRouter({
     routeTree: tree,
+    /* "/" on the stick; the demo lives below its host's path. */
+    basepath: import.meta.env.BASE_URL,
     context: { queryClient },
     defaultPreload: "intent",
     scrollRestoration: true,

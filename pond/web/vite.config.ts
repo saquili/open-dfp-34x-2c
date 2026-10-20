@@ -13,10 +13,23 @@
  * the stick without a sign-in); "vite --mode mock" answers /api from the dev server itself with
  * the mock stick of src/mocks, for work without one. The mocks run in the
  * server, not in a service worker, so they work in any browser and for any
- * client, and nothing of them reaches a build.
+ * client, and nothing of them reaches the stick's build.
+ *
+ * "vite build --mode demo" is the other build: the panel with the mock stick
+ * answering /api in the browser (src/mocks/browser.ts), for a static host.
+ * POND_DEMO_BASE is the path it is served from ("/" without it); its files are
+ * not compressed, since a static host serves them as they are, and 404.html,
+ * a copy of index.html, lets the host answer a deep link with the panel.
  */
 
-import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -49,6 +62,21 @@ function gzipOnly(): Plugin {
   };
 }
 
+/* The demo's answer to a path the static host does not have: the panel itself. */
+function spaFallback(): Plugin {
+  let outDir = "dist";
+  return {
+    name: "pond-demo-404",
+    apply: "build",
+    configResolved(c) {
+      outDir = c.build.outDir;
+    },
+    writeBundle() {
+      copyFileSync(join(outDir, "index.html"), join(outDir, "404.html"));
+    },
+  };
+}
+
 function body(req: IncomingMessage): Promise<Buffer> {
   return new Promise((done, fail) => {
     const chunks: Buffer[] = [];
@@ -67,14 +95,14 @@ function mockApi(): Plugin {
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith("/api/")) return next();
         const { handlers } = await server.ssrLoadModule("/src/mocks/handlers.ts");
-        const { getResponse } = await import("msw");
+        const { getResponse } = await server.ssrLoadModule("/src/mocks/http.ts");
         const hasBody = req.method !== "GET" && req.method !== "HEAD";
         const request = new Request(new URL(req.url, "http://stick.invalid"), {
           method: req.method,
           headers: req.headers as Record<string, string>,
           body: hasBody ? new Uint8Array(await body(req)) : undefined,
         });
-        const response = await getResponse(handlers, request);
+        const response: Response | undefined = await getResponse(handlers, request);
         if (!response) return next();
         if (response.type === "error") return req.socket.destroy();
         res.statusCode = response.status;
@@ -98,15 +126,19 @@ export default defineConfig(({ command, mode }) => {
     );
   }
 
+  const demo = mode === "demo";
+
   return {
+    base: demo ? (process.env.POND_DEMO_BASE ?? "/") : "/",
     plugins: [
       preact(),
       tailwindcss(),
       licenceNotices(),
-      gzipOnly(),
+      ...(demo ? [spaFallback()] : [gzipOnly()]),
       ...(mode === "mock" ? [mockApi()] : []),
     ],
     build: {
+      outDir: demo ? "dist-demo" : "dist",
       target: "es2022",
       assetsInlineLimit: 0,
       reportCompressedSize: true,

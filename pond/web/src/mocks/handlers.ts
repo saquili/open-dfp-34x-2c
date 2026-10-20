@@ -7,7 +7,6 @@
  * traffic that moves, and changes of settings that are kept until reload.
  */
 
-import { delay, HttpResponse, http } from "msw";
 import type {
   Identity,
   IpoeInfo,
@@ -23,6 +22,7 @@ import { MAX_MOVED, moved } from "../lib/ports";
 import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
 import { conversation } from "./conversation";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
+import { delay, HttpResponse, http } from "./http";
 import { OMCI, withServices } from "./omci";
 
 let rootSecret = "admin";
