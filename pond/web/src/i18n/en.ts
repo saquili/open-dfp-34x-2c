@@ -5,7 +5,8 @@
 
 export const en = {
   app: {
-    product: "BuchOS – GPON",
+    /* {name}: the product name, BuchOS unless the stick names another (lib/product.ts). */
+    product: "{name} – GPON",
     loading: "Loading…",
   },
   nav: {
@@ -970,6 +971,13 @@ export const en = {
     hostnameRule: "Letters, digits and hyphens (not first or last), up to 63 characters",
     hostnameUnavailable:
       "This stick cannot change its name from the panel yet (it needs a software update).",
+    product: "Product name",
+    productHint:
+      "The name of this system in the panel's title and the browser's tab; the names of the files downloaded from the stick begin with {slug}-gpon-. Empty brings back BuchOS.",
+    productRule:
+      "Up to {max} characters: letters A–Z, digits, spaces, hyphens and dots, with a letter or a digit first and last",
+    productUnavailable:
+      "This stick cannot change the product name from the panel yet (it needs a software update).",
     title: "System",
     device: "Device",
     model: "Model",

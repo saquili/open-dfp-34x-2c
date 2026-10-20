@@ -11,16 +11,22 @@ import { useForm } from "react-hook-form";
 import { useChangePassword, useSignIn } from "../api/auth";
 import { ApiError, OfflineError } from "../api/client";
 import { useI18n } from "../i18n";
+import { useProductName } from "../lib/product";
 import { required, z } from "../lib/schemas";
 
+/*
+ * The product name is the one the browser read last: before a sign-in, and
+ * while the default password must change, the stick tells nothing.
+ */
 function Frame({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
+  const product = useProductName(t);
   return (
     <div className="grid min-h-dvh place-items-center bg-base-200 p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center justify-center gap-2 text-lg font-semibold">
           <Cable className="size-6 text-primary" />
-          {t("app.product")}
+          {t("app.product", { name: product })}
         </div>
         <div className="card border border-base-300 bg-base-100">
           <div className="card-body gap-4">{children}</div>

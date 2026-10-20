@@ -37,6 +37,7 @@ import { useLive } from "../api/live";
 import { type Key, useI18n } from "../i18n";
 import { useCountdown } from "../lib/countdown";
 import { clock } from "../lib/format";
+import { useProductName } from "../lib/product";
 import { reason } from "../lib/read";
 import { THEMES, type Theme, useTheme } from "../lib/theme";
 import { confirmable, trialsToConfirm } from "../lib/trial";
@@ -380,6 +381,8 @@ export function AppShell({ children }: { children?: ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const live = useLive();
   const name = live.data?.hostname || live.data?.model;
+  const productName = useProductName(t, live.data?.product);
+  const product = t("app.product", { name: productName });
   const now = useNow();
 
   /* On a phone the menu is a drawer, which a chosen page closes. */
@@ -420,7 +423,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
           </label>
           <div className="min-w-0 flex-1">
             <div className="truncate">
-              <span className="font-semibold">{t("app.product")}</span>
+              <span className="font-semibold">{product}</span>
               {name && <span className="text-sm text-base-content/70"> · {name}</span>}
             </div>
           </div>
@@ -494,8 +497,10 @@ export function AppShell({ children }: { children?: ReactNode }) {
         <label htmlFor="nav-drawer" aria-label="close" className="drawer-overlay" />
         <aside className="flex min-h-full w-60 flex-col gap-4 border-r border-base-300 bg-base-100 p-3">
           <div className="flex items-center gap-2 px-2 pt-1">
-            <Cable className="size-5 text-primary" />
-            <span className="font-semibold">{t("app.product")}</span>
+            <Cable className="size-5 shrink-0 text-primary" />
+            <span className="truncate font-semibold" title={product}>
+              {product}
+            </span>
           </div>
           {nav}
         </aside>

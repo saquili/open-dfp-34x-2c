@@ -33,13 +33,13 @@ of scripts"); without it no token is taken.
 
 What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 0011) rather than run the program itself: the SFP lane, the management pair,
-the confirmation of the changes on trial, the name, the identity and a new
-registration, the updates' status and trial, the restart, and the settings
-of the data path, which pond reads without the accounts' secrets and changes
-on trial, root's password, which onu-config checks and keeps without pond
-seeing its hash, and the upload and download of an update, which stream
-through a pipe whose other end pond passes to onu-act. pond runs no program
-of the stick itself.
+the confirmation of the changes on trial, the name, the product name, the
+identity and a new registration, the updates' status and trial, the restart,
+and the settings of the data path, which pond reads without the accounts'
+secrets and changes on trial, root's password, which onu-config checks and
+keeps without pond seeing its hash, and the upload and download of an
+update, which stream through a pipe whose other end pond passes to onu-act.
+pond runs no program of the stick itself.
 
 A change waits for what onu-act runs for it, seconds for a management pair
 or a store's write, without holding up the daemon: pond starts the method,
@@ -194,7 +194,9 @@ body, with a Content-Length of at most 4 MiB: once its headers are in, the
 connection leaves the HTTP parser and the body streams into ``onu-update write
 -``, which onu-act runs on the reading end of a pipe pond passes it, the connection pausing while the pipe is full; the answer comes once the
 bank was written and read back. One upload runs at a time. ``GET
-/api/firmware/download`` streams the running bank as an update file, in chunks.
+/api/firmware/download`` streams the running bank as an update file, in chunks,
+named after the product name (``product``, below) and the bank's version:
+``buchos-gpon-<version>.bin`` while the name is the default.
 ``POST /api/firmware/try`` arms a start of the bank in the body, ``0`` or ``1``,
 or of the other bank with an empty body, and restarts. ``POST
 /api/firmware/return`` makes the shipped firmware of the bank in the body, or
@@ -202,7 +204,8 @@ of the other bank, the one the boot loader starts from now on, and restarts:
 the way back, which ``onu-update return`` refuses for a bank that does not
 hold the shipped firmware whole. ``GET /api/firmware/backup`` streams a copy of
 the whole flash, every partition in its order on the chip, to keep before an
-update writes over the shipped firmware; it holds the unit's credentials. The
+update writes over the shipped firmware; it holds the unit's credentials, and
+is named the same way, ``buchos-gpon-flash-<version>.bin`` by default. The
 upload, the start, the way back and the copy need root's password as well as a
 session, in the header ``X-Pond-Password``, percent-encoded: 403 for a wrong
 one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
@@ -336,6 +339,18 @@ one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
   alone reads ``/run/onu-identity``.
 * ``hostname``: the stick's name, ``HOSTNAME``, a name of RFC 1123; it goes to
   ``onu-config system`` and to the kernel.
+* ``product``: the name the panel shows for the system, ``PRODUCT_NAME``: 1 to
+  20 characters of ASCII, letters, digits, blanks, hyphens and dots, a letter
+  or a digit first and last (``src/providers.h`` says why), or empty for the
+  default, ``BuchOS``, the author's own name for the system. It goes to
+  ``onu-config system``, which keeps it as ``SYS_PRODUCT_NAME`` and puts it in
+  ``/run/onu-system``. A read gives the name in force from that file, any
+  user may read it, and ``BuchOS`` without one, or for one that is no name.
+  The files pond hands out begin with its slug: its letters in lower case and
+  its digits, each run of the other characters one hyphen (``Fibre Box 2.0``
+  gives ``fibre-box-2-0-gpon-<version>.bin``). It labels the panel and its
+  downloads alone: the host name, the identity towards the OLT and what the
+  DHCP clients send do not change with it.
 * ``sfp_lane``: the SFP lane's setting through ``onu-lane``: ``MODE``
   (``auto``, ``2500basex``, ``1000basex-an`` or ``1000basex``) on trial, which
   ends by itself after 90 s, ``KEEP=1`` or ``REVERT=1``. A read gives the

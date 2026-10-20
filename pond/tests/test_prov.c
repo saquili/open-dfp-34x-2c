@@ -2983,6 +2983,8 @@ static const char system_store_stub[] =
 static const char hostname_stub[] =
 	"#!/bin/sh\necho \"$1\" >\"$POND_ROOT/hostname-set\"\n";
 
+static void test_product(void);
+
 static void test_system(void)
 {
 	char buf[2048], stub[512], err[256], path[512], onu_config[512];
@@ -3056,6 +3058,87 @@ static void test_system(void)
 	      "a name that is not one of RFC 1123 is refused");
 	setenv("POND_ONU_CONFIG", onu_config, 1);
 	unsetenv("POND_HOSTNAME");
+	test_product();
+}
+
+/* What the panel shows for the product name @line of /run/onu-system, and its slug. */
+static bool product_is(const char *line, const char *name, const char *slug)
+{
+	char buf[256], text[256], got[PRODUCT_NAME_MAX + 1];
+	const char *s;
+	int e;
+
+	snprintf(text, sizeof(text), "HOSTNAME=stick\n%s\nNTP_SERVER=192.0.2.1\n", line);
+	put("/run/onu-system", text, 0644);
+	s = render(prov_product, buf, sizeof(buf), &e);
+	snprintf(text, sizeof(text), "\"%s\"", name);
+	product_slug(got, sizeof(got));
+	return !e && !strcmp(s, text) && !strcmp(got, slug);
+}
+
+static void test_product(void)
+{
+	static const char *const good[] = {
+		"BuchOS", "x", "7", "a-1.b", "Fibre Box 2.0", "Abcdefghij Klmnopqr9",
+	};
+	static const char *const bad[] = {
+		"", " x", "x ", "-x", "x.", ".x", "<b>x</b>", "a&b", "a\"b", "a'b", "a/b",
+		"a\\b", "a_b", "a;b", "a=b", "a\tb", "Abcdefghij Klmnopqrs9",
+		"\305\232wiat\305\202ow\303\263d",
+	};
+	char buf[256], stub[512], err[256], path[512], onu_config[512];
+	bool all = true;
+	const char *s;
+	int e;
+
+	puts("the name the panel shows, and the files named after it");
+	for (size_t i = 0; i < ARRAY_SIZE(good); i++)
+		all &= product_name_ok(good[i]);
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++)
+		all &= !product_name_ok(bad[i]);
+	check(all, "1 to 20 letters, digits, blanks, hyphens and dots of ASCII, "
+		   "a letter or a digit first and last");
+
+	mkdir(prov_path("/run", path, sizeof(path)), 0755);
+	unlink(prov_path("/run/onu-system", path, sizeof(path)));
+	s = render(prov_product, buf, sizeof(buf), &e);
+	product_slug(stub, sizeof(stub));
+	check(!e && !strcmp(s, "\"BuchOS\"") && !strcmp(stub, "buchos"),
+	      "without the stick's own settings, BuchOS, and files that begin buchos");
+	check(product_is("SFP_LANE=auto", "BuchOS", "buchos"), "without the setting too");
+	check(product_is("PRODUCT_NAME=Fibre Box 2.0", "Fibre Box 2.0", "fibre-box-2-0"),
+	      "the stick's name, and its slug in lower case, with a hyphen for each gap");
+	check(product_is("PRODUCT_NAME=A - . B", "A - . B", "a-b") &&
+		      product_is("PRODUCT_NAME=Abcdefghij Klmnopqr9", "Abcdefghij Klmnopqr9",
+				 "abcdefghij-klmnopqr9"),
+	      "a run of blanks, hyphens and dots is one hyphen; 20 characters are taken");
+	check(product_is("PRODUCT_NAME=<b>x</b>", "BuchOS", "buchos") &&
+		      product_is("PRODUCT_NAME=Abcdefghij Klmnopqrs9", "BuchOS", "buchos") &&
+		      product_is("PRODUCT_NAME=\305\232wiat\305\202ow\303\263d", "BuchOS",
+				 "buchos") &&
+		      product_is("PRODUCT_NAME=", "BuchOS", "buchos"),
+	      "one that is no name, written there by hand, is BuchOS");
+	unlink(prov_path("/run/onu-system", path, sizeof(path)));
+
+	put("/system-store", system_store_stub, 0755);
+	snprintf(onu_config, sizeof(onu_config), "%s", getenv("POND_ONU_CONFIG") ?: "");
+	setenv("POND_ONU_CONFIG", prov_path("/system-store", stub, sizeof(stub)), 1);
+	check(prov_product_set("PRODUCT_NAME=Fibre Box 2.0\n", err, sizeof(err)) == 0 &&
+		      file_has("/stored-system", "PRODUCT_NAME=Fibre Box 2.0\n"),
+	      "a name goes to the store, as the stick's own setting");
+	check(prov_product_set("PRODUCT_NAME=\n", err, sizeof(err)) == 0 &&
+		      file_has("/stored-system", "PRODUCT_NAME=\n"),
+	      "an empty one too, which takes it away for BuchOS");
+	put("/stored-system", "", 0644);
+	check(prov_product_set("PRODUCT_NAME=<script>\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "PRODUCT_NAME") != NULL &&
+		      prov_product_set("PRODUCT_NAME= x\n", err, sizeof(err)) == -EINVAL &&
+		      prov_product_set("PRODUCT_NAME=Abcdefghij Klmnopqrs9\n", err,
+				       sizeof(err)) == -EINVAL &&
+		      prov_product_set("NAME=x\n", err, sizeof(err)) == -EINVAL &&
+		      file_has("/stored-system", "") && !file_has("/stored-system", "PRODUCT"),
+	      "one that is no name is refused, and nothing is stored");
+	setenv("POND_ONU_CONFIG", onu_config, 1);
 }
 
 static void test_clock(void)

@@ -40,6 +40,7 @@ export const LIVE: Live = {
   },
   model: "ODI DFP-34X-2C3",
   hostname: "dfp-34x-2c3",
+  product: "BuchOS",
   cpu: {
     ticks: {
       user: 5209,

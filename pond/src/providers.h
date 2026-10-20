@@ -9,6 +9,7 @@
 #ifndef POND_PROVIDERS_H
 #define POND_PROVIDERS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "prov.h"
@@ -26,6 +27,10 @@ int prov_hostname_write(const char *val, char *err, size_t errcap,
 			prov_done done, void *ctx);
 int prov_hostname_set(const char *val, char *err, size_t errcap);
 int prov_mgmt(struct prov_buf *out);
+int prov_product(struct prov_buf *out);
+int prov_product_write(const char *val, char *err, size_t errcap,
+		       prov_done done, void *ctx);
+int prov_product_set(const char *val, char *err, size_t errcap);
 int prov_sfp_lane(struct prov_buf *out);
 int prov_sfp_lane_write(const char *val, char *err, size_t errcap,
 			prov_done done, void *ctx);
@@ -98,5 +103,33 @@ int prov_tc_rules(struct prov_buf *out);
 int prov_tconts(struct prov_buf *out);
 int prov_uboot_bank(const char *value);
 int prov_uptime(struct prov_buf *out);
+
+/*
+ * The product name: what the panel calls this system, in its title, and
+ * what the files pond hands out are named after; PRODUCT_NAME of the
+ * stick's own settings (/run/onu-system), which onu-config keeps and checks
+ * as product_name_ok() does: 1 to %PRODUCT_NAME_MAX characters of ASCII,
+ * letters, digits, blanks, hyphens and dots, a letter or a digit first and
+ * last: ASCII, so that it counts the same in every program that checks it
+ * and means nothing to HTML, a header or a file system; 20, about as many
+ * as the heading of the panel's menu shows whole. Without one, or with
+ * one that is not one, %PRODUCT_NAME_DEFAULT, the author's own name for the
+ * system. It labels the panel and its downloads alone.
+ */
+#define PRODUCT_NAME_DEFAULT "BuchOS"
+#define PRODUCT_NAME_MAX 20
+
+bool product_name_ok(const char *v);
+
+/* The product name in force, in @out of @cap bytes, %PRODUCT_NAME_MAX + 1 or more. */
+void product_name(char *out, size_t cap);
+
+/*
+ * The product name in force as the start of a file's name, in @out of @cap
+ * bytes, %PRODUCT_NAME_MAX + 1 or more: its letters in lower case and its
+ * digits, each run of the other characters one hyphen ("Fibre Box 2.0" is
+ * "fibre-box-2-0").
+ */
+void product_slug(char *out, size_t cap);
 
 #endif

@@ -520,6 +520,8 @@ export interface Live {
   /** null from a stick whose pond does not serve them yet. */
   cpu: Cpu | null;
   hostname: string | null;
+  /** The name the panel shows for the system (lib/product.ts); null from a pond without it. */
+  product: string | null;
 }
 
 export const LIVE_IDS: (keyof Live)[] = [
@@ -538,6 +540,7 @@ export const LIVE_IDS: (keyof Live)[] = [
   "settings",
   "cpu",
   "hostname",
+  "product",
 ];
 
 /**

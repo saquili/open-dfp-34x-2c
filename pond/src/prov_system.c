@@ -2,8 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The stick's own settings: its name, the setting of its SFP lane, and the
- * management VLAN and address it answers on. onu-config keeps them, and the
+ * The stick's own settings: its name, the name the panel shows for the
+ * system, the setting of its SFP lane, and the management VLAN and address
+ * it answers on. onu-config keeps them, and the
  * scripts onu-lane and onu-mgmt change the last two so that a change the
  * host does not take cannot lock anyone out (a trial that ends by itself, a
  * new address beside the old one). A change of the management pair needs
@@ -111,6 +112,113 @@ int prov_hostname_set(const char *val, char *err, size_t errcap)
 	struct prov_wait w = { .err = err, .errcap = errcap };
 
 	return prov_wait(prov_hostname_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+static bool ascii_alnum(char c)
+{
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+}
+
+bool product_name_ok(const char *v)
+{
+	size_t n = strlen(v);
+
+	if (!n || n > PRODUCT_NAME_MAX || !ascii_alnum(v[0]) || !ascii_alnum(v[n - 1]))
+		return false;
+	for (size_t i = 0; i < n; i++)
+		if (!ascii_alnum(v[i]) && v[i] != ' ' && v[i] != '-' && v[i] != '.')
+			return false;
+	return true;
+}
+
+void product_name(char *out, size_t cap)
+{
+	char text[1024], v[64];
+
+	if (!prov_slurp("/run/onu-system", text, sizeof(text), NULL) &&
+	    line_of(text, "PRODUCT_NAME", v, sizeof(v)) && product_name_ok(v))
+		snprintf(out, cap, "%s", v);
+	else
+		snprintf(out, cap, "%s", PRODUCT_NAME_DEFAULT);
+}
+
+void product_slug(char *out, size_t cap)
+{
+	char name[PRODUCT_NAME_MAX + 1];
+	size_t n = 0;
+
+	if (cap <= PRODUCT_NAME_MAX) {
+		if (cap)
+			out[0] = '\0';
+		return;
+	}
+	product_name(name, sizeof(name));
+	/*
+	 * The name begins and ends with a letter or a digit, so the slug has
+	 * no hyphen at either end, and is no longer than the name.
+	 */
+	for (const char *p = name; *p; p++) {
+		if (ascii_alnum(*p))
+			out[n++] = (char)(*p >= 'A' && *p <= 'Z' ? *p - 'A' + 'a' : *p);
+		else if (out[n - 1] != '-')
+			out[n++] = '-';
+	}
+	out[n] = '\0';
+}
+
+int prov_product(struct prov_buf *out)
+{
+	char name[PRODUCT_NAME_MAX + 1];
+
+	product_name(name, sizeof(name));
+	pv_str(out, name);
+	return 0;
+}
+
+/* A change of the product name: stored, which puts it in /run/onu-system too. */
+static struct prov_change g_product;
+
+static void product_stored(void *ctx, int code, const char *output)
+{
+	(void)ctx;
+	(void)output;
+	prov_change_end(&g_product, code ? -EIO : 0,
+			code ? "the name was not stored" : "the name is stored");
+}
+
+int prov_product_write(const char *val, char *err, size_t errcap,
+		       prov_done done, void *ctx)
+{
+	char name[64], input[96];
+	int rc;
+
+	/* An empty name takes the stick's away, for the default. */
+	if (!line_of(val, "PRODUCT_NAME", name, sizeof(name)) ||
+	    (*name && !product_name_ok(name))) {
+		snprintf(err, errcap,
+			 "PRODUCT_NAME: up to %d letters, digits, blanks, hyphens and dots, "
+			 "a letter or a digit first and last; empty for %s",
+			 PRODUCT_NAME_MAX, PRODUCT_NAME_DEFAULT);
+		return -EINVAL;
+	}
+	rc = prov_change_take(&g_product, done, ctx, err, errcap);
+	if (rc)
+		return rc;
+	snprintf(input, sizeof(input), "PRODUCT_NAME=%s\n", name);
+	rc = bus_act_begin("system_store", NULL, NULL, 0, input, product_stored, NULL);
+	if (rc) {
+		prov_change_drop(&g_product);
+		snprintf(err, errcap, "the name was not stored");
+		return -EIO;
+	}
+	return -EINPROGRESS;
+}
+
+int prov_product_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_product_write(val, err, errcap, prov_waited, &w), &w);
 }
 
 /* A number of KEY= in @text, as JSON, or null. */

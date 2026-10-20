@@ -19,6 +19,7 @@ import type {
   SfpLane,
 } from "../api/types";
 import { MAX_MOVED, moved } from "../lib/ports";
+import { DEFAULT_PRODUCT, productNameOk, productSlug } from "../lib/product";
 import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
 import { conversation } from "./conversation";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
@@ -441,6 +442,8 @@ const SESSION_GEM = LIVE.settings.sessions[0]?.gem_dev ?? "";
 const MULTICAST_GEM = LIVE.gem_ports.find((g) => g.multicast)?.name ?? "";
 let lastTick = Date.now();
 let hostname = LIVE.hostname ?? "dfp-34x-2c3";
+/* The name the panel shows for the system, which the files handed out are named after. */
+let product = LIVE.product ?? DEFAULT_PRODUCT;
 const upNow = () => LIVE.uptime.up_s + (Date.now() - started) / 1000;
 let lane: SfpLane = { choice: "auto", active: "2500basex", trial: null };
 let mgmt: Mgmt = { vlan: 4094, address: "192.0.2.250/30", data_address: null, pending: null };
@@ -556,6 +559,7 @@ function live() {
     gem_counters: structuredClone(gemCounters),
     cpu: LIVE.cpu ? { ...LIVE.cpu, ticks: { ...ticks } } : null,
     hostname,
+    product,
     settings,
     onu: LIVE.onu && {
       ...LIVE.onu,
@@ -780,6 +784,21 @@ const stick = [
       return HttpResponse.json({ error: "refused", detail: "not a host name" }, { status: 400 });
     hostname = b.HOSTNAME ?? hostname;
     return HttpResponse.json({ id: "hostname", ok: true });
+  }),
+
+  /* An empty name takes the stick's away, for BuchOS, as onu-config does. */
+  http.post("*/api/set/product", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const name = b.PRODUCT_NAME;
+    if (name === undefined || (name !== "" && !productNameOk(name)))
+      return HttpResponse.json(
+        { error: "refused", detail: "PRODUCT_NAME: not a product name" },
+        { status: 400 },
+      );
+    product = name || DEFAULT_PRODUCT;
+    return HttpResponse.json({ id: "product", ok: true });
   }),
 
   http.get("*/api/get/omci", async () => {
@@ -1356,7 +1375,7 @@ const stick = [
     return new HttpResponse(new Uint8Array(4096).fill(0xff), {
       headers: {
         "Content-Type": "application/octet-stream",
-        "Content-Disposition": 'attachment; filename="buchos-gpon-flash-325213d07776.bin"',
+        "Content-Disposition": `attachment; filename="${productSlug(product)}-gpon-flash-325213d07776.bin"`,
       },
     });
   }),
@@ -1366,7 +1385,7 @@ const stick = [
     return new HttpResponse(new Uint8Array([0x4f, 0x4e, 0x55, 0x46]), {
       headers: {
         "Content-Type": "application/octet-stream",
-        "Content-Disposition": 'attachment; filename="buchos-gpon-325213d07776.bin"',
+        "Content-Disposition": `attachment; filename="${productSlug(product)}-gpon-325213d07776.bin"`,
       },
     });
   }),

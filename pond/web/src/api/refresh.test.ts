@@ -56,6 +56,7 @@ const CHANGED_BY: Record<string, Change[]> = {
     "sfp_lane",
     "mgmt",
     "hostname",
+    "product",
     "identity",
   ],
   leases: ["session", "ipoe", "lan", "changes"],

@@ -148,6 +148,8 @@ export const REFRESH = {
   sfp_lane: [["sfp_lane"], ["live"]],
   mgmt: [["mgmt"], ["live"], ["switch"], ["tls"]],
   hostname: [["live"]],
+  /* The name is in the bar over every page and in the tab's title, which the live figures carry. */
+  product: [["live"]],
   identity: [["identity"], ["live"]],
   upload: [["firmware"], ["banks"]],
   try: [["firmware"], ["banks"]],
@@ -213,6 +215,7 @@ export const useMgmt = () =>
 export const useLaneChange = () => useChange("sfp_lane");
 export const useMgmtChange = () => useChange("mgmt");
 export const useHostnameChange = () => useChange("hostname");
+export const useProductChange = () => useChange("product");
 export const useIdentityChange = () => useChange("identity");
 
 export function restartOptions(qc: QueryClient) {

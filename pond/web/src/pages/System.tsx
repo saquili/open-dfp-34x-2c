@@ -6,8 +6,9 @@
  * the flash, as gauges, the last ten minutes of the first two, and a map of
  * the flash with what each partition holds. Software: the two systems of
  * the flash and the update of the one that does not run. Settings: the
- * stick's name, its clock, security with the panel's certificate, a restart
- * and a report of every figure.
+ * stick's name and the name the panel shows for the system, its clock,
+ * security with the panel's certificate, a restart and a report of every
+ * figure.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -37,6 +38,7 @@ import {
   useClock,
   useFirmware,
   useHostnameChange,
+  useProductChange,
   useRestart,
   useReturnBank,
   useTls,
@@ -62,6 +64,7 @@ import {
   uploading,
 } from "../lib/firmware";
 import { bytes, day, decimal, duration, percent } from "../lib/format";
+import { DEFAULT_PRODUCT, PRODUCT_MAX, productField, productSlug } from "../lib/product";
 import { reason } from "../lib/read";
 import { z } from "../lib/schemas";
 import { memory, type Tone } from "../lib/state";
@@ -719,6 +722,60 @@ function HostnameForm({ name }: { name: string }) {
 }
 
 /*
+ * The name the panel shows for the system, a setting of the stick's: empty
+ * brings back BuchOS. The hint shows how the files the stick hands out are
+ * named with what is typed. The field is "product", as the hostname's
+ * beside it is "name": a field's name is its input's id.
+ */
+function ProductForm({ name }: { name: string }) {
+  const { t } = useI18n();
+  const change = useProductChange();
+  const state = useChangeState(change);
+  const schema = z.object({
+    product: productField(t("system.productRule", { max: PRODUCT_MAX })),
+  });
+  type Values = z.infer<typeof schema>;
+  const form = useForm<Values>({
+    resolver: zodResolver(schema),
+    defaultValues: { product: name },
+  });
+  const { errors, isDirty } = form.formState;
+  const typed = (form.watch("product") ?? "").trim();
+  useEffect(() => {
+    if (!form.formState.isDirty) form.reset({ product: name });
+  }, [name, form]);
+  return (
+    <form
+      onSubmit={form.handleSubmit((v) =>
+        change.mutate(
+          { PRODUCT_NAME: v.product },
+          { onSuccess: () => form.reset({ product: v.product || DEFAULT_PRODUCT }) },
+        ),
+      )}
+      noValidate
+      className="grid gap-3"
+    >
+      <Field
+        label={t("system.product")}
+        hint={t("system.productHint", { slug: productSlug(typed || DEFAULT_PRODUCT) })}
+        error={errors.product?.message}
+        {...form.register("product")}
+      />
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="submit"
+          className="btn btn-primary btn-sm"
+          disabled={!isDirty || change.isPending}
+        >
+          {t("internet.save")}
+        </button>
+        <SaveState {...state} />
+      </div>
+    </form>
+  );
+}
+
+/*
  * The connection to the panel, and the certificate of the address it was
  * opened at, which the stick signed itself: its fingerprint is what a person
  * compares with the browser's, and with the one the console shows at boot.
@@ -891,6 +948,11 @@ function SettingsTab() {
           <HostnameForm name={live.hostname} />
         ) : (
           <p className="text-xs text-base-content/70">{t("system.hostnameUnavailable")}</p>
+        )}
+        {live?.product != null ? (
+          <ProductForm name={live.product} />
+        ) : (
+          <p className="text-xs text-base-content/70">{t("system.productUnavailable")}</p>
         )}
       </Card>
 

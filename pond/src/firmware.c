@@ -26,7 +26,10 @@
  * way, in chunks, as fast as the browser takes it, and a copy of the flash
  * that of "onu-update backup", which needs root's password, as the copy holds
  * the unit's credentials. onu-act runs onu-update
- * (bus.h): pond passes it one end of the pipe, and holds the other.
+ * (bus.h): pond passes it one end of the pipe, and holds the other. Both
+ * files are named after the product name, with the running bank's version:
+ * buchos-gpon-VERSION.bin and buchos-gpon-flash-VERSION.bin by default
+ * (providers.h).
  */
 
 #define _GNU_SOURCE
@@ -35,6 +38,7 @@
 #include "bus.h"
 #include "firmware.h"
 #include "prov.h"
+#include "providers.h"
 
 #include "mongoose.h"
 
@@ -382,22 +386,34 @@ static void stream_out(struct mg_connection *c, const char *method, const char *
 		  name);
 }
 
+/*
+ * The name of a file handed out: the product name's slug, "gpon", @what
+ * ("" or "flash-"), the running bank's version.
+ */
+static void file_name(char *name, size_t cap, const char *what)
+{
+	char version[64], slug[PRODUCT_NAME_MAX + 1];
+
+	product_slug(slug, sizeof(slug));
+	running_version(version, sizeof(version));
+	snprintf(name, cap, "%s-gpon-%s%s.bin", slug, what, version);
+}
+
 void firmware_download(struct mg_connection *c)
 {
-	char version[64], name[96];
+	char name[128];
 
 	if (up.running || down.running) {
 		reply(c, 409, "busy", "an update or a download is under way");
 		return;
 	}
-	running_version(version, sizeof(version));
-	snprintf(name, sizeof(name), "buchos-gpon-%s.bin", version);
+	file_name(name, sizeof(name), "");
 	stream_out(c, "update_read", NULL, name);
 }
 
 void firmware_backup(struct mg_connection *c, struct mg_http_message *hm)
 {
-	char version[64], name[96], pw[AUTH_SECRET_MAX + 1];
+	char name[128], pw[AUTH_SECRET_MAX + 1];
 
 	if (up.running || down.running) {
 		reply(c, 409, "busy", "an update or a download is under way");
@@ -405,8 +421,7 @@ void firmware_backup(struct mg_connection *c, struct mg_http_message *hm)
 	}
 	if (!confirmed(c, hm, pw, sizeof(pw)))
 		return;
-	running_version(version, sizeof(version));
-	snprintf(name, sizeof(name), "buchos-gpon-flash-%s.bin", version);
+	file_name(name, sizeof(name), "flash-");
 	stream_out(c, "update_backup", pw, name);
 	explicit_bzero(pw, sizeof(pw));
 }

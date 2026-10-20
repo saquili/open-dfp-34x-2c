@@ -154,6 +154,51 @@ def main():
     as_account(pond)
     slow_change(pond, os.path.dirname(key))
     token_file(pond)
+    downloads(pond, os.path.dirname(key), token)
+
+
+def downloads(pond, workdir, token):
+    """A file the daemon hands out is named after the product name of the
+    stick's own settings, BuchOS without one or with one that is no name,
+    and the running bank's version."""
+    print("the names of the files handed out")
+    update = os.path.join(workdir, "onu-update")
+    with open(update, "w") as f:
+        f.write("#!/bin/sh\ncase $1 in\n"
+                "status) printf 'RUNNING=0\\nBANK0_VERSION=2026.10.20-0130\\n' ;;\n"
+                "read) printf ONUF ;;\nesac\n")
+    os.chmod(update, 0o755)
+    system = os.environ["POND_ROOT"] + "/run/onu-system"
+    os.makedirs(os.path.dirname(system), exist_ok=True)
+    env = dict(os.environ, POND_ONU_UPDATE=update)
+    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}", "-t", token],
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not started(proc, HTTP):
+            check(False, "the daemon listens")
+            return
+        for line, name in ((None, "buchos-gpon-2026.10.20-0130.bin"),
+                           ("PRODUCT_NAME=Fibre Box 2.0",
+                            "fibre-box-2-0-gpon-2026.10.20-0130.bin"),
+                           ("PRODUCT_NAME=<b>x</b>", "buchos-gpon-2026.10.20-0130.bin")):
+            if line is None:
+                if os.path.exists(system):
+                    os.unlink(system)
+            else:
+                with open(system, "w") as f:
+                    f.write(f"HOSTNAME=stick\n{line}\n")
+            conn = http.client.HTTPConnection("127.0.0.1", HTTP, timeout=10)
+            status, headers, body = request(conn, "GET", "/api/firmware/download",
+                                            headers={"Authorization": f"Bearer {TOKEN}"})
+            conn.close()
+            check(status == 200 and body == b"ONUF"
+                  and headers.get("Content-Disposition") == f'attachment; filename="{name}"',
+                  f"{line or 'no product name'}: {name}")
+    finally:
+        proc.terminate()
+        proc.wait(5)
+        if os.path.exists(system):
+            os.unlink(system)
 
 
 def slow_change(pond, workdir):

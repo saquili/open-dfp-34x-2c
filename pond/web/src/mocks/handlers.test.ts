@@ -37,3 +37,33 @@ describe("the mock stick's switches", () => {
     expect(Date.now() - t).toBeGreaterThanOrEqual(110);
   });
 });
+
+describe("the mock stick's product name", () => {
+  const send = (path: string, body: string) =>
+    getResponse(handlers, new Request(`http://stick.invalid${path}`, { method: "POST", body }));
+  const shown = async () => {
+    const reply = (await (await ask("/api/getm?ids=product"))?.json()) as
+      | { product: string }
+      | undefined;
+    return reply?.product;
+  };
+  const file = async () =>
+    (await ask("/api/firmware/download"))?.headers.get("Content-Disposition") ?? "";
+
+  it("is BuchOS, takes another, and names the files after it, as pond does", async () => {
+    await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
+    try {
+      expect(await shown()).toBe("BuchOS");
+      expect(await file()).toContain('filename="buchos-gpon-');
+      expect((await send("/api/set/product", "PRODUCT_NAME=Fibre Box 2.0\n"))?.status).toBe(200);
+      expect(await shown()).toBe("Fibre Box 2.0");
+      expect(await file()).toContain('filename="fibre-box-2-0-gpon-');
+      expect((await send("/api/set/product", "PRODUCT_NAME=<b>x</b>\n"))?.status).toBe(400);
+      expect(await shown()).toBe("Fibre Box 2.0");
+      expect((await send("/api/set/product", "PRODUCT_NAME=\n"))?.status).toBe(200);
+      expect(await shown()).toBe("BuchOS");
+    } finally {
+      await send("/api/auth/logout", "");
+    }
+  });
+});

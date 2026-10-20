@@ -16,6 +16,9 @@ const struct prov pond_provs[] = {
 	  prov_cpu, NULL, PROV_VOLATILE },
 	{ "hostname", "System", "The name the stick goes by", prov_hostname,
 	  prov_hostname_write, 0 },
+	{ "product", "System",
+	  "The name the panel shows for the system, which the files it hands "
+	  "out are named after", prov_product, prov_product_write, 0 },
 	{ "clock", "System",
 	  "The stick's clock: its time, the source that sets it and how near "
 	  "it is, and what NTP, PTP and the OLT gave",

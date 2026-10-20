@@ -7,7 +7,7 @@ import type { Dictionary } from "./en";
 
 export const pl: Dictionary = {
   app: {
-    product: "BuchOS – GPON",
+    product: "{name} – GPON",
     loading: "Wczytywanie…",
   },
   nav: {
@@ -969,6 +969,13 @@ export const pl: Dictionary = {
     hostnameRule: "Litery, cyfry i myślniki (nie na początku ani końcu), do 63 znaków",
     hostnameUnavailable:
       "Ta wkładka nie pozwala jeszcze zmieniać nazwy z panelu (wymaga aktualizacji oprogramowania).",
+    product: "Nazwa produktu",
+    productHint:
+      "Nazwa tego systemu w tytule panelu i na karcie przeglądarki; nazwy plików pobieranych z wkładki zaczynają się od {slug}-gpon-. Puste pole przywraca BuchOS.",
+    productRule:
+      "Do {max} znaków: litery A–Z (bez ą, ę, ł…), cyfry, spacje, myślniki i kropki; pierwszy i ostatni znak to litera lub cyfra",
+    productUnavailable:
+      "Ta wkładka nie pozwala jeszcze zmieniać nazwy produktu z panelu (wymaga aktualizacji oprogramowania).",
     title: "System",
     device: "Urządzenie",
     model: "Model",
