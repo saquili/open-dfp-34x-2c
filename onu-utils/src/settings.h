@@ -77,7 +77,11 @@
  * Where no rule decides, FW_OUT says what becomes of a new connection from
  * the networks to the internet, allow or block, and FW_BETWEEN of one
  * between two networks; one from the internet to them is blocked, but what a
- * forward or a DMZ takes.
+ * forward or a DMZ takes. FW_PING_IN says whether the stick answers a ping
+ * from the operator's side, by its sessions and IPoE connections, allow or
+ * block, and FW_PING_LANS one from the host side's networks, the local
+ * networks and the links a session hands its address down by; both block by
+ * default. On the management VLAN the stick answers whatever they say.
  */
 
 #ifndef SETTINGS_H
@@ -164,10 +168,15 @@ enum settings_lkey {
 	SETTINGS_NLKEYS
 };
 
-/* What the firewall does where no rule decides, FW_<suffix>: allow or block. */
+/*
+ * What the firewall does where no rule decides, and whether the stick answers
+ * a ping from either side, FW_<suffix>: allow or block.
+ */
 enum settings_fkey {
 	SET_F_OUT,
 	SET_F_BETWEEN,
+	SET_F_PING_IN,
+	SET_F_PING_LANS,
 	SETTINGS_NFKEYS
 };
 
@@ -299,8 +308,9 @@ size_t settings_format_defaults(char *out, size_t cap);
  *
  * The keys of each session that has an account, of each IPoE connection, of
  * each local network, the fixed addresses, the forwards, the DMZs, the
- * firewall's rules, and what it does where none decides when that is not
- * its default; never an account, nor a key of before.
+ * firewall's rules, and what it does where none decides and whether the
+ * stick answers a ping, where that is not the default; never an account, nor
+ * a key of before.
  *
  * Return: the length of the lines, which is @cap or more when they did not
  *         fit.

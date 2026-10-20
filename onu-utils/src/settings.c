@@ -804,8 +804,10 @@ static bool account_key(const char *name, int *n, bool *user)
 }
 
 /*
- * What the firewall does where no rule decides, and its defaults: it lets
- * the networks out to the internet, and keeps them from each other.
+ * What the firewall does where no rule decides, and whether the stick
+ * answers a ping, and their defaults: it lets the networks out to the
+ * internet, keeps them from each other, and answers a ping from neither
+ * side, the operator's nor the networks', but on the management VLAN alone.
  */
 static const struct {
 	const char *name;
@@ -813,6 +815,8 @@ static const struct {
 } g_fkeys[SETTINGS_NFKEYS] = {
 	[SET_F_OUT] = { "FW_OUT", "allow" },
 	[SET_F_BETWEEN] = { "FW_BETWEEN", "block" },
+	[SET_F_PING_IN] = { "FW_PING_IN", "block" },
+	[SET_F_PING_LANS] = { "FW_PING_LANS", "block" },
 };
 
 void settings_defaults(struct settings *s)
@@ -1719,7 +1723,7 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 						len < cap ? cap - len : 0,
 						"RULE%d_NAME=%s\n", i + 1, r->name);
 	}
-	/* What the firewall does where no rule decides, when it is not its default. */
+	/* What the firewall does where no rule decides, and the pings, when not their default. */
 	for (int k = 0; k < SETTINGS_NFKEYS; k++)
 		if (strcmp(s->fw[k], g_fkeys[k].dflt))
 			len += (size_t)snprintf(out + (len < cap ? len : cap),

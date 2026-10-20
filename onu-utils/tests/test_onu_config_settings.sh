@@ -55,10 +55,11 @@ check '[ $rc -eq 0 ] && grep -qx "SESSION2_VLAN=40" "$T/out" && grep -q "^SESSIO
 echo "defaults: the table's default of every key, which a session with nothing set has"
 "$ONUCFG" defaults </dev/null >"$T/dflt" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 0 ] && [ ! -s "$T/err" ] && [ "$(wc -l <"$T/dflt")" -eq 47 ]'
+check '[ $rc -eq 0 ] && [ ! -s "$T/err" ] && [ "$(wc -l <"$T/dflt")" -eq 49 ]'
 check 'grep -qx "WAN_GEM=auto" "$T/dflt" && grep -qx "SESSION7_FAMILY=both" "$T/dflt"'
 check 'grep -qx "SESSION4_PASS=on" "$T/dflt" && grep -qx "SESSION2_HOST_VLAN=" "$T/dflt"'
 check 'grep -qx "FW_OUT=allow" "$T/dflt" && grep -qx "FW_BETWEEN=block" "$T/dflt"'
+check 'grep -qx "FW_PING_IN=block" "$T/dflt" && grep -qx "FW_PING_LANS=block" "$T/dflt"'
 # A session with an account and nothing else set has those defaults, and no
 # other program needs to know them.
 run settings 'PPPOE1_USER=a\n'
