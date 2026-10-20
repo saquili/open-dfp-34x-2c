@@ -1,0 +1,91 @@
+From: Paweł Phan <szop.hektar_1w@icloud.com>
+Subject: [PATCH] package/libubox, ubus, json-c: newer libubox and ubus, json-c without thread-local storage
+
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+The network interface daemon of OpenWrt, netifd, needs libubox, ubus
+and json-c.
+
+json-c keeps one value per thread, the format of the numbers it writes.
+The MIPS I variant's toolchain has no threads and no thread-local
+storage, which gcc would emulate with __emutls_get_address() of
+libgcc_s, which json-c would then be the only library to load. Without
+threads, build json-c without thread-local storage: the value is the
+process's.
+
+libubox and ubus are taken at OpenWrt's commits of 2026-10-08 and
+2026-09-25 (da2d205, 414c60a) instead of those of the release (3868f47
+of 2024-12-19, afa57cc of 2025-01-02): procd, which comes next, needs
+the newer uloop, and netifd and procd are taken at their current
+commits too. ubus's carried patch applies unchanged. The archives'
+hashes are computed locally, as the release's were.
+
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ package/json-c/json-c.mk     | 6 ++++++
+ package/libubox/libubox.hash | 2 +-
+ package/libubox/libubox.mk   | 2 +-
+ package/ubus/ubus.hash       | 2 +-
+ package/ubus/ubus.mk         | 2 +-
+ 5 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/package/json-c/json-c.mk b/package/json-c/json-c.mk
+index 254b6fd..c34a540 100644
+--- a/package/json-c/json-c.mk
++++ b/package/json-c/json-c.mk
+@@ -12,5 +12,11 @@ JSON_C_LICENSE_FILES = COPYING
+ JSON_C_CPE_ID_VENDOR = json-c
+ JSON_C_CONF_OPTS = -DBUILD_APPS=OFF -DDISABLE_EXTRA_LIBS=ON
+ 
++# Without threads a value per thread is a value per process. A toolchain
++# that emulates thread-local storage would take it from libgcc_s.
++ifeq ($(BR2_TOOLCHAIN_HAS_THREADS),)
++JSON_C_CONF_OPTS += -DDISABLE_THREAD_LOCAL_STORAGE=ON
++endif
++
+ $(eval $(cmake-package))
+ $(eval $(host-cmake-package))
+diff --git a/package/libubox/libubox.hash b/package/libubox/libubox.hash
+index eb37d33..c6fee4f 100644
+--- a/package/libubox/libubox.hash
++++ b/package/libubox/libubox.hash
+@@ -1,2 +1,2 @@
+ # Locally calculated
+-sha256  df6e1350fd11016ef30242a279cec195d91e6748c11c40e0991593718c46fa52  libubox-3868f47c8f6c6570e62a3cdf8a7f26ffb1a67e6a-git4.tar.gz
++sha256  402cae56e4dc84cd14f52888f89d565177858d86147f800a16a2d0f15288ea18  libubox-da2d205a5cf3e877c45a2eec488218cbaf452e7d-git4.tar.gz
+diff --git a/package/libubox/libubox.mk b/package/libubox/libubox.mk
+index 00ae2b0..c0c96e0 100644
+--- a/package/libubox/libubox.mk
++++ b/package/libubox/libubox.mk
+@@ -4,7 +4,7 @@
+ #
+ ################################################################################
+ 
+-LIBUBOX_VERSION = 3868f47c8f6c6570e62a3cdf8a7f26ffb1a67e6a
++LIBUBOX_VERSION = da2d205a5cf3e877c45a2eec488218cbaf452e7d
+ LIBUBOX_SITE = https://git.openwrt.org/project/libubox.git
+ LIBUBOX_SITE_METHOD = git
+ LIBUBOX_LICENSE = ISC, BSD-3-Clause
+diff --git a/package/ubus/ubus.hash b/package/ubus/ubus.hash
+index e35f37b..5d0fbec 100644
+--- a/package/ubus/ubus.hash
++++ b/package/ubus/ubus.hash
+@@ -1,3 +1,3 @@
+ # Locally calculated
+-sha256  ba7602c660cb2c15c0e04942414e4cf3d96622622406c5fc3b88895694aebb9f  ubus-afa57cce0aff82f4a7a0e509d4387ebc23dd3be7-git4.tar.gz
++sha256  e5409206b54cd44192bd06b386a7d8579ead5001d8b20d7d99c88256c5d7336c  ubus-414c60a2e29e72c2c4f573bc50ad54aef076d169-git4.tar.gz
+ sha256  a3caa6c0e90c87b7c97c2ac3d0c0d416082ef777215faec2e9b24ea6e68f6988  ubusd_acl.h
+diff --git a/package/ubus/ubus.mk b/package/ubus/ubus.mk
+index 913c0e3..68c89b5 100644
+--- a/package/ubus/ubus.mk
++++ b/package/ubus/ubus.mk
+@@ -4,7 +4,7 @@
+ #
+ ################################################################################
+ 
+-UBUS_VERSION = afa57cce0aff82f4a7a0e509d4387ebc23dd3be7
++UBUS_VERSION = 414c60a2e29e72c2c4f573bc50ad54aef076d169
+ UBUS_SITE = https://git.openwrt.org/project/ubus.git
+ UBUS_SITE_METHOD = git
+ 

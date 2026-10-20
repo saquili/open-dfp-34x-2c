@@ -6,10 +6,12 @@ SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 Buildroot offers MIPS32 and later for 32-bit MIPS. Add "MIPS I" to the
 target architecture variants: a big-endian core that runs the MIPS I
-integer instruction set and nothing later, has no floating-point unit,
-and has no atomic operations -- a load-linked instruction runs but a
-store-conditional never completes, so an atomic sequence retries for
-ever (tools/isa-gate/README.rst of the distribution describes the core).
+integer instruction set and, of MIPS II, only ll, sc and sync, and has
+no floating-point unit. Its load-linked and store-conditional pair works,
+so atomic operations are ll/sc sequences; it has no hardware register
+for the thread pointer (rdhwr $29 is not an instruction it reserves), so
+there is no thread-local storage (tools/isa-gate/README.rst of the
+distribution describes the core).
 
 arch/Config.in.mips
  - BR2_mips_1 is the variant. It is for the big-endian architecture only
@@ -20,15 +22,12 @@ arch/Config.in.mips
    --with-arch=mips1, so the compiler, the assembler it drives, libgcc and
    the C library all default to MIPS I with no flag on any command line.
 
-toolchain/Config.in
- - BR2_TOOLCHAIN_HAS_SYNC_1 and BR2_TOOLCHAIN_HAS_SYNC_4 are not set (and
-   BR2_TOOLCHAIN_HAS_SYNC_2 follows the first): the __sync builtins need
-   ll/sc, so the packages that depend on them are not offered.
-
 package/uclibc/Config.in
- - Neither thread library (NPTL, linuxthreads) is offered. Both rely on
-   atomic operations, so the toolchain has no threads, no libatomic and
-   no BR2_TOOLCHAIN_HAS_ATOMIC.
+ - Neither thread library (NPTL, linuxthreads) is offered: NPTL reaches
+   the thread pointer with rdhwr, which the core does not have and the
+   kernel cannot emulate, and linuxthreads is not kept up. The toolchain
+   has no threads, no libatomic and no BR2_TOOLCHAIN_HAS_ATOMIC; the
+   __sync builtins are compiled to ll/sc in place.
 
 package/glibc/Config.in, package/musl/Config.in
  - Neither C library is offered; uClibc-ng is the C library of this core.
@@ -39,9 +38,10 @@ package/uclibc/uclibc.mk
 
 package/gcc/gcc.mk
  - gcc is configured with --with-divide=breaks (division by zero is
-   checked with break, as the trap instruction teq is MIPS II),
-   --without-llsc and --without-synci, so that its defaults agree with
-   the core for libgcc and the start files too.
+   checked with break, as the trap instruction teq is MIPS II, which the
+   core does not run), --with-llsc (atomic builtins as ll/sc and sync,
+   which it does run) and --without-synci, so that its defaults agree
+   with the core for libgcc and the start files too.
 
 Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
 ---
@@ -51,8 +51,7 @@ Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
  package/musl/Config.in   |  1 +
  package/uclibc/Config.in |  2 ++
  package/uclibc/uclibc.mk |  8 ++++++++
- toolchain/Config.in      |  2 ++
- 7 files changed, 35 insertions(+), 1 deletion(-)
+ 6 files changed, 34 insertions(+), 1 deletion(-)
 
 diff --git a/arch/Config.in.mips b/arch/Config.in.mips
 index 29b4180d..46390ebb 100644
@@ -68,11 +67,11 @@ index 29b4180d..46390ebb 100644
 +	select BR2_MIPS_NAN_LEGACY
 +	help
 +	  The original MIPS instruction set, big endian, for a core
-+	  without a floating-point unit. A core of this kind runs no
-+	  MIPS32 instruction, and its load-linked/store-conditional
-+	  pair never completes, so there are no atomic operations:
-+	  threads, the atomic builtins and the glibc and musl C
-+	  libraries are not offered.
++	  without a floating-point unit, which also runs MIPS II's
++	  ll, sc and sync. It has no hardware register for the
++	  thread pointer, so there is no thread-local storage:
++	  threads and the glibc and musl C libraries are not
++	  offered.
 +
  config BR2_mips_32
  	bool "Generic MIPS32"
@@ -98,15 +97,16 @@ diff --git a/package/gcc/gcc.mk b/package/gcc/gcc.mk
 index 834c0a4c..1e71c07e 100644
 --- a/package/gcc/gcc.mk
 +++ b/package/gcc/gcc.mk
-@@ -222,6 +222,13 @@ ifneq ($(GCC_TARGET_FP32_MODE),)
+@@ -222,6 +222,14 @@ ifneq ($(GCC_TARGET_FP32_MODE),)
  HOST_GCC_COMMON_CONF_OPTS += --with-fp-32="$(GCC_TARGET_FP32_MODE)"
  endif
  
 +# MIPS I has no trap-on-condition instruction (division by zero is checked
-+# with break), no ll/sc and no synci: make the compiler's defaults say so,
-+# for libgcc and the start files as well as for what it compiles later.
++# with break) and no synci, and this core runs ll, sc and sync: make the
++# compiler's defaults say so, for libgcc and the start files as well as for
++# what it compiles later.
 +ifeq ($(BR2_mips_1),y)
-+HOST_GCC_COMMON_CONF_OPTS += --with-divide=breaks --without-llsc --without-synci
++HOST_GCC_COMMON_CONF_OPTS += --with-divide=breaks --with-llsc --without-synci
 +endif
 +
  # musl/uClibc-ng does not work with biarch powerpc toolchains, we
@@ -132,7 +132,7 @@ index a6e2af05..c4e59b7e 100644
  	default y if BR2_sh
  	default y if BR2_x86_64
  	depends on !BR2_POWERPC_CPU_HAS_SPE # not supported, build breaks
-+	depends on !BR2_mips_1 # atomics
++	depends on !BR2_mips_1 # thread pointer
  	depends on !(BR2_powerpc64 || BR2_powerpc64le) || BR2_POWERPC_CPU_HAS_ALTIVEC
  	# sh2 nommu is supported by musl, but we don't have support
  	# for it in Buildroot.
@@ -144,14 +144,14 @@ index 4c360809..e68a81f4 100644
  config BR2_PTHREADS_NATIVE
  	bool "Native POSIX Threading (NPTL)"
  	depends on BR2_USE_MMU || ((BR2_arm || BR2_armeb) && BR2_BINFMT_FDPIC)
-+	depends on !BR2_mips_1 # atomics
++	depends on !BR2_mips_1 # thread pointer
  	select BR2_TOOLCHAIN_HAS_THREADS
  	select BR2_TOOLCHAIN_HAS_THREADS_NPTL
  
  config BR2_PTHREADS
  	bool "linuxthreads"
  	depends on !BR2_aarch64 && !BR2_aarch64_be
-+	depends on !BR2_mips_1 # atomics
++	depends on !BR2_mips_1 # not kept up
  	select BR2_TOOLCHAIN_HAS_THREADS
  
  config BR2_PTHREADS_NONE
@@ -181,23 +181,3 @@ index 0cee1060..1ec5b2fe 100644
  	$(UCLIBC_SH_TYPE_CONFIG)
  	$(UCLIBC_SPARC_TYPE_CONFIG)
  	$(UCLIBC_POWERPC_TYPE_CONFIG)
-diff --git a/toolchain/Config.in b/toolchain/Config.in
-index 7b354234..77eb7fcd 100644
---- a/toolchain/Config.in
-+++ b/toolchain/Config.in
-@@ -832,6 +832,7 @@ config BR2_TOOLCHAIN_HAS_SYNC_1
- 	default y
- 	depends on !BR2_m68k_cf
- 	depends on !BR2_microblaze
-+	depends on !BR2_mips_1
- 	depends on !BR2_sparc
- 	depends on !(BR2_arc && !BR2_ARC_ATOMIC_EXT)
- 
-@@ -843,6 +844,7 @@ config BR2_TOOLCHAIN_HAS_SYNC_4
- 	bool
- 	default y
- 	depends on !BR2_m68k_cf
-+	depends on !BR2_mips_1
- 	depends on !BR2_sparc
- 	depends on !(BR2_arc && !BR2_ARC_ATOMIC_EXT)
- 
