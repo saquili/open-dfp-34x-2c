@@ -340,3 +340,14 @@ link's, 00:00:5e:00:53:01 of the documentation range of RFC 7042 in the test,
 with the locally administered bit set, as onu-apply makes it. It names no unit.
 This entry names it too.
 """
+
+[[allow]]
+gate = "forbidden-words"
+rules = ["dev-kit"]
+paths = ["br2-external/configs/toolchain_defconfig", "tools/provenance/allowlist.toml"]
+match = 'BR2_SDK_PREFIX'
+reason = """
+The build system's option that names the tarball of its "make sdk" target and
+the one directory in it, which a release of the toolchain workflow carries;
+the option's name is the build system's.
+"""
