@@ -21,7 +21,7 @@ Usage
 
 Run inside the repository. It writes ``DIR/linux-<release>-<tree>.tar.xz`` and
 prints the path. ``<release>`` is the kernel's version as ``linux/Makefile``
-gives it (``6.18.48``), and ``<tree>`` is the first twelve digits of the id of
+gives it (``6.18.57``), and ``<tree>`` is the first twelve digits of the id of
 the ``linux/`` tree in ``REV``, the commit to archive (default ``HEAD``). ``DIR``
 defaults to ``build/kernel``.
 
@@ -48,8 +48,8 @@ Why from the commit
 Cost
 ====
 
-For the tree at the time of writing (Linux 6.18.48 with our series, tree
-``7347e4e52873``) the archive is 158 MB, and on an 18-core machine::
+For the tree at the time of writing (Linux 6.18 with our series) the
+archive is about 158 MB, and on an 18-core machine::
 
     time tools/kernel-archive/kernel-archive -o /tmp/kernel
 
