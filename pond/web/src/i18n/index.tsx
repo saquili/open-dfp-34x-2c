@@ -21,6 +21,8 @@ function initial(): Lang {
   } catch {
     /* no storage: follow the browser */
   }
+  /* The demo speaks English to a first visitor, whatever the browser's language. */
+  if (import.meta.env.MODE === "demo") return "en";
   return navigator.language.toLowerCase().startsWith("pl") ? "pl" : "en";
 }
 

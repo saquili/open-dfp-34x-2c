@@ -50,9 +50,16 @@ let leases: LeaseInfo[] = [];
  * the internet page shows (PPPoE with IPv4, IPv6 and both, up and dialling,
  * a static address and one from DHCP, one place of the seven free), and a
  * person signed in already with a password of their own, for a look at the
- * internet page without a sign-in.
+ * internet page without a sign-in. The demo build (vite --mode demo) shows
+ * the same, with root's password the default one, admin, which its notice
+ * gives for the actions that ask for it.
  */
-const SCENARIO = typeof process === "undefined" ? undefined : process.env.POND_MOCK_SCENARIO;
+const SCENARIO =
+  import.meta.env?.MODE === "demo"
+    ? "demo"
+    : typeof process === "undefined"
+      ? undefined
+      : process.env.POND_MOCK_SCENARIO;
 
 /*
  * POND_MOCK_SCENARIO=stick: the stick as its software serves it today, with
@@ -78,52 +85,52 @@ const wanOf = (vlan: string) => `wan${FIBRE[vlan] ?? vlan}`;
 /* The devices of a big house, as they name themselves, or not. */
 const HOUSE = [
   "laptop",
-  "telefon",
+  "phone",
   null,
-  "tv-salon",
+  "tv-living-room",
   "iphone-1",
   "galaxy-s24",
-  "drukarka",
+  "printer",
   "ps5",
-  "chromecast-salon",
-  "kamera-garaz",
-  "kamera-ogrod",
-  "kamera-wejscie",
-  "termostat",
-  "odkurzacz",
+  "chromecast-living-room",
+  "garage-cam",
+  "garden-cam",
+  "entrance-cam",
+  "thermostat",
+  "vacuum",
   null,
-  "pralka",
-  "zmywarka",
+  "washer",
+  "dishwasher",
   "nas",
-  "sonos-kuchnia",
-  "sonos-salon",
-  "echo-sypialnia",
+  "sonos-kitchen",
+  "sonos-living-room",
+  "echo-bedroom",
   "tablet-2",
   "macbook-3",
   "rpi-homeassistant",
   "switch-console",
   null,
-  "tv-sypialnia",
-  "dekoder",
-  "brama-garazowa",
+  "tv-bedroom",
+  "set-top-box",
+  "garage-gate",
   "alarm",
-  "lodowka",
-  "piekarnik",
-  "rekuperator",
-  "pompa-ciepla",
-  "falownik",
+  "fridge",
+  "oven",
+  "ventilation",
+  "heat-pump",
+  "inverter",
   null,
-  "ladowarka-auto",
-  "zarowka-hol",
-  "zarowka-salon",
-  "gniazdko-biuro",
+  "car-charger",
+  "bulb-hall",
+  "bulb-living-room",
+  "plug-office",
   "watch-1",
   "kindle",
   "nvr",
-  "kamera-ptz",
+  "ptz-cam",
   null,
-  "serwer-biuro",
-  "drukarka-biuro",
+  "office-server",
+  "office-printer",
   "voip",
 ] as const satisfies readonly (string | null)[];
 /* A connection of @kind on VLAN @vlan, as it stands before it has an address. */
@@ -152,7 +159,7 @@ function ipoe(id: number, kind: IpoeInfo["kind"], vlan: string): IpoeInfo {
     lease: null,
   };
 }
-if (SCENARIO === "sessions") {
+if (SCENARIO === "sessions" || SCENARIO === "demo") {
   const one = (id: number, family: SessionInfo["family"], up: boolean): SessionInfo => ({
     id,
     user: family === "ipv6" ? `user${id}@example.net/ipv6` : `user${id}@example.net`,
@@ -238,7 +245,7 @@ if (SCENARIO === "sessions") {
   settings.lans = [
     {
       id: 1,
-      name: "Dom",
+      name: "Home",
       conn: "pppoe:4",
       vlan: "",
       address: "192.168.1.1/24",
@@ -251,7 +258,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 2,
-      name: "Biuro",
+      name: "Office",
       conn: "ipoe:2",
       vlan: "20",
       address: "192.168.2.1/24",
@@ -264,7 +271,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 3,
-      name: "Goście",
+      name: "Guests",
       conn: "pppoe:4",
       vlan: "30",
       address: "192.168.3.1/24",
@@ -277,9 +284,9 @@ if (SCENARIO === "sessions") {
     },
   ];
   /*
-   * The devices of Biuro, whose connection has a prefix, have IPv6 in its
+   * The devices of Office, whose connection has a prefix, have IPv6 in its
    * /64 network 1: one made of their MAC (EUI-64), and most a temporary one
-   * besides; Dom's connection has none yet.
+   * besides; Home's connection has none yet.
    */
   leases = HOUSE.map((name, i) => {
     const lan = i < 38 ? 1 : i < 42 ? 3 : 2;
@@ -309,9 +316,9 @@ if (SCENARIO === "sessions") {
    * that is off now.
    */
   settings.fixed = [
-    { lan: 1, mac: "00:00:5e:00:53:16", ip: "192.168.1.113", name: "Drukarka w biurze" },
+    { lan: 1, mac: "00:00:5e:00:53:16", ip: "192.168.1.113", name: "Office printer" },
     { lan: 1, mac: "00:00:5e:00:53:21", ip: "192.168.1.10", name: "" },
-    { lan: 1, mac: "00:00:5e:00:53:80", ip: "192.168.1.20", name: "serwer-zapas" },
+    { lan: 1, mac: "00:00:5e:00:53:80", ip: "192.168.1.20", name: "backup-server" },
     { lan: 1, mac: "00:00:5e:00:53:17", ip: "192.168.1.114", name: "" },
     { lan: 1, mac: "00:00:5e:00:53:19", ip: "192.168.1.119", name: "" },
     { lan: 2, mac: "00:00:5e:00:53:3d", ip: "192.168.2.107", name: "" },
@@ -319,13 +326,13 @@ if (SCENARIO === "sessions") {
   ];
   /*
    * Ports forwarded: the office server's HTTPS through DHCP, the console's
-   * game port and, turned off, the garage camera through session 4; Biuro's
+   * game port and, turned off, the garage camera through session 4; Office's
    * NVR is DHCP's DMZ. Each device has its fixed address above.
    */
   settings.forwards = [
     {
       id: 1,
-      name: "Serwer WWW",
+      name: "Web server",
       conn: "ipoe:2",
       proto: "tcp",
       ext_from: 443,
@@ -337,7 +344,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 2,
-      name: "Konsola",
+      name: "Game console",
       conn: "pppoe:4",
       proto: "udp",
       ext_from: 3074,
@@ -349,7 +356,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 3,
-      name: "Kamera w garażu",
+      name: "Garage camera",
       conn: "pppoe:4",
       proto: "tcp",
       ext_from: 8080,
@@ -362,14 +369,14 @@ if (SCENARIO === "sessions") {
   ];
   settings.dmz = [{ conn: "ipoe:2", lan: 2, mac: "00:00:5e:00:53:3a" }];
   /*
-   * The firewall: Biuro may print on the printer in Dom; no network sends
+   * The firewall: Office may print on the printer in Home; no network sends
    * mail out by SMTP; the NAS answers HTTPS from the internet by IPv6; and,
    * turned off, the garage camera kept from the internet.
    */
   settings.rules = [
     {
       id: 1,
-      name: "Drukarka dla Biura",
+      name: "Printer for Office",
       action: "allow",
       from: "lan:2",
       to: "dev:1:00:00:5e:00:53:16",
@@ -380,7 +387,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 2,
-      name: "Bez poczty SMTP",
+      name: "No outgoing SMTP",
       action: "block",
       from: "lans",
       to: "internet",
@@ -391,7 +398,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 3,
-      name: "NAS po IPv6",
+      name: "NAS over IPv6",
       action: "allow",
       from: "internet",
       to: "dev:1:00:00:5e:00:53:21",
@@ -402,7 +409,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 4,
-      name: "Kamera bez chmury",
+      name: "Camera without cloud",
       action: "block",
       from: "dev:1:00:00:5e:00:53:19",
       to: "internet",
@@ -413,7 +420,7 @@ if (SCENARIO === "sessions") {
     },
   ];
   settings.fw = { out: "allow", between: "block" };
-  rootSecret = "scenario-only";
+  rootSecret = SCENARIO === "demo" ? "admin" : "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
 }
 const ticks = structuredClone(

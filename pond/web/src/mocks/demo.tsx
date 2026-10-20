@@ -11,8 +11,8 @@ import { useI18n } from "../i18n";
 import "./browser";
 
 const WORDS = {
-  en: "Demo: a stick simulated in your browser. Sign in as root with the password admin, then choose a new one; nothing leaves the page, and a reload starts over.",
-  pl: "Demo: stick symulowany w przeglądarce. Zaloguj się jako root hasłem admin, potem ustaw nowe; nic nie wychodzi poza stronę, a odświeżenie zaczyna od nowa.",
+  en: "Demo: a stick simulated in your browser, with an example setup and root signed in. Where the panel asks for root's password, it is admin. Nothing leaves the page, and a reload starts over.",
+  pl: "Demo: stick symulowany w przeglądarce, z przykładowymi ustawieniami i zalogowanym rootem. Gdy panel pyta o hasło roota, to admin. Nic nie wychodzi poza stronę, a odświeżenie zaczyna od nowa.",
 };
 
 export function DemoNotice() {
