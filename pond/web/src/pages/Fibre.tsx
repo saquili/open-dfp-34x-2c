@@ -89,12 +89,12 @@ function LightScale({ rx }: { rx: number | null }) {
       <div className="relative h-0">
         {rx != null && (
           <div
-            className="absolute -top-3 size-4 -translate-x-1/2 rounded-full border-2 border-base-100 bg-primary shadow"
+            className="absolute -top-3 size-4 -translate-x-1/2 rounded-full border-2 border-base-100 bg-primary"
             style={{ left: `${at(Math.min(hi, Math.max(lo, rx)))}%` }}
           />
         )}
       </div>
-      <div className="relative mt-1 h-4 text-[11px] text-base-content/55">
+      <div className="relative mt-1 h-4 text-xs text-base-content/70">
         {[RX_MIN_DBM, RX_WEAK_DBM, RX_MAX_DBM].map((v) => (
           <span key={v} className="absolute -translate-x-1/2" style={{ left: `${at(v)}%` }}>
             {decimal(v, 0, lang)}
@@ -118,8 +118,8 @@ const MARK: Record<RegState, string> = {
   done: "bg-success text-success-content",
   now: "bg-warning text-warning-content animate-pulse",
   fail: "bg-error text-error-content",
-  wait: "bg-base-200 text-base-content/60 ring-1 ring-base-300",
-  off: "bg-base-200 text-base-content/50 ring-1 ring-base-300",
+  wait: "bg-base-200 text-base-content/70 ring-1 ring-base-300",
+  off: "bg-base-200 text-base-content/70 ring-1 ring-base-300",
 };
 
 /*
@@ -234,7 +234,7 @@ function Registration() {
     <Card
       title={t("fibre.regTitle")}
       action={
-        <span className="hidden text-xs text-base-content/55 sm:inline">{t("fibre.regHint")}</span>
+        <span className="hidden text-xs text-base-content/70 sm:inline">{t("fibre.regHint")}</span>
       }
     >
       <ol className="grid gap-4 lg:grid-cols-7 lg:gap-2">
@@ -272,11 +272,11 @@ function Registration() {
                   <span className="text-sm font-medium">{t(STEP[id].title)}</span>
                 )}
                 {detail(id, at).map((line) => (
-                  <span key={line} className="tabular truncate text-xs text-base-content/65">
+                  <span key={line} className="tabular truncate text-xs text-base-content/70">
                     {line}
                   </span>
                 ))}
-                <span className="text-xs text-base-content/55 lg:hidden">{t(STEP[id].hint)}</span>
+                <span className="text-xs text-base-content/70 lg:hidden">{t(STEP[id].hint)}</span>
               </span>
             </li>
           );
@@ -344,7 +344,7 @@ function LineState() {
               ],
             ]}
           />
-          <p className="text-xs text-base-content/60">{t("fibre.onuIdHint")}</p>
+          <p className="text-xs text-base-content/70">{t("fibre.onuIdHint")}</p>
         </Card>
 
         <Card
@@ -357,7 +357,7 @@ function LineState() {
             tone={LIGHT_TONE[f.quality]}
           />
           <LightScale rx={f.rxDbm} />
-          <p className="text-xs text-base-content/60">
+          <p className="text-xs text-base-content/70">
             {t("fibre.rxRange", { min: dbmText(RX_MIN_DBM, lang), max: dbmText(RX_MAX_DBM, lang) })}
           </p>
           <div className="grid grid-cols-2 gap-3">
@@ -408,7 +408,7 @@ function LineState() {
                   sub={t("fibre.crcErrors", { n: integer(c.bwmap_crc_errors, lang) })}
                 />
               </div>
-              <p className="text-xs text-base-content/60">{t("fibre.sinceStart")}</p>
+              <p className="text-xs text-base-content/70">{t("fibre.sinceStart")}</p>
             </>
           ) : (
             <p className="text-sm">{t("state.noPon")}</p>
@@ -937,7 +937,8 @@ function ServiceList({ view }: { view: ServiceTab }) {
             <Filter value={q} onChange={setQ} placeholder={t("fibre.filterVlan")} />
           </div>
           {omci.data?.truncated && (
-            <div role="alert" className="alert alert-warning alert-soft text-sm">
+            <div role="alert" className="alert alert-warning alert-soft text-sm text-base-content">
+              <CircleAlert className="size-4 shrink-0 text-warning" aria-hidden />
               {t("fibre.truncated")}
             </div>
           )}

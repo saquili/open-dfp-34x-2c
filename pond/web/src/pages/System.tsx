@@ -13,7 +13,18 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Download, HardDrive, KeyRound, LogOut, Play, RotateCw, Undo2, Upload } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  Download,
+  HardDrive,
+  KeyRound,
+  LogOut,
+  Play,
+  RotateCw,
+  Undo2,
+  Upload,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useSignOut } from "../api/auth";
@@ -159,7 +170,7 @@ function FlashMap({ parts }: { parts: PartUse[] }) {
                   className={`mr-2 inline-block size-2.5 rounded-sm ${PART_COLOR[p.name] ?? "bg-base-300"}`}
                 />
                 {t(PARTITION[p.name] ?? "system.unknown")}
-                <span className="ml-1 font-mono text-xs text-base-content/50">{p.name}</span>
+                <span className="ml-1 font-mono text-xs text-base-content/70">{p.name}</span>
               </td>
               <td className="tabular text-right">{bytes(p.size, lang)}</td>
               <td className="tabular text-right">
@@ -440,7 +451,7 @@ function Updates() {
                     ))}
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-x-4 text-xs text-base-content/60">
+                <div className="flex flex-wrap gap-x-4 text-xs text-base-content/70">
                   {b.time != null && (
                     <span>{t("system.builtOn", { date: day(b.time, lang) })}</span>
                   )}
@@ -456,7 +467,8 @@ function Updates() {
         </ul>
 
         {f?.trial != null && (
-          <p className="text-sm text-warning">
+          <p className="flex items-start gap-2 text-sm">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
             {t("system.trialNow", { letter: bankLetter(f.trial) })}
           </p>
         )}
@@ -468,7 +480,7 @@ function Updates() {
         {f && target === null && (
           <p className="text-sm text-base-content/70">{t("system.fromMemory")}</p>
         )}
-        {elsewhere && <p className="text-sm text-info">{t("system.busy")}</p>}
+        {elsewhere && <p className="text-sm">{t("system.busy")}</p>}
 
         {phase === "sending" && (
           <Meter share={share} label={t("system.sending", { percent: percent(share, lang) })} />
@@ -480,7 +492,8 @@ function Updates() {
           </p>
         )}
         {phase === "done" && target !== null && (
-          <p className="text-sm text-success">
+          <p className="flex items-start gap-2 text-sm">
+            <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden />
             {t("system.written", { letter: bankLetter(target), version: result })}
           </p>
         )}
@@ -488,11 +501,11 @@ function Updates() {
           <p className="text-sm text-error">{t("system.notWritten", { reason: result })}</p>
         )}
         {tryBank.isSuccess && tryBank.variables?.bank !== undefined && (
-          <p className="text-sm text-info">
+          <p className="text-sm">
             {t("system.switching", { letter: bankLetter(tryBank.variables.bank) })}
           </p>
         )}
-        {returnBank.isSuccess && <p className="text-sm text-info">{t("system.returning")}</p>}
+        {returnBank.isSuccess && <p className="text-sm">{t("system.returning")}</p>}
         {returnBank.isError && (
           <p className="text-sm text-error">
             {returnBank.error instanceof ApiError && returnBank.error.status === 403
@@ -508,7 +521,12 @@ function Updates() {
             {t("system.copying")}
           </p>
         )}
-        {copy === "done" && <p className="text-sm text-success">{t("system.copied")}</p>}
+        {copy === "done" && (
+          <p className="flex items-start gap-2 text-sm">
+            <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden />
+            {t("system.copied")}
+          </p>
+        )}
         {copy !== "idle" && copy !== "busy" && copy !== "done" && (
           <p className="text-sm text-error">{t("system.notCopied", { reason: copy })}</p>
         )}
@@ -542,7 +560,7 @@ function Updates() {
           />
           <span>
             <span className="text-sm">{t("system.startAfter")}</span>
-            <span className="block text-xs text-base-content/60">{t("system.startAfterHint")}</span>
+            <span className="block text-xs text-base-content/70">{t("system.startAfterHint")}</span>
           </span>
         </label>
         <label className="grid gap-1">
@@ -554,7 +572,7 @@ function Updates() {
             value={password}
             onChange={(e) => setPassword(e.currentTarget.value)}
           />
-          <span className="text-xs text-base-content/60">{t("system.passwordHint")}</span>
+          <span className="text-xs text-base-content/70">{t("system.passwordHint")}</span>
         </label>
         <div className="flex flex-wrap gap-2">
           <button
@@ -575,7 +593,7 @@ function Updates() {
           {phase === "done" && target !== null && !startAfter && (
             <button
               type="button"
-              className="btn btn-sm btn-success"
+              className="btn btn-sm btn-primary"
               disabled={!password || tryBank.isPending || tryBank.isSuccess}
               onClick={() => start(target)}
             >
@@ -610,23 +628,24 @@ function Updates() {
           {shipped !== null && (
             <button
               type="button"
-              className="btn btn-sm btn-outline btn-warning"
+              className="btn btn-sm btn-outline"
               disabled={!password || returnBank.isPending || returnBank.isSuccess || elsewhere}
               onClick={() => goBack(shipped)}
             >
-              <Undo2 className="size-4" />
+              <Undo2 className="size-4 text-warning" />
               {t("system.returnTo", { letter: bankLetter(shipped) })}
             </button>
           )}
         </div>
-        <p className="text-xs text-base-content/60">{t("system.copyFlashHint")}</p>
+        <p className="text-xs text-base-content/70">{t("system.copyFlashHint")}</p>
         {target !== null && f && overShipped(f, target) ? (
-          <p className="text-xs text-warning">
+          <p className="flex items-start gap-1.5 text-xs">
+            <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
             {t("system.uploadHintShipped", { letter: bankLetter(target) })}
           </p>
         ) : (
           target !== null && (
-            <p className="text-xs text-base-content/60">
+            <p className="text-xs text-base-content/70">
               {t("system.uploadHint", { letter: bankLetter(target) })}
             </p>
           )
@@ -722,7 +741,7 @@ function Certificate() {
           cert && [t("system.certificateUntil"), day(Date.parse(cert.not_after) / 1000, lang)],
         ]}
       />
-      {cert && <p className="text-xs text-base-content/60">{t("system.certificateHint")}</p>}
+      {cert && <p className="text-xs text-base-content/70">{t("system.certificateHint")}</p>}
     </>
   );
 }
@@ -739,7 +758,7 @@ function ClockCard() {
   if (!c)
     return (
       <Card title={t("system.clock")}>
-        <p className="text-sm text-base-content/60">–</p>
+        <p className="text-sm text-base-content/70">–</p>
       </Card>
     );
   const [state, tone] = clockState(c);
@@ -795,7 +814,7 @@ function ClockCard() {
           ],
         ]}
       />
-      <p className="text-xs text-base-content/60">{t("system.clockHint")}</p>
+      <p className="text-xs text-base-content/70">{t("system.clockHint")}</p>
     </Card>
   );
 }
@@ -857,7 +876,7 @@ function SettingsTab() {
         {live?.hostname != null ? (
           <HostnameForm name={live.hostname} />
         ) : (
-          <p className="text-xs text-base-content/60">{t("system.hostnameUnavailable")}</p>
+          <p className="text-xs text-base-content/70">{t("system.hostnameUnavailable")}</p>
         )}
       </Card>
 
@@ -875,7 +894,7 @@ function SettingsTab() {
             {t("nav.signOut")}
           </button>
         </div>
-        <p className="text-xs text-base-content/60">{t("system.sessionsHint")}</p>
+        <p className="text-xs text-base-content/70">{t("system.sessionsHint")}</p>
       </Card>
 
       <Card title={t("system.maintenance")}>
@@ -910,8 +929,8 @@ function SettingsTab() {
             {t("system.restart")}
           </button>
         </div>
-        <p className="text-xs text-base-content/60">{t("system.reportHint")}</p>
-        {restart.isSuccess && <p className="text-sm text-info">{t("system.restarting")}</p>}
+        <p className="text-xs text-base-content/70">{t("system.reportHint")}</p>
+        {restart.isSuccess && <p className="text-sm">{t("system.restarting")}</p>}
       </Card>
     </div>
   );

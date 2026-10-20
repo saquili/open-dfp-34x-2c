@@ -167,7 +167,7 @@ export function ChangePassword({ forced }: { forced: boolean }) {
             {errors[name] && <p className="mt-1 text-xs text-error">{errors[name]?.message}</p>}
           </div>
         ))}
-        <p className="text-xs text-base-content/60">{t("auth.rules")}</p>
+        <p className="text-xs text-base-content/70">{t("auth.rules")}</p>
         {failed && <p className="text-sm text-error">{failed}</p>}
         <button type="submit" className="btn btn-primary" disabled={change.isPending}>
           {change.isPending && <span className="loading loading-spinner loading-sm" />}

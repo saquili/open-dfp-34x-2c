@@ -102,7 +102,7 @@ function DefaultsBar({ d, onEdit }: { d: FwDefaults; onEdit: () => void }) {
       <span className="font-semibold">{t("fw.defaults")}</span>
       <span>
         <span className="text-base-content/70">{t("fw.in")}:</span> {t("fw.blocked")}{" "}
-        <span className="text-base-content/60">{t("fw.inBut")}</span>
+        <span className="text-base-content/70">{t("fw.inBut")}</span>
       </span>
       <span>
         <span className="text-base-content/70">{t("fw.out")}:</span> {act(d.out)}
@@ -501,13 +501,13 @@ function RuleCard({
   };
   return (
     <div
-      className={`${CARD} ${editing ? "border-primary ring-1 ring-primary" : "border-base-300"} ${r.on ? "" : "text-base-content/60"}`}
+      className={`${CARD} ${editing ? "border-primary ring-1 ring-primary" : "border-base-300"} ${r.on ? "" : "text-base-content/70"}`}
     >
       {/* Its number, between the arrows that move it up and down the order. */}
       <div className={`-my-2 -ml-2 flex flex-col items-center ${AT.caret}`}>
         <button
           type="button"
-          className="btn btn-ghost btn-xs btn-square h-5 min-h-5 text-base-content/60"
+          className="btn btn-ghost btn-xs btn-square h-5 min-h-5 text-base-content/70"
           disabled={n === 1 || change.isPending}
           onClick={() => move("up")}
           aria-label={t("fw.up", { n })}
@@ -518,7 +518,7 @@ function RuleCard({
         <span className="text-xs font-semibold tabular-nums">{n}</span>
         <button
           type="button"
-          className="btn btn-ghost btn-xs btn-square h-5 min-h-5 text-base-content/60"
+          className="btn btn-ghost btn-xs btn-square h-5 min-h-5 text-base-content/70"
           disabled={last || change.isPending}
           onClick={() => move("down")}
           aria-label={t("fw.down", { n })}

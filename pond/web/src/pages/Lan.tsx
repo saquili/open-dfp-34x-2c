@@ -733,7 +733,7 @@ function DeviceTable({
                 ) : (
                   <span className="size-3.5 shrink-0" />
                 )}
-                <span className={`truncate ${d.name ? "" : "text-base-content/60"}`}>{name}</span>
+                <span className={`truncate ${d.name ? "" : "text-base-content/70"}`}>{name}</span>
               </span>
               <span className="font-mono text-xs text-base-content/70 @max-4xl:hidden">
                 {d.mac}
@@ -741,7 +741,7 @@ function DeviceTable({
               <span className="font-mono @max-4xl:col-start-2 @max-4xl:row-start-1 @max-4xl:text-right">
                 {d.fixed?.ip ?? d.now}
                 {moved && (
-                  <span className="block font-sans text-xs text-base-content/60">
+                  <span className="block font-sans text-xs text-base-content/70">
                     {t("lan.now", { ip: d.now ?? "" })}
                   </span>
                 )}
@@ -749,7 +749,7 @@ function DeviceTable({
                   <span className="block font-sans text-xs">
                     <button
                       type="button"
-                      className="link link-hover text-base-content/60"
+                      className="link link-hover text-base-content/70"
                       aria-expanded={v6}
                       aria-controls={`v6-${key}`}
                       onClick={() => toggle(key)}
@@ -761,7 +761,7 @@ function DeviceTable({
               </span>
               <span className="truncate @max-4xl:hidden">{netOf(d.lan)}</span>
               <span
-                className={`whitespace-nowrap @max-4xl:hidden ${d.fixed && !d.now ? "text-base-content/60" : ""}`}
+                className={`whitespace-nowrap @max-4xl:hidden ${d.fixed && !d.now ? "text-base-content/70" : ""}`}
               >
                 {lease}
               </span>

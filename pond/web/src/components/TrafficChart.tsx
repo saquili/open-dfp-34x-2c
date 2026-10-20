@@ -115,21 +115,21 @@ export function TrafficChart({
           )}
         </svg>
       </div>
-      <div className="pointer-events-none absolute top-0 left-1 text-[11px] text-base-content/55">
+      <div className="pointer-events-none absolute top-0 left-1 text-xs text-base-content/70">
         {bitrate(scale, lang)}
       </div>
-      <div className="pointer-events-none flex justify-between text-[11px] text-base-content/55">
+      <div className="pointer-events-none flex justify-between text-xs text-base-content/70">
         <span>−10 min</span>
         <span>{t("overview.lastMinutes")}</span>
         <span>0</span>
       </div>
       {point && (
-        <div className="pointer-events-none absolute top-1 right-1 rounded-box border border-base-300 bg-base-100 px-2 py-1 text-xs shadow-sm">
-          <div className="tabular text-base-content/60">{clock(point.t, lang, true)}</div>
+        <div className="pointer-events-none absolute top-1 right-1 rounded-box border border-base-300 bg-base-100 px-2 py-1 text-xs">
+          <div className="tabular text-base-content/70">{clock(point.t, lang, true)}</div>
           <div className="tabular">
-            <span className="text-primary">↓ {bitrate(down(point), lang)}</span>
+            <span className="text-primary">↓</span> {bitrate(down(point), lang)}
             {"  "}
-            <span className="text-secondary">↑ {bitrate(up(point), lang)}</span>
+            <span className="text-secondary">↑</span> {bitrate(up(point), lang)}
           </div>
         </div>
       )}
@@ -218,10 +218,10 @@ export function Sparkline({
               )}
         </svg>
       </div>
-      <div className="pointer-events-none absolute top-0 left-1 text-[11px] text-base-content/55">
+      <div className="pointer-events-none absolute top-0 left-1 text-xs text-base-content/70">
         {format(max)}
       </div>
-      <div className="pointer-events-none flex justify-between text-[11px] text-base-content/55">
+      <div className="pointer-events-none flex justify-between text-xs text-base-content/70">
         <span>−10 min</span>
         <span>{format(min)}</span>
       </div>
@@ -238,7 +238,7 @@ export function HistoryNote() {
   const { t } = useI18n();
   return (
     <span
-      className="flex items-center gap-1 text-xs text-base-content/55"
+      className="flex items-center gap-1 text-xs text-base-content/70"
       title={t("common.historyHint")}
     >
       <Info className="size-3.5" />

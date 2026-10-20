@@ -50,7 +50,7 @@ export function Pager({
   const to = Math.min(total, from + size - 1);
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-base-300 pt-2 text-sm">
-      <span className="tabular text-base-content/65">{t("pager.range", { from, to, total })}</span>
+      <span className="tabular text-base-content/70">{t("pager.range", { from, to, total })}</span>
       <span className="flex items-center gap-2">
         <select
           className="select select-xs w-auto"

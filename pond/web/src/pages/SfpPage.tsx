@@ -12,7 +12,7 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, ExternalLink, RotateCcw, Undo2 } from "lucide-react";
+import { Check, CircleAlert, ExternalLink, Info, RotateCcw, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { useLaneChange, useMgmt, useMgmtChange, useSfpLane } from "../api/config";
@@ -130,9 +130,10 @@ function LaneCard() {
       {l?.trial ? (
         <div
           role="alert"
-          className="alert alert-warning alert-soft grid-flow-row gap-2 sm:grid-flow-col"
+          className="alert alert-warning alert-soft grid-flow-row gap-2 text-base-content sm:grid-flow-col"
         >
-          <span className="text-sm">
+          <span className="flex items-start gap-2 text-sm">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
             {t("sfp.trial", {
               mode: modeName(MODES.find((m) => m.id === l.trial?.mode)),
               left: left ?? "…",
@@ -141,7 +142,7 @@ function LaneCard() {
           <span className="flex gap-2">
             <button
               type="button"
-              className="btn btn-sm btn-success"
+              className="btn btn-sm btn-primary"
               onClick={() => change.mutate({ KEEP: "1" })}
             >
               <Check className="size-4" />
@@ -178,11 +179,11 @@ function LaneCard() {
                 <span className="grid min-w-0 flex-1 leading-tight">
                   <span className="text-sm font-medium">{t(m.label)}</span>
                   {m.standard ? (
-                    <span className="text-xs whitespace-nowrap text-base-content/60">
+                    <span className="text-xs whitespace-nowrap text-base-content/70">
                       {m.standard} · {t(m.an ? "sfp.withAn" : "sfp.withoutAn")}
                     </span>
                   ) : (
-                    <span className="text-xs text-base-content/60">{t(m.hint)}</span>
+                    <span className="text-xs text-base-content/70">{t(m.hint)}</span>
                   )}
                 </span>
                 {!m.tested && <Badge tone="neutral">{t("sfp.untested")}</Badge>}
@@ -269,12 +270,16 @@ function MgmtCard() {
           ]}
         />
       ) : (
-        <p className="text-xs text-base-content/60">{t("sfp.mgmtUnavailable")}</p>
+        <p className="text-xs text-base-content/70">{t("sfp.mgmtUnavailable")}</p>
       )}
 
       {pending ? (
-        <div role="alert" className="alert alert-info alert-soft grid-flow-row gap-2">
-          <span className="text-sm">
+        <div
+          role="alert"
+          className="alert alert-info alert-soft grid-flow-row gap-2 text-base-content"
+        >
+          <span className="flex items-start gap-2 text-sm">
+            <Info className="mt-0.5 size-4 shrink-0 text-info" aria-hidden />
             {onNew
               ? t("sfp.mgmtConfirmHere")
               : t("sfp.mgmtPending", { vlan: pending.vlan, address: pending.address })}
@@ -283,7 +288,7 @@ function MgmtCard() {
             {onNew ? (
               <button
                 type="button"
-                className="btn btn-sm btn-success"
+                className="btn btn-sm btn-primary"
                 onClick={() => change.mutate({ COMMIT: "1" })}
               >
                 <Check className="size-4" />

@@ -18,6 +18,8 @@ const WORDS = {
 export function DemoNotice() {
   const { lang } = useI18n();
   return (
-    <div className="bg-info px-4 py-1 text-center text-info-content text-sm">{WORDS[lang]}</div>
+    <div className="border-b border-info/40 bg-info/15 px-4 py-1 text-center text-sm text-base-content">
+      {WORDS[lang]}
+    </div>
   );
 }

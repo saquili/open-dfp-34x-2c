@@ -456,7 +456,7 @@ function DmzBar({ nets, onSet }: { nets: Net[]; onSet: (conn: string) => void })
                 <Mono>{d?.fixed?.ip ?? d?.now ?? ""}</Mono>
               </>
             ) : (
-              <span className="text-base-content/60">{t("nat.dmzOff")}</span>
+              <span className="text-base-content/70">{t("nat.dmzOff")}</span>
             )}
             <button
               type="button"
@@ -500,7 +500,7 @@ function ForwardCard({
   };
   return (
     <div
-      className={`${CARD} ${editing ? "border-primary ring-1 ring-primary" : "border-base-300"} ${f.on ? "" : "text-base-content/60"}`}
+      className={`${CARD} ${editing ? "border-primary ring-1 ring-primary" : "border-base-300"} ${f.on ? "" : "text-base-content/70"}`}
     >
       <span className={AT.caret} />
       <Cell at={AT.name}>

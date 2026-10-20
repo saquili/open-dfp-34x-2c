@@ -177,7 +177,7 @@ export function VlanField({
             id={`${id}-list`}
             role="listbox"
             aria-label={t("internet.vlan")}
-            className="absolute inset-x-0 top-full z-30 mt-1 max-h-72 overflow-auto rounded-field border border-base-300 bg-base-100 p-1 shadow-lg"
+            className="absolute inset-x-0 top-full z-30 mt-1 max-h-72 overflow-auto rounded-field border border-base-300 bg-base-100 p-1"
             onMouseDown={(e) => e.preventDefault()}
           >
             {items.map((it, i) => {

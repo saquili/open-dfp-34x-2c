@@ -244,7 +244,9 @@ function MenuSection({
               >
                 {t(p.key)}
                 {counts[p.to] != null && (
-                  <span className="tabular ml-auto text-xs opacity-60">{counts[p.to]}</span>
+                  <span className="tabular ml-auto text-xs text-base-content/70">
+                    {counts[p.to]}
+                  </span>
                 )}
               </Link>
             </li>
@@ -336,9 +338,9 @@ function TrialBar() {
   return (
     <div
       role="status"
-      className={`alert alert-soft mb-4 ${offline ? "alert-warning" : "alert-info"}`}
+      className={`alert alert-soft mb-4 text-base-content ${offline ? "alert-warning" : "alert-info"}`}
     >
-      <ShieldCheck className="size-5" />
+      <ShieldCheck className={`size-5 ${offline ? "text-warning" : "text-info"}`} />
       <span>{text}</span>
     </div>
   );
@@ -392,7 +394,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
           <div className="min-w-0 flex-1">
             <div className="truncate">
               <span className="font-semibold">{t("app.product")}</span>
-              {name && <span className="text-sm text-base-content/60"> · {name}</span>}
+              {name && <span className="text-sm text-base-content/70"> · {name}</span>}
             </div>
           </div>
           <LastAnswer now={now} />
@@ -407,7 +409,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
               <Globe className="size-4" />
               <span className="uppercase">{lang}</span>
             </button>
-            <ul className="menu dropdown-content z-30 mt-2 w-36 rounded-box border border-base-300 bg-base-100 p-1 shadow">
+            <ul className="menu dropdown-content z-30 mt-2 w-36 rounded-box border border-base-300 bg-base-100 p-1">
               <li>
                 <button type="button" onClick={() => setLang("pl")}>
                   Polski
@@ -424,7 +426,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
             <button type="button" className="btn btn-ghost btn-sm btn-square" aria-label="user">
               <KeyRound className="size-4" />
             </button>
-            <ul className="menu dropdown-content z-30 mt-2 w-52 rounded-box border border-base-300 bg-base-100 p-1 shadow">
+            <ul className="menu dropdown-content z-30 mt-2 w-52 rounded-box border border-base-300 bg-base-100 p-1">
               <li>
                 <Link to="/password">
                   <KeyRound className="size-4" />

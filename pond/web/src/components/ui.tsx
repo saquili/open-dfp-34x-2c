@@ -57,16 +57,24 @@ const TEXT: Record<Tone, string> = {
   neutral: "text-base-content/70",
 };
 
+/*
+ * A pill: tinted and outlined in its tone, its word in the main colour, after
+ * the state's dot when it has a state (panel-design.rst, State): the states'
+ * colours but red read under 4.5:1 as words against a card of the light theme.
+ */
 export function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return <span className={`badge badge-soft badge-sm font-medium ${BADGE[tone]}`}>{children}</span>;
+  return (
+    <span
+      className={`badge badge-soft badge-sm gap-1.5 font-medium text-base-content ${BADGE[tone]}`}
+    >
+      {tone !== "neutral" && <Dot tone={tone} />}
+      {children}
+    </span>
+  );
 }
 
 export function Dot({ tone }: { tone: Tone }) {
-  return <span className={`inline-block size-2 rounded-full bg-current ${TEXT[tone]}`} />;
-}
-
-export function toneText(tone: Tone) {
-  return TEXT[tone];
+  return <span className={`inline-block size-2 shrink-0 rounded-full bg-current ${TEXT[tone]}`} />;
 }
 
 export function Card({
@@ -186,7 +194,7 @@ export function Facts({ rows }: { rows: ([ReactNode, ReactNode] | false | null |
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: rows are static per render
           <div key={i} className="contents">
-            <dt className="text-base-content/65">{k}</dt>
+            <dt className="text-base-content/70">{k}</dt>
             <dd className="tabular min-w-0 break-words font-medium">{v}</dd>
           </div>
         );
@@ -195,7 +203,7 @@ export function Facts({ rows }: { rows: ([ReactNode, ReactNode] | false | null |
   );
 }
 
-/** A big figure with its unit and a caption. */
+/** A big figure with its unit and a caption; in a state, after the state's dot. */
 export function Figure({
   value,
   unit,
@@ -209,11 +217,16 @@ export function Figure({
 }) {
   return (
     <div>
-      <div className={`tabular text-3xl font-semibold leading-tight ${tone ? TEXT[tone] : ""}`}>
+      <div className="tabular flex items-baseline text-3xl font-semibold leading-tight">
+        {tone && (
+          <span className="mr-2 self-center">
+            <Dot tone={tone} />
+          </span>
+        )}
         {value}
-        {unit && <span className="ml-1 text-base font-medium text-base-content/60">{unit}</span>}
+        {unit && <span className="ml-1 text-base font-medium text-base-content/70">{unit}</span>}
       </div>
-      {caption && <div className="mt-0.5 text-xs text-base-content/65">{caption}</div>}
+      {caption && <div className="mt-0.5 text-xs text-base-content/70">{caption}</div>}
     </div>
   );
 }
@@ -309,13 +322,13 @@ export function Gauge({
       </svg>
       <figcaption className="-mt-3">
         <div className="text-sm font-medium">{label}</div>
-        {sub && <div className="text-xs text-base-content/60">{sub}</div>}
+        {sub && <div className="text-xs text-base-content/70">{sub}</div>}
       </figcaption>
     </figure>
   );
 }
 
-/** A small figure with its caption, for rows of figures. */
+/** A small figure with its caption, for rows of figures; in a state, after the state's dot. */
 export function Stat({
   label,
   value,
@@ -329,11 +342,12 @@ export function Stat({
 }) {
   return (
     <div className="min-w-0">
-      <div className="text-xs text-base-content/60">{label}</div>
-      <div className={`tabular truncate text-lg font-semibold ${tone ? TEXT[tone] : ""}`}>
-        {value}
+      <div className="text-xs text-base-content/70">{label}</div>
+      <div className="tabular flex items-center gap-2 text-lg font-semibold">
+        {tone && <Dot tone={tone} />}
+        <span className="truncate">{value}</span>
       </div>
-      {sub && <div className="truncate text-xs text-base-content/60">{sub}</div>}
+      {sub && <div className="truncate text-xs text-base-content/70">{sub}</div>}
     </div>
   );
 }

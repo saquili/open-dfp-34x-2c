@@ -173,7 +173,7 @@ function Node({
           key={l}
           x={box.x + 12}
           y={box.y + box.h - 16 - (lines.length - 1 - i) * 18}
-          className={`tabular fill-current text-[13px] ${i === 0 ? "opacity-80" : "opacity-60"}`}
+          className={`tabular fill-current text-[13px] ${i === 0 ? "opacity-80" : "opacity-70"}`}
         >
           {l}
         </text>
@@ -295,7 +295,7 @@ function Channel({
           className="tabular fill-current text-[12px] font-semibold"
         >
           {`${g.port_id} ${arrow}`}
-          <tspan className="font-normal opacity-60">{` ${gem.short(v)}`}</tspan>
+          <tspan className="font-normal opacity-70">{` ${gem.short(v)}`}</tspan>
         </text>
         <text x={box.x + 12} y={box.y + 32} className="tabular fill-current text-[11px] opacity-75">
           {`↓ ${bitrate(rate?.down ?? 0, lang)}`}

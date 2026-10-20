@@ -3,7 +3,7 @@
 
 /* A labelled input of a form, with its hint and its error. */
 
-import { Eye, EyeOff } from "lucide-react";
+import { Check, CircleAlert, Eye, EyeOff } from "lucide-react";
 import type { JSX } from "preact";
 import { forwardRef, type InputHTMLAttributes, type ReactNode, useState } from "react";
 import { type ApiError, OfflineError } from "../api/client";
@@ -48,7 +48,7 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretProps>(function Se
       />
       <button
         type="button"
-        className={`btn btn-ghost btn-circle text-base-content/60 ${small ? "btn-xs" : "btn-sm"}`}
+        className={`btn btn-ghost btn-circle text-base-content/70 ${small ? "btn-xs" : "btn-sm"}`}
         onClick={() => setShown((v) => !v)}
         aria-label={shown ? t("internet.hide") : t("internet.show")}
         title={shown ? t("internet.hide") : t("internet.show")}
@@ -114,7 +114,11 @@ export const Field = forwardRef<HTMLInputElement, Props>(function Field(
   );
 });
 
-/** The state line under a form: saving, saved, failed. */
+/*
+ * The state line under a form: saving, saved, failed. Saved and a warning
+ * say their state by an icon in its colour, their words in the main colour;
+ * a failure's words are red (panel-design.rst, State).
+ */
 export function SaveState({
   state,
   message,
@@ -125,13 +129,18 @@ export function SaveState({
   if (state === "idle" || !message) return null;
   const cls = {
     busy: "text-base-content/70",
-    ok: "text-success",
-    warn: "text-warning",
+    ok: "",
+    warn: "",
     bad: "text-error",
   }[state];
   return (
-    <span className={`flex items-center gap-2 text-sm ${cls}`}>
+    <span
+      role={state === "bad" ? "alert" : "status"}
+      className={`flex items-center gap-2 text-sm ${cls}`}
+    >
       {state === "busy" && <span className="loading loading-spinner loading-xs" />}
+      {state === "ok" && <Check className="size-4 shrink-0 text-success" aria-hidden />}
+      {state === "warn" && <CircleAlert className="size-4 shrink-0 text-warning" aria-hidden />}
       {message}
     </span>
   );

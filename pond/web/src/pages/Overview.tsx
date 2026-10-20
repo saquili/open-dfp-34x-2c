@@ -67,7 +67,7 @@ function Bar({ label, share, tone }: { label: string; share: number | null; tone
   }[tone];
   return (
     <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_2.75rem] items-center gap-2 text-xs">
-      <span className="text-base-content/65">{label}</span>
+      <span className="text-base-content/70">{label}</span>
       <span className="h-1.5 overflow-hidden rounded-full bg-base-300">
         <span
           className={`block h-full rounded-full transition-[width] duration-700 ${cls}`}
@@ -132,22 +132,22 @@ export function Overview() {
           >
             {s.configured ? (
               <dl className="grid grid-cols-[2.75rem_minmax(0,1fr)] items-baseline gap-x-2 gap-y-0.5">
-                <dt className="text-xs text-base-content/60">IPv4</dt>
+                <dt className="text-xs text-base-content/70">IPv4</dt>
                 <dd className="tabular truncate text-lg font-semibold" title={s.address ?? ""}>
                   {s.address ?? "–"}
                 </dd>
-                <dt className="text-xs text-base-content/60">IPv6</dt>
+                <dt className="text-xs text-base-content/70">IPv6</dt>
                 <dd className="tabular truncate text-sm font-semibold" title={s.prefix ?? ""}>
                   {s.prefix ?? "–"}
                 </dd>
-                <dd className="col-span-2 text-xs text-base-content/65">
+                <dd className="col-span-2 text-xs text-base-content/70">
                   {t("overview.handedTo")}
                 </dd>
               </dl>
             ) : (
               <div>
                 <div className="font-medium">{t("overview.passing")}</div>
-                <div className="text-xs text-base-content/65">{t("overview.passingHint")}</div>
+                <div className="text-xs text-base-content/70">{t("overview.passingHint")}</div>
               </div>
             )}
           </Tile>
@@ -188,7 +188,7 @@ export function Overview() {
 
         <Card
           title={t("diagram.title")}
-          action={<span className="text-xs text-base-content/55">{t("diagram.hint")}</span>}
+          action={<span className="text-xs text-base-content/70">{t("diagram.hint")}</span>}
         >
           <Diagram live={live} rate={now} />
         </Card>
@@ -199,13 +199,13 @@ export function Overview() {
             now &&
             (hardware ? (
               <span className="flex items-center gap-2">
-                <span className="hidden text-xs text-base-content/60 sm:inline">
+                <span className="hidden text-xs text-base-content/70 sm:inline">
                   {t("overview.inHardwareHint", { frames: integer(now.cpuFrames, lang) })}
                 </span>
                 <Badge tone="good">{t("overview.inHardware")}</Badge>
               </span>
             ) : (
-              <span className="text-xs text-base-content/60">
+              <span className="text-xs text-base-content/70">
                 {t("overview.viaCpu", { frames: integer(now.cpuFrames, lang) })}
               </span>
             ))
