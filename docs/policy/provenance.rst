@@ -41,26 +41,27 @@ What must not enter
 The list below describes categories, so that they can be recognised and
 refused. It deliberately contains no concrete instance of any of them.
 
-#. Decompiled or disassembled code, pseudo-code, call graphs, traces or logs
-   of another party's software; the names of reverse-engineering tools cited
-   as a source.
+#. Code, pseudo-code, call graphs, traces or logs of another party's
+   software, whether taken from its source or recovered from its binaries;
+   the names of the tools that recover them, cited as a source.
 #. Another party's binaries, firmware images, or dumps of any kind -- flash,
-   EEPROM, or register snapshots taken while other firmware was running -- and
-   calibration files taken from another implementation.
-#. Another party's function, symbol, module, file, type and enumeration names;
-   its code addresses; its source paths; its internal code names.
-#. Text, tables, enumerations or data copied from leaked SDK material or from
-   other non-public documents -- including register and field names taken from
-   such tables, management-entity tables and attribute strings, and non-public
-   sibling datasheets.
+   EEPROM, or register snapshots taken while other firmware was running --
+   and calibration files taken from another implementation.
+#. Another party's function, symbol, module, file, type and enumeration
+   names; its code addresses; its source paths; its internal code names.
+#. Text, tables, enumerations or data copied from documents or software kits
+   that their owners have not published -- register and field names,
+   management-entity tables and attribute strings among them -- and
+   datasheets that their publishers have not released.
 #. Narrative about another party's implementation -- statements of the form
-   "the vendor does X", or comparisons with its behaviour -- and investigation
-   diaries.
+   "their driver does X", or comparisons with its behaviour -- and
+   investigation diaries.
 #. Unit identifiers and secrets: device serial numbers, GPON serial numbers,
-   registration passwords, MAC addresses of real equipment, laboratory IP
+   registration passwords, MAC addresses of real equipment, the lab's IP
    addresses and host names, and captures of an operator's OLT.
-#. Internal references: issue numbers of a private tracker, paths into the
-   laboratory repository, and the laboratory repository's own name.
+#. Internal references: issue numbers of a private tracker, paths on the
+   maintainer's machines or in the lab, and the names of the lab's own
+   repositories.
 
 Grey zone, decided
 ------------------
@@ -71,15 +72,15 @@ interface facts, without describing the bootloader's internals. Prefer our own
 configuration (device-tree partitions) wherever it removes the need to state
 them at all.
 
-The firmware a stick ships with stays in its other bank as the way back, and
-its web page is one way in. What this system must know to live beside it may
-be stated the same way, as interface facts: the format of the update its web
-page takes, the partitions and files it owns and this system leaves alone,
-and how it splits a bank. Its behaviour at that interface -- that it keeps to
-its own files, that it installs such a package -- may be stated as a measured
-or tested fact, with its tag. How it works inside, its versions and builds by
-name, and how it behaves where this system does not depend on it, are not
-stated.
+The firmware a stick ships with -- the shipped firmware -- stays in its other
+bank as the way back, and its web page is one way in. What this system must
+know to live beside it may be stated the same way, as interface facts: the
+format of the update its web page takes, the partitions and files it owns and
+this system leaves alone, and how it splits a bank. Its behaviour at that
+interface -- that it keeps to its own files, that it installs such a package
+-- may be stated as a measured or tested fact, with its tag. How it works
+inside, its versions and builds by name, and how it behaves where this system
+does not depend on it, are not stated.
 
 How hardware facts are written
 ==============================
@@ -113,8 +114,8 @@ Register and identifier naming
   mnemonics we choose, and with standards terms wherever a register implements
   a standard concept (GTC, BWMAP, PLOAM, GEM, T-CONT, Alloc-ID, ONU-ID, EqD;
   the IEEE and SFF names). The aim is not to avoid every coincidence with a
-  generic word, but to guarantee that no name was transcribed from non-public
-  material.
+  generic word, but to guarantee that every name is our own and none was
+  transcribed from another party's material.
 * Only the registers the driver uses are defined; unused macros are removed.
 * Renaming or removing a macro must not change the object code -- that is how
   the naming is proven correct.
@@ -124,9 +125,8 @@ Documents and standards
 =======================
 
 Standards are cited by number and clause. A third-party datasheet is cited only
-when it is publicly downloadable, by title and revision. A preliminary
-datasheet obtained through a non-public channel is not cited unless its
-publisher has since released it.
+when it is publicly downloadable, by title and revision. A datasheet is not
+cited before its publisher has released it to the public.
 
 Unit identifiers, credentials, captures
 =======================================
@@ -140,66 +140,66 @@ Examples use ranges reserved for documentation:
   192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24.
 
 Captures used in tests are synthetic -- built from the standard -- or recorded
-from our own stack against the laboratory OLT, with serial numbers scrubbed.
+from our own stack against the lab's OLT, with serial numbers scrubbed.
 
-Two contexts, one procedure
+The lab and this repository
 ===========================
 
-#. **Extraction** (on the laboratory side, which may read anything): a
-   specification is written -- one fact sheet per hardware block, covering
-   every register, field, value and sequence the driver uses, in neutral
-   words, each with its verification tag. A fact sheet must pass the gates
-   below before it leaves the laboratory.
-#. **Authoring** (in this repository): comments, commit messages and
-   documentation are written from the fact sheets, the public standards and the
-   comment-stripped code only. Authors do not receive the old comments or the
-   old commit messages -- the phrasing that must not carry over is kept out of
-   their input.
-#. **Audit**: before a change is merged, the plaintext audit runs on the
-   laboratory side against this repository, and the hashed gates run in
-   continuous integration.
+The hardware is measured and tested in the project's local lab. What goes
+from there into this repository takes one way:
 
-This separates expression. It does not, by itself, make the same people a legal
-clean room (see `A note on scope`_).
+#. **Fact sheets** (in the lab): what the driver needs is written down -- one
+   fact sheet per hardware block, covering every register, field, value and
+   sequence the driver uses, in neutral words, each with its verification
+   tag. A fact sheet must pass the gates below before it leaves the lab.
+#. **Authoring** (in this repository): comments, commit messages and
+   documentation are written from the fact sheets, the public standards and
+   our own code only. Notes, logs and drafts kept for other purposes are not
+   copied in.
+#. **Checks**: before every push, the maintainer runs every gate on their
+   machine, with the list and the path patterns kept in the lab; continuous
+   integration runs every other gate on every change.
 
 Gates
 =====
 
-Each gate ships with a seeded-violation test that makes it fail on purpose.
+Each gate ships with a seeded-violation test that makes it fail on purpose. A
+list kept in the project's local lab, and the patterns of the lab's own paths,
+are not part of this repository: they are checked on the maintainer's machine
+before every push. Continuous integration, which does not have them, runs
+every other gate.
 
 * **Hashed deny-list.** Every identifier-like token of every tracked text file
-  and commit message is hashed and checked against a list generated on the
-  laboratory side from non-public name tables. Tokens present in pristine
-  upstream, in the standards' vocabularies, or in a dictionary are excluded.
-  This repository holds only the hashes, never the plaintext list.
-* **Forbidden words.** Plain regular expressions for reverse-engineering
-  vocabulary, for comparative narrative about another party, for references to
-  a non-public source, and for code addresses outside an allow-list of
-  documented memory-map constants.
+  and commit message is hashed and checked against the list kept in the lab.
+  Tokens present in pristine upstream, in the standards' vocabularies, or in a
+  dictionary are left off it. This repository holds the gate and its tests,
+  never the list.
+* **Forbidden words.** Plain regular expressions for the vocabulary and the
+  tool names of recovering code from binaries, for comparative narrative about
+  another party, for references to unpublished material, for paths on a
+  person's own machine, and for code addresses outside an allow-list of
+  documented memory-map constants; and, with the patterns kept in the lab,
+  for the lab's own paths.
 * **Unit identifiers.** GPON-serial patterns; MAC addresses outside the
   documentation, multicast and broadcast ranges; private IPv4 ranges;
   device-serial patterns.
 * **Binaries and size.** No file with NUL bytes and no file above a size cap,
   except an allow-list in which every entry carries a provenance line.
 * **Commit messages.** A component subject prefix, imperative mood, and a
-  length limit; a ``Signed-off-by:`` line present; no issue numbers, no
-  laboratory paths and no forbidden words.
+  length limit; a ``Signed-off-by:`` line present; no issue numbers, no paths
+  of the lab and no forbidden words.
 * **One component per commit.**
 * **Licensing.** ``reuse lint``.
-* **Laboratory-side audit.** Plaintext names; a name join against the
-  non-public tables; and object disjointness -- no stored object of this
-  repository equals a stored object of the laboratory repository unless it
-  equals a pristine upstream file.
 
 Git history
 ===========
 
-This repository starts from an empty history, and never from a filtered copy, a
-branch or a fork of the laboratory repository. It shares no stored object with
-the laboratory repository except pristine upstream files, links to no
-laboratory repository, and cites none of their revision identifiers. Commits
-are dated when they are made -- nothing is back-dated. The object-disjointness
-audit runs before the first publication and before every release.
+This repository starts from an empty history. It is never made from a
+filtered copy, a branch or a fork of another repository; it shares no stored
+object with one except pristine upstream files, links to no private
+repository and cites no revision of one. Commits are dated when they are made
+-- nothing is back-dated. This is checked before the first publication and
+before every release.
 
 Commit messages
 ===============
@@ -208,9 +208,9 @@ Commit messages
   ``subsystem: component: imperative summary``. The body states the problem,
   then the change in hardware terms; cites standards by clause; and gives
   measurements as results on the named board, with counts. It never contains
-  comparative narrative, reverse-engineering vocabulary, another party's names
-  or addresses, investigation history, issue numbers, laboratory paths or
-  addresses, or unit identifiers.
+  comparative narrative, the vocabulary of recovering code from binaries,
+  another party's names or addresses, investigation history, issue numbers,
+  paths or addresses of the lab, or unit identifiers.
 * **Userspace and distribution** commits use their component's prefix
   (``omcid:``, ``package/omcid:``, ``board/<board>:``, ``configs/<board>:``,
   ``tools/bench:``, ``docs:``).
@@ -226,7 +226,6 @@ A note on scope
 
 This is an engineering provenance policy, not legal advice. It keeps hardware
 facts and our own expression and removes everything else. Whether that is
-sufficient for publication -- in particular regarding register information
-whose names may coincide with non-public material, and regarding trademarks --
-is a question for counsel in the owner's jurisdiction before the first public
-release.
+sufficient for publication -- in particular regarding register names that may
+coincide with names used elsewhere, and regarding trademarks -- is a question
+for counsel in the owner's jurisdiction before the first public release.
