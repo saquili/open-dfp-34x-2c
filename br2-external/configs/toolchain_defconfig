@@ -34,6 +34,7 @@ BR2_OPTIMIZE_S=y
 # BR2_PIC_PIE is not set
 BR2_RELRO_PARTIAL=y
 
+
 # The kernel headers are those of this repository's kernel (linux/), from the
 # archive that tools/kernel-archive makes.
 BR2_KERNEL_HEADERS_CUSTOM_TARBALL=y
