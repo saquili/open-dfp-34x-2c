@@ -2399,13 +2399,24 @@ signal-detect and burst-merge registers that the bring-up writes.
        ``0xb7`` bits 7 and 5, read every 10 ms: set throughout each forced
        run, and in normal O5, under the test OLT's allocation of 15417 of the
        19440 bytes of every upstream frame, set in runs of up to 24 reads.
+   * - In O5, with both upstream PLOAM queues idle and no upstream FEC,
+       ``RTL9602C_GTC_US_IRQ_STAT`` (``0x705008``) reads ``0x000000a0``: bits 7
+       and 5 set, as bits 7 and 5 of ``RTL9602C_PLOAM_TX_CTRL`` read while the
+       normal and the urgent queue are empty (see "PLOAM transmit"), and bit 2
+       clear.
+     - M
+     - The ``us`` line of the ``gpon`` view, ``us    000000a0  fec 0``, on the
+       test OLT, which sets Use FEC in no allocation.
    * - What bits 8 and 9 detect where the optics' signal detect reaches the
        MAC, what bit 10 reports, and which events bits 5 and 7 of the enable
-       select, are not established. Bit 2 is taken to be a change of the
-       upstream FEC state (see "FEC and encryption").
+       select, are not established. Bits 7 and 5 are taken to follow the normal
+       and the urgent PLOAM queue being empty, from their idle value in the row
+       above; bit 2 a change of the upstream FEC state (see "FEC and
+       encryption").
      - I
-     - A burst keyed with the laser disabled (bit 9); an OLT that sets Use FEC
-       (bit 2).
+     - A burst keyed with the laser disabled (bit 9); the status read while a
+       message waits in each PLOAM queue (bits 7 and 5); an OLT that sets Use
+       FEC (bit 2).
    * - ``RTL9602C_GTC_US_CTRL`` (``0x705014``, locked): the driver sets
        ``RTL9602C_GTC_US_CTRL_IND_NORMAL_PLOAM`` (bit 10: a queued normal PLOAM
        message is flagged as waiting in the burst header's Ind field) and
@@ -2674,7 +2685,9 @@ A captured allocation is two words:
        ``RTL9602C_BWMAP_ALLOC_FRAME`` (bits 27:24, the downstream frame count
        modulo 16).
      - I
-     - An OLT granting FEC or DBRu, or several allocations in one burst.
+     - An OLT granting FEC or DBRu, or several allocations in one burst. The
+       test OLT asks for no FEC: a capture of 16 allocations read FEC 0 in
+       each.
    * - On Assign_ONU-ID the driver arms a capture of
        ``RTL9602C_GPON_BWM_O4_ENTRIES`` (16) allocations and reads it back when
        Ranging_Time arrives: the grants the ONU was ranged on, kept for the
@@ -3256,22 +3269,28 @@ into the next key, then into the active key.
        looked at. The driver writes none, and shows a grant's flag in the
        ``bwmap`` view (``RTL9602C_BWMAP_ALLOC_FEC``).
      - I
-     - An OLT that sets Use FEC: the ``us`` line of the ``gpon`` view reads
-       ``fec 1`` while the ``bwmap`` view shows the flag, the kernel log says
-       ``upstream FEC on`` once, and the OLT receives the ONU's bursts as
-       FEC-coded, with the FEC bit set, and keeps the ONU in O5.
+     - An OLT that sets Use FEC, which the test OLT does not (the row below):
+       the ``us`` line of the ``gpon`` view reads ``fec 1`` while the
+       ``bwmap`` view shows the flag, the kernel log says ``upstream FEC on``
+       once, and the OLT receives the ONU's bursts as FEC-coded, with the FEC
+       bit set, and keeps the ONU in O5.
    * - ``RTL9602C_GTC_US_IRQ_STAT`` (``0x705008``) holds the upstream
        conditions present now: ``RTL9602C_GTC_US_IRQ_FEC`` (bit 2) is set while
-       the bursts carry FEC. Bit 2 of ``RTL9602C_GTC_US_IRQ_LATCH`` latches its
-       changes, and ``RTL9602C_GTC_US_IRQ_EN_DEF`` (``0xa4``) enables them. The
-       driver reads bit 2 of the status as a level, from the interrupt thread
-       when the latch holds bit 2 and from the worker, logs each change once,
-       starting from off at each bring-up, and prints the word and the bit on
-       the ``us`` line of the ``gpon`` view.
-     - I
-     - An OLT that sets Use FEC, with the ``us`` line and the ``bwmap`` view's
-       FEC column read together, and the ``ploamlog`` ring's upstream latch
-       events at each change of the flag.
+       the bursts carry FEC, and clear while the OLT asks for none. Bit 2 of
+       ``RTL9602C_GTC_US_IRQ_LATCH`` latches its changes, and
+       ``RTL9602C_GTC_US_IRQ_EN_DEF`` (``0xa4``) enables them. The driver reads
+       bit 2 of the status as a level, from the interrupt thread when the latch
+       holds bit 2 and from the worker, logs each change once, starting from
+       off at each bring-up, and prints the word and the bit on the ``us`` line
+       of the ``gpon`` view.
+     - M, I
+     - M for FEC off: on the test OLT, which sets Use FEC in no allocation (a
+       ``bwmap`` capture of 16 read FEC 0 in each), the ``us`` line read
+       ``000000a0  fec 0`` in O5, and no ``upstream FEC`` line was logged in a
+       session that held about ten re-activations. I for FEC on: an OLT that
+       sets Use FEC, with the ``us`` line and the ``bwmap`` view's FEC column
+       read together, and the ``ploamlog`` ring's upstream latch events at
+       each change of the flag.
    * - Request_Key (identifier 13, directed, in O5) is answered with a new
        random key under the next key index (1 for the first): Encryption_Key
        messages (identifier 5) on the normal queue, octet 3 the index, octet 4
@@ -3577,9 +3596,10 @@ Known limitations
   encryption").
 - Upstream FEC is left to the MAC, which is taken to answer the OLT's Use FEC
   flag by itself: no setting that switches it has been found yet, and no OLT
-  tried has been seen to set the flag. The driver logs and shows the state the
-  MAC reports, and the PON class does not carry it. Downstream FEC has only its
-  detection threshold and its counters.
+  tried has been seen to set the flag, so only the state with FEC off has been
+  read. The driver logs and shows the state the MAC reports, and the PON class
+  does not carry it. Downstream FEC has only its detection threshold and its
+  counters.
 - The driver raises no signal-fail or signal-degrade alarm: it reports the BIP
   errors in bits, and the OMCI daemon judges both from them.
 - Before O4 the optics set a lower transmit power level only at a set point
@@ -3807,11 +3827,14 @@ Questions the code does not depend on
      - Ranging with other values and comparing the delay the OLT assigns.
    * - What the upstream signal-detect bits detect where the optics' signal
        detect reaches the MAC, what bit 10 reports, and what enable bits 5 and
-       7 select ("Upstream timing").
+       7 select; and whether status bits 7 and 5, which read 1 while both
+       upstream PLOAM queues are idle, follow the queues ("Upstream timing").
      - A board that brings the signal detect to the MAC, and a burst keyed with
-       the laser disabled.
+       the laser disabled; the ``us`` line read while a message waits in each
+       PLOAM queue.
    * - That bit 2 of ``RTL9602C_GTC_US_IRQ_STAT`` is the upstream FEC state
        and bit 2 of the upstream latch a change of it ("FEC and encryption").
+       It reads 0 while the OLT asks for no FEC.
      - An OLT that sets Use FEC, with the ``bwmap`` view's FEC column read
        beside the ``us`` line.
    * - What the capture fields other than the T-CONT, PLOAMu, valid, StartTime
