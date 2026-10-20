@@ -792,6 +792,17 @@ to an ACL rule.
        action drop`` without ``ip_proto`` was refused; the 97th rule was refused
        with ``all 96 ACL rules are in use``; ``vlan_id 0``, ``protocol 802.1AD``
        and ``vlan_ethtype ipv4`` were refused, each with its message.
+   * - A rule on a C-tag compares ``RTL9602C_ACL_TMPL_FIELD_CTAG``, which is
+       measured on frames whose only tag is a C-tag. Whether the field holds
+       the C-tag of a frame that has an S-tag in front of it, on the SFP and
+       PON ports, which recognise S-tags (see the *bridging* page, "The S-VLAN
+       block"), is not known: if it does, such a rule takes those frames too,
+       which a flower rule on ``protocol 802.1Q`` in software would not. The
+       OMCI daemon drops the single-tagged frames of a VID that its VLAN rules
+       discard with such rules.
+     - I
+     - 100 frames of S-VID 200 in front of C-VID 410 from the host side, under
+       a ``pass`` on ``vlan_id 410`` on ``sfp``, against the rule's count.
    * - Templates are shared: a rule takes the first template in use whose slots
        include each of its fields, in any slot (the rule masks the others), else
        the first unused template, whose eight slots it writes (the unused ones
@@ -3291,6 +3302,10 @@ Questions the code does not depend on
        and is cleared by writing ones ("Actions"; the interrupt is also a
        question on the *main* page).
      - A rule whose action raises the interrupt.
+   * - Whether ``RTL9602C_ACL_TMPL_FIELD_CTAG`` holds the C-tag of a frame
+       with an S-tag in front of it ("What the driver does with tc flower").
+     - Frames of S-VID 200 in front of C-VID 410 under a ``pass`` on VID 410,
+       against its count.
    * - Whether a field selector cuts its window from a frame that has no L4
        header ("The parser's field selectors").
      - A port-only rule compared against ARP frames with a chosen value at that
