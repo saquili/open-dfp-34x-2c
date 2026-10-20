@@ -129,21 +129,30 @@ What it cannot do
 * **A disabled ONU stays disabled across a restart only through the store.**
   The standard has the disabled state survive a power-off (P: ITU-T G.984.3
   clause 10.2.4 and clause 11.1.2). ``pon keep`` keeps the OLT's disable in
-  the configuration store, and the boot gives it to the PON driver before the
-  PON comes up, which then comes up in O7 with the laser off. Without a store
-  that can be written a restarted stick is enabled again, and a kernel that
-  cannot take the disable leaves the PON down; ``pon enable`` forgets the
-  disable by hand (I: not run on the board; ``onu-utils/README.rst``,
-  ``pon``, and ``rtl9602c-gpon.rst``, "Known limitations").
+  the configuration store (M: an injected disable left ``PON_DISABLED=1``
+  there, and the enable took it out; ``onu-utils/README.rst``, ``pon``,
+  2026-10-20). The boot gives it to the PON driver before the PON comes up
+  (I: a restart with the key in the store has not been run on the board),
+  and a PON brought up so comes up in O7 with the laser off (M: transmitted
+  power and bias 0, and no serial-number request answered;
+  ``rtl9602c-gpon.rst``, "The activation state machine", 2026-10-20).
+  A kernel that cannot take the disable leaves the PON down (T: the tests of
+  ``onu-apply``), and without a store that can be written a restarted stick
+  is enabled again (I: read from ``onu-apply``). ``pon enable`` forgets the
+  disable by hand (M: it took a disabled ONU to O5).
 * **Before the kernel's probe.** Between power-up and the driver's request of
   the line, the transmitter is as the loader and the module leave it; nothing
   here measured it (I: a trace of the line from power-up would settle it).
 * **After a watchdog reset at a lower power level.** The module stays at the
   lower level until it loses power: the one the OLT named or set, or, before
   the ONU was ranged, the one it took itself after serial-number requests went
-  unanswered. The ONU sends at a lower level only from O3 to O6; below O3 and
-  in O7 the driver asks for the normal level again (I: not run on the board;
-  ``gn25l95.rst``, "Known limitations").
+  unanswered (M: a warm restart from the lowest level without the restore;
+  ``gn25l95.rst``, "Transmit power levelling"). The ONU sends at a lower level
+  only from O3 to O6; below O3 and in O7 the driver asks for the normal level
+  again (M: a disable to O7 from either lower level, and TO1 after the ONU's
+  own step, each put the normal level back, 2026-10-20; I: the same on a
+  take-down or a loss of the downstream; ``gn25l95.rst``, "Known
+  limitations").
 * **Dying_Gasp** is sent before an orderly restart; whether the loss of supply
   makes the MAC send it is not known.
 
