@@ -360,13 +360,13 @@ Reaching the stick
 ==================
 
 * The console, on the UART (``board.rst``).
-* ssh, and the panel over HTTPS on port 443, on the stick's addresses on the
-  host side and nowhere else. By default that is one address, on VLAN 4094
-  of the host link, which the switch keeps off the PON both ways: the
-  address the shipped firmware's page had, or ``192.168.1.1/24``. A bench
-  may add one on the host link itself (``DATA_ADDRESS`` in
-  ``/etc/board.conf``, ``building.rst``), and each local network has its
-  gateway's address. Port 80 sends a browser to port 443.
+* ssh, and the panel over HTTPS on port 443, on the management VLAN and
+  nowhere else, in every mode, a router's too. By default that is one
+  address, on VLAN 4094 of the host link, which the switch keeps off the PON
+  both ways: the address the shipped firmware's page had, or
+  ``192.168.1.1/24``. A bench may add one on the host link itself
+  (``DATA_ADDRESS`` in ``/etc/board.conf``, ``building.rst``), which is a
+  management address too. Port 80 sends a browser to port 443.
 * The OLT, over OMCI, which provisions the data path and nothing else.
 
 There is one account to log in with, root, with one password for the console,
@@ -374,9 +374,26 @@ ssh and the panel. The first start takes the shipped firmware's administrator
 password for it; while it is the default, ``admin``, the panel allows nothing
 but a change and ssh takes keys only (ADR 0009). The panel runs
 as an account of its own, which no one logs in with (ADR 0011), and answers
-with a certificate it signs itself (ADR 0013). No packet filter guards the
-stick's own servers: the firewall (ADR 0019) judges what the stick forwards,
-and the servers keep off the PON side by the addresses they listen on.
+with a certificate it signs itself (ADR 0013).
+
+The stick talks to the host over its management VLAN, and takes from
+anywhere else only what is needed. A table of netfilter of its own, ``inet
+onu_guard`` (``onu-utils/README.rst``, ``onu-fw``), is in place from the
+boot on, before any server starts, with local networks or without: what
+comes in to the stick by any interface but the management VLAN's is
+dropped, but the answers to the stick's own traffic and what one of its
+programs takes there (the DHCP servers of the local networks and of the
+links to the router, the DHCP and DHCPv6 clients of its connections, the
+DHCPv6 server of a delegated prefix, neighbour discovery); and nothing is
+forwarded to the management VLAN or from it, which is no network the stick
+routes. A ping is answered on the management VLAN, and elsewhere only as
+``FW_PING_IN`` (from the operator's side, the sessions and the IPoE
+connections) and ``FW_PING_LANS`` (from the local networks and the links to
+the router) allow, which they do not by default; the firewall's page of the
+panel sets them. The firewall (ADR 0019) judges what the stick forwards
+between the networks and the internet. The guard is tested between network
+namespaces named as the stick's interfaces (T:
+``onu-utils/tests/test_onu_fw.sh``), not yet on a stick.
 
 What is kept where
 ==================

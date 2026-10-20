@@ -273,10 +273,14 @@ Not done yet
 * If the store of the settings cannot be read, root's password is not known:
   the panel refuses every sign-in, ssh takes keys only, and only the serial
   console, inside the stick, takes ``admin``.
-* No packet filter guards the stick's own servers. They listen only on the
-  stick's addresses on the router's side; whether a session's peer can reach
-  them has not been tested. The firewall judges what the stick routes, not
-  what is addressed to it.
+* **The guard of the stick's own servers is not tried on a stick yet.** ssh,
+  the panel and the stick's other programs answer on the management VLAN
+  alone, in every mode, a router's too: a table of netfilter of the stick's
+  own drops what comes in by any other interface but what one of its
+  programs takes there, and forwards nothing to the management VLAN or from
+  it (`onu-utils/README.rst <onu-utils/README.rst>`__, ``onu-fw``). It is
+  tested between network namespaces (T), not yet from a session's far end
+  on a stick.
 * The stick has no clock that runs while it is off. Until a time source
   answers (NTP or PTP from the host, or the OLT's time of day), its clock
   starts at 1970.

@@ -419,7 +419,12 @@ The boot script
     #. keeps that VLAN off the PON both ways: the switch sends the frames of
        it that come in on ``sfp`` to the CPU alone, and drops those that come
        in on ``pon`` (``onu-nl``), so the network behind the OLT neither sees
-       the management link nor reaches it;
+       the management link nor reaches it; and puts the guard of the stick's
+       own programs in place (``onu-apply guard``, ``onu-fw guard``), which
+       drops what comes in to the stick by any other interface but what one
+       of its programs takes there, and forwards nothing to the management
+       VLAN or from it, in every mode (``system.rst``, "Reaching the
+       stick");
     #. starts the servers on the addresses above and nowhere else, as
        procd's services: ``dropbear`` (keys, and root's password once one
        other than the default is set, with the ed25519 host key that
@@ -429,9 +434,8 @@ The boot script
        to send a browser there (ADR 0013), as an account of its own, ``pond``,
        with which no one logs in; ``onu-act`` does, as root, what pond asks of
        the stick from a fixed list, and ubusd's access list lets pond ask
-       nothing else (ADR 0011). Then ``timed``. No packet filter guards the
-       stick's own servers, so they keep off the PON side by where they
-       listen;
+       nothing else (ADR 0011). Then ``timed``. The guard keeps them to the
+       management VLAN;
     #. gives the PON driver the serial number and the PLOAM password through
        its devlink parameters (``onu-apply identity``, with ``onu-nl``) and
        brings the PON up;

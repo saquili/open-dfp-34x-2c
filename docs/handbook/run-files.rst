@@ -211,6 +211,12 @@ Private to one program or to onu-utils
        networks (NAT, the forwards, the DMZ and the firewall's defaults), as
        ``onu-apply`` put it in place, and the next one while it is written;
        gone with the table.
+   * - ``/run/onu-guard.conf``, ``/run/onu-guard.conf.new``
+     - The description of the guard of the stick's own programs, ``onu-fw``'s
+       table of netfilter that keeps them to the management VLAN, as
+       ``onu-apply`` put it in place, from the boot on, and the next one while
+       it is written; gone when ``onu-fw`` refused it, so that the next apply
+       tries again.
    * - ``/run/onu-fw-acl.conf``, ``/run/onu-fw-acl.conf.new``, ``/run/onu-fw.acl``
      - The firewall's rules as ``onu-fw acl`` puts them into the switch's ACL
        (ADR 0019), the next set while it is written, and what became of each

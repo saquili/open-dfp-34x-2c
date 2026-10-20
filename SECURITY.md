@@ -37,8 +37,9 @@ repository's release workflow and listed with their SHA-256 digests
   itself (ADR 0013); the one account takes the shipped firmware's
   administrator password at the first start, and while it is the default,
   `admin`, the panel allows nothing but a change and ssh takes keys only
-  (ADR 0009); no packet filter guards the stick's own servers, which listen
-  only on its addresses on the router's side, since the firewall judges what
-  the stick routes (`README.rst`, "Not done yet").
+  (ADR 0009). The stick's own servers are to answer on its management VLAN
+  alone, in every mode; a way to them from anywhere else is a finding. The
+  guard that keeps them so is not yet tried on a stick (`README.rst`, "Not
+  done yet").
 * Not in scope: the shipped firmware, the boot loader and the operator's
   equipment.
