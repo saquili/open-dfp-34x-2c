@@ -70,8 +70,10 @@ What it does
   firewall of 96 rules. The switch's engine carries the flows, and its ACL
   judges the firewall's rules (`ADR 0019
   <docs/adr/0019-the-firewalls-rules-are-the-switchs-acl.rst>`__).
-* **2.5 or 1 Gb/s to the router**, found by itself: 2500BASE-X, or 1000BASE-X
-  with or without auto-negotiation.
+* **2.5 or 1 Gb/s to the router**: 2500BASE-X or 1000BASE-X, each with or
+  without auto-negotiation. It finds 2500BASE-X, and 1000BASE-X with
+  auto-negotiation, by itself; any of the four can be set on the panel.
+  Finding 1000BASE-X without auto-negotiation by itself is not measured yet.
 * **Is managed from the router's side**: ssh, and a web panel with an API
   over HTTPS, on VLAN 4094 of the host link, at the address the shipped
   firmware's page had. A demo of the panel, with a mock stick, runs in a
@@ -148,9 +150,16 @@ were installed on a stick through the shipped firmware's page, by hand
        not these cases
    * - The host lane, 2.5 or 1 Gb/s, found by itself
      - 🟢 Tested
-     - 2500BASE-X, 1000BASE-X with and without auto-negotiation (2026-10-07);
-       the current image's link came up at 2500 Mb/s. On sticks whose host
-       identity page was changed (`Before you install`_)
+     - 2500BASE-X, and 1000BASE-X with auto-negotiation (2026-10-07); the
+       current image's link came up at 2500 Mb/s. 1000BASE-X without
+       auto-negotiation was not found on 2026-10-20; the driver's fix is not
+       measured yet. On sticks whose host identity page was changed (`Before
+       you install`_)
+   * - The host lane's mode set by hand: 2500BASE-X and 1000BASE-X, each
+       with and without auto-negotiation
+     - 🟡 Bench
+     - Each of the four against a host in the same mode: the link up and
+       traffic both ways (by hand, 2026-10-20)
    * - The management VLAN kept off the PON
      - 🟢 Tested
      - Both ways, also after a PPPoE session (2026-10-07, an earlier
