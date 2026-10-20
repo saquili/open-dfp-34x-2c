@@ -1857,10 +1857,11 @@ int prov_dmz_set(const char *val, char *err, size_t errcap)
  */
 static bool rule_end(const char *v, char out[64], char *err, size_t errcap)
 {
+	static const char allowed[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.:/-";
 	size_t n = v ? strlen(v) : 0;
 
-	if (!n || n >= 64 || strspn(v, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-				     "0123456789.:/-") != n) {
+	if (!n || n >= 64 || strspn(v, allowed) != n) {
 		snprintf(err, errcap, "a rule goes FROM somewhere TO somewhere");
 		return false;
 	}
@@ -2038,7 +2039,7 @@ int prov_fw_write(const char *val, char *err, size_t errcap, prov_done done, voi
 	size_t len = 0;
 
 	change[0] = '\0';
-	for (size_t x = 0; x < sizeof(keys) / sizeof(keys[0]); x++) {
+	for (size_t x = 0; x < ARRAY_SIZE(keys); x++) {
 		if (!line_value(val, keys[x][0], v, sizeof(v)))
 			continue;
 		if (strcmp(v, "allow") && strcmp(v, "block")) {
