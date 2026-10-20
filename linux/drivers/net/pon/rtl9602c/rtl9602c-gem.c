@@ -493,8 +493,10 @@ static void rtl9602c_gem_rx_filter(struct pon_device *pon, unsigned int flow,
  * the port's upstream is programmed, the upstream half is programmed again
  * for it, which moves the stream to a new queue when the queue changes, and
  * the old queue is scheduled for the ports left in it. Frames already in the
- * old queue still leave in the T-CONT's grants. When the new queue cannot be
- * attached, the old configuration, claims and limit are put back.
+ * old queue still leave in the T-CONT's grants. A port that carries no
+ * upstream traffic has no upstream half: only its downstream limit changes.
+ * When the new queue cannot be attached, the old configuration, claims and
+ * limit are put back.
  */
 static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 			       const struct pon_gem_config *cfg,
@@ -524,7 +526,8 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 
 	mutex_lock(&p->gpon_lock);
 	p->gem_cfg[flow] = *cfg;
-	if (!p->ponmac_up || !rtl9602c_gem_tcont_bound(p, cfg->tcont))
+	if (!p->ponmac_up || !(cfg->direction & IFLA_GEM_DIR_UPSTREAM) ||
+	    !rtl9602c_gem_tcont_bound(p, cfg->tcont))
 		goto out;
 
 	err = rtl9602c_gem_us_program(p, flow, cfg);

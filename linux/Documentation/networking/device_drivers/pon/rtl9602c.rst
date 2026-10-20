@@ -1648,11 +1648,16 @@ Flows, streams and T-CONTs
        and the stream moved to it, and the old queue is scheduled for the ports
        left in it, while the frames already in it leave in the T-CONT's
        grants. If the new queue cannot be attached, the old configuration is
-       kept.
+       kept. A port that carries no upstream traffic has no upstream half, so
+       a change of its downstream limit leaves its stream parked and attaches
+       no queue.
      - T, I
      - T: the changes of the row above, between runs, each followed by the
-       stream lines of the ``ponmac`` view. I for a change under traffic and
-       for a failed attach.
+       stream lines of the ``ponmac`` view. I for a change under traffic, for
+       a failed attach and for a downstream-only port: changing the
+       downstream limit of one on a flow below 64 while GEM T-CONT 0 is bound,
+       then reading the ``ponmac`` view, would show no ``sid`` line for its
+       flow.
    * - A new downstream limit of a GEM port (``IFLA_GEM_DS_RATE`` and
        ``IFLA_GEM_DS_BURST``), at its creation or in ``gem_change``, goes to the
        switch driver through the host operation ``gem_ds_limit``, outside the
