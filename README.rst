@@ -272,8 +272,8 @@ Not done yet
 ------------
 
 * **Releases are test builds.** Each is made by this repository's release
-  workflow and tested on a stick before it is published (`Releases`_), but
-  it has run on one line only.
+  workflow and tested before it is published (`Releases`_), but only on two
+  sticks against the lab OLT.
 * **Only one laser-driver IC is known.** A DFP-34X-2C may have been made
   with one of several laser-driver ICs. The optics support is written for the
   one in the developer's stick, which the kernel's log calls GN25L95; that
@@ -438,11 +438,15 @@ Releases
 --------
 
 Releases are on the repository's Releases page. Each is built by the
-workflow ``.github/workflows/release.yml`` from the commit it names, twice,
+workflow ``.github/workflows/release.yml`` from the commit it names, once the
+gates (``.github/workflows/gates.yml``) have passed on that commit, twice,
 and the two builds must be identical; nothing built elsewhere goes into a
-release. A release is published only after its own files were tested on a
-stick. Its version is the time of its commit in UTC, as ``2026.10.20-0130``,
-and its tag is that version with a ``v`` in front.
+release. A release is published only after its own files were tested on two
+sticks against the lab OLT, and then as a full release, which the page shows
+as the latest. Its version is the time of its commit in UTC, as
+``2026.10.20-0130``, and its tag is that version with a ``v`` in front. The
+releases whose names begin with ``toolchain-`` hold the cross toolchain that
+the images are built with, not the stick's system.
 
 A release holds:
 
