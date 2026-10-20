@@ -50,9 +50,10 @@ Decision
 
 * ``.github/workflows/toolchain.yml`` releases the toolchain, tagged
   ``toolchain-<the time of its commit in UTC>``: the relocatable tarball
-  that ``make sdk`` packs for ``toolchain_defconfig``, built twice and compared, with the pieces of the C
-  library's link beside its sysroot (for ``tools/lib-trim``), the sources and
-  licences of everything in it, and their digests. It is not the
+  that ``make sdk`` packs for ``toolchain_defconfig``, built twice and
+  compared, with the pieces of the C library's link beside its sysroot
+  (for ``tools/lib-trim``), the sources and licences of everything in it,
+  and their digests. It is not the
   repository's latest release, which stays the firmware's.
 * ``br2-external/toolchain/PIN`` names the release. ``make`` fetches its
   tarball, refuses it unless its size and SHA-256 are the pinned ones,

@@ -11,7 +11,7 @@
 #
 # Started with "release" on (the default), it also makes a release of the
 # first build, tagged toolchain-<the time of the commit in UTC>: the tarball,
-# with the pieces of the C library's link in its sysroot, the sources and
+# with the pieces of the C library's link beside its sysroot, the sources and
 # licences of everything in it (make legal-info), and their SHA-256 digests.
 # The release's notes hold the lines of br2-external/toolchain/PIN that name
 # it; a commit that puts them there has the images built with it. The release
