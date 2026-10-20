@@ -119,7 +119,7 @@ exit-handler table, are ``ll``/``sc`` sequences that the core runs.
 The kernel's licence text
 =========================
 
-``patches/0003-linux-take-the-GPL-2.0-text-of-Linux-6.18.patch`` changes one
+``patches/0002-linux-take-the-GPL-2.0-text-of-Linux-6.18.patch`` changes one
 line of ``linux/linux.hash``, to which
 ``package/linux-headers/linux-headers.hash`` links. The build system checks the licence files of the kernel and of its
 headers against those hashes whatever the kernel's version, and ``make
@@ -131,7 +131,7 @@ address, so the patch gives that file the hash of 6.18's text.
 The libraries of netifd
 =======================
 
-``patches/0004-*.patch``, whose subject names libubox, ubus and json-c, changes
+``patches/0003-*.patch``, whose subject names libubox, ubus and json-c, changes
 five files of the three recipes of the libraries of netifd (``netifd/``). The
 build system offers all three to the MIPS I variant as it is, since the variant
 claims the atomic builtins that json-c and ubus depend on.
