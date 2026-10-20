@@ -28,13 +28,14 @@ HAVE_OBJDUMP = shutil.which(OBJDUMP) is not None
 ALLOWED_WORDS = {
     "lw": 0x8C880000, "addu": 0x01084821, "lwl": 0x888A0000, "lwr": 0x988A0003,
     "swl": 0xA8AA0000, "swr": 0xB8AA0003, "mult": 0x01090018, "mflo": 0x00005812,
-    "jr": 0x03E00008, "nop": 0x00000000,
+    "jr": 0x03E00008, "nop": 0x00000000, "ll": 0xC08C0000, "sc": 0xE08C0000,
+    "sync": 0x0000000F,
 }
 FORBIDDEN_WORDS = {
-    "ll": 0xC08C0000, "sc": 0xE08C0000, "clz": 0x710D6820, "mul": 0x71097002,
+    "clz": 0x710D6820, "mul": 0x71097002,
     "movz": 0x0109780A, "movn": 0x0109780B, "ext": 0x7D1818C0, "seb": 0x7C08CC20,
-    "rotr": 0x00284102, "sync": 0x0000000F, "teq": 0x01090034, "beql": 0x51090001,
-    "pref": 0xCC800000,
+    "rotr": 0x00284102, "teq": 0x01090034, "beql": 0x51090001,
+    "pref": 0xCC800000, "bltzl": 0x0502FFFF, "rdhwr": 0x7C03E83B,
 }
 
 
@@ -168,14 +169,14 @@ t.o:     file format elf32-tradbigmips
                          ["lib.so: g+0x8: lwc0 c0_sr,0(a0)", "lib.so: h+0x8: .word 0x3e00408"])
 
     def test_the_second_function_of_a_relocatable_object_is_measured_from_its_own_start(self):
-        text = self.TEXT.replace("  18:\tnop", "  18:\tsync")
+        text = self.TEXT.replace("  18:\tnop", "  18:\tteq\tt0,t1")
         _count, found = gate.scan_lines("t.o", iter(text.splitlines(True)), gate.ALLOWED)
-        self.assertEqual(str(found[-1]), "t.o: g+0x4: sync")
+        self.assertEqual(str(found[-1]), "t.o: g+0x4: teq t0,t1")
 
     def test_a_member_of_an_archive_is_named(self):
-        text = "a.o:     file format elf32-tradbigmips\n\n00000000 <f>:\n   0:\tsync\n"
+        text = "a.o:     file format elf32-tradbigmips\n\n00000000 <f>:\n   0:\tbeql\tt0,t1,8\n"
         _count, found = gate.scan_lines("lib.a", iter(text.splitlines(True)), gate.ALLOWED)
-        self.assertEqual(str(found[0]), "lib.a: a.o: f+0x0: sync")
+        self.assertEqual(str(found[0]), "lib.a: a.o: f+0x0: beql t0,t1,8")
 
     def test_allow_extends_the_set(self):
         allowed = gate.ALLOWED | {"lwc0"}
@@ -183,11 +184,12 @@ t.o:     file format elf32-tradbigmips
         self.assertEqual(len(found), 1)
 
     def test_the_allowed_set_is_the_mips1_integer_set(self):
-        for mnemonic in ("lw", "sw", "lwl", "swr", "mult", "div", "jalr", "bgezal", "syscall"):
+        for mnemonic in ("lw", "sw", "lwl", "swr", "mult", "div", "jalr", "bgezal", "syscall",
+                         "ll", "sc", "sync"):
             self.assertIn(mnemonic, gate.ALLOWED)
-        for mnemonic in ("ll", "sc", "lwc0", "swc0", "clz", "mul", "movz", "movn", "ext", "ins",
-                         "rotr", "seb", "seh", "wsbh", "sync", "pref", "cache", "beql", "teq",
-                         "mfc0", "lwc1", "eret", ".word"):
+        for mnemonic in ("lwc0", "swc0", "clz", "mul", "movz", "movn", "ext", "ins",
+                         "rotr", "seb", "seh", "wsbh", "pref", "cache", "beql", "bnel", "bltzl",
+                         "teq", "tge", "rdhwr", "mfc0", "lwc1", "eret", ".word"):
             self.assertNotIn(mnemonic, gate.ALLOWED)
 
 
@@ -226,7 +228,7 @@ class EndToEnd(Temp):
     def test_the_allowed_instructions_pass(self):
         status, out, _err = self.gate_words(list(ALLOWED_WORDS.values()))
         self.assertEqual(status, 0, out)
-        self.assertIn("ok -- 1 files, 1 objects, 10 instructions, 0 findings", out)
+        self.assertIn("ok -- 1 files, 1 objects, 13 instructions, 0 findings", out)
 
     def test_every_forbidden_instruction_fails_the_gate(self):
         for name, word in FORBIDDEN_WORDS.items():
@@ -237,13 +239,13 @@ class EndToEnd(Temp):
                 self.assertIn("+0x4: ", out, "the finding names the offset")
 
     def test_the_gate_can_fail_and_an_allowance_lifts_exactly_one_mnemonic(self):
-        words = [FORBIDDEN_WORDS["ll"], FORBIDDEN_WORDS["clz"], 0]
+        words = [FORBIDDEN_WORDS["teq"], FORBIDDEN_WORDS["clz"], 0]
         status, out, _err = self.gate_words(words)
         self.assertEqual(status, 1)
         self.assertIn("2 findings", out)
-        status, out, _err = self.gate_words(words, "--allow", "lwc0")
+        status, out, _err = self.gate_words(words, "--allow", "teq")
         self.assertEqual((status, "1 findings" in out), (1, True))
-        status, out, _err = self.gate_words(words, "--allow", "lwc0", "--allow", ".word")
+        status, out, _err = self.gate_words(words, "--allow", "teq", "--allow", ".word")
         self.assertEqual((status, "0 findings" in out), (0, True))
 
     def test_an_object_that_names_a_later_architecture_fails_by_its_header(self):
@@ -255,7 +257,7 @@ class EndToEnd(Temp):
 
     def test_a_directory_is_searched_and_archives_only_on_request(self):
         self.write("bin/ok", make_elf([0x8C880000]))
-        self.write("lib/bad.a", make_archive([("m.o", make_elf([FORBIDDEN_WORDS["sync"]]))]))
+        self.write("lib/bad.a", make_archive([("m.o", make_elf([FORBIDDEN_WORDS["teq"]]))]))
         self.write("etc/passwd", b"root:x:0:0\n")
         os.symlink(os.path.join(self.tmp, "bin/ok"), os.path.join(self.tmp, "bin/link"))
         status, out, _err = self.run_gate("--objdump", OBJDUMP, self.tmp)
@@ -276,11 +278,11 @@ class EndToEnd(Temp):
         self.assertIn("l.a: bad.o: ", out)
 
     def test_the_printed_findings_are_limited_but_counted_in_full(self):
-        status, out, _err = self.gate_words([FORBIDDEN_WORDS["sync"]] * 5, "--limit", "2")
+        status, out, _err = self.gate_words([FORBIDDEN_WORDS["teq"]] * 5, "--limit", "2")
         self.assertEqual(status, 1)
         self.assertIn("... and 3 more", out)
         self.assertIn("5 findings", out)
-        status, out, _err = self.gate_words([FORBIDDEN_WORDS["sync"]] * 5, "-q")
+        status, out, _err = self.gate_words([FORBIDDEN_WORDS["teq"]] * 5, "-q")
         self.assertEqual(out.count("\n"), 1)
 
     def test_a_host_binary_in_a_target_tree_is_a_finding(self):

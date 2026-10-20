@@ -7,8 +7,8 @@ Usage: isa-gate [--objdump PROGRAM] [--allow MNEMONIC]... [--archives]
                 [--no-flags] [--limit N] [-q] PATH...
 
 PATH is an ELF file, a static archive, or a directory that is searched for ELF
-files (and for archives with --archives). Every code section is listed by objdump as MIPS I; anything that the MIPS I
-integer instruction set does not hold is a finding, and so is an ELF header
+files (and for archives with --archives). Every code section is listed by objdump as MIPS II; anything
+but the MIPS I integer instruction set and the core's ll, sc and sync is a finding, and so is an ELF header
 that names a later architecture. The exit status is 0 when nothing was found,
 1 when something was, and 2 when the gate could not do its work: no
 objdump, an unreadable path, or nothing to scan. A gate that scanned
@@ -44,14 +44,17 @@ ARCH_NAMES = {
 
 # What objdump prints for the MIPS I integer instruction set, with the
 # aliases it uses for the common special cases of those instructions (move,
-# li, nop, b, bal, beqz, bnez, negu, not). Nothing else is allowed: a
-# listing as MIPS I leaves every instruction of a later architecture as
-# ".word", or as a coprocessor access, and neither is in this set.
+# li, nop, b, bal, beqz, bnez, negu, not), and the three instructions of
+# MIPS II that the core runs: ll, sc and sync (README.rst). Nothing else is
+# allowed: a listing as MIPS II names the other instructions of MIPS II, such
+# as beql or teq, which the core traps on or runs wrongly, and leaves every
+# instruction of a later architecture as ".word" or a coprocessor access;
+# none of them is in this set.
 ALLOWED = frozenset("""
 add addi addiu addu and andi b bal beq beqz bgez bgezal bgtz blez bltz bltzal bne
-bnez break div divu j jal jalr jr lb lbu lh lhu li lui lw lwl lwr mfhi mflo move
-mthi mtlo mult multu negu nop nor not or ori sb sh sll sllv slt slti sltiu sltu sra
-srav srl srlv sub subu sw swl swr syscall xor xori
+bnez break div divu j jal jalr jr lb lbu lh lhu li ll lui lw lwl lwr mfhi mflo move
+mthi mtlo mult multu negu nop nor not or ori sb sc sh sll sllv slt slti sltiu sltu
+sra srav srl srlv sub subu sw swl swr sync syscall xor xori
 """.split())
 
 _MEMBER = re.compile(r"^(\S.*?):\s+file format\s+(\S+)\s*$")
@@ -166,7 +169,7 @@ def flags_findings(path: str, kind: str) -> tuple[int, list[Finding]]:
 
 def listing(path: str, objdump: str) -> Iterator[str]:
     """The lines of ``objdump -d`` of one file, read as it is produced."""
-    command = [objdump, "-EB", "-m", "mips:3000", "-d", "--no-show-raw-insn", path]
+    command = [objdump, "-EB", "-m", "mips:6000", "-d", "--no-show-raw-insn", path]
     with tempfile.TemporaryFile() as errors:
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors,
