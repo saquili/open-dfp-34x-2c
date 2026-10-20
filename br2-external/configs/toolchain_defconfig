@@ -21,6 +21,9 @@ BR2_TOOLCHAIN_BUILDROOT_WCHAR=y
 BR2_PTHREADS_NONE=y
 BR2_TOOLCHAIN_BUILDROOT_USE_SSP=y
 BR2_UCLIBC_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/uclibc.fragment"
+# No ldd or getconf for the target: the board's image has neither, and an
+# image built with this toolchain would take them from its sysroot.
+# BR2_UCLIBC_INSTALL_UTILS is not set
 
 # The C library and libgcc are built with the flags of the board's programs
 # (odi_dfp_34x_2c3_defconfig): for size, not position-independent, with partial

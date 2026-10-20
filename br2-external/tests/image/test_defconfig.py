@@ -39,7 +39,7 @@ class Toolchain(unittest.TestCase):
                "BR2_KERNEL_HEADERS_CUSTOM_TARBALL", "BR2_KERNEL_HEADERS_CUSTOM_TARBALL_LOCATION",
                "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12", "BR2_REPRODUCIBLE",
                "BR2_BINUTILS_EXTRA_CONFIG_OPTIONS", "BR2_OPTIMIZE_S", "BR2_PIC_PIE",
-               "BR2_RELRO_PARTIAL")
+               "BR2_RELRO_PARTIAL", "BR2_UCLIBC_INSTALL_UTILS")
 
     def test_the_toolchain_section_is_the_same(self):
         board, toolchain = settings(BOARD_DEFCONFIG), settings(TOOLCHAIN_DEFCONFIG)
