@@ -19,7 +19,8 @@ PPPoE session, for one. Any other routed IPv4 frame that has no NAPT entry goes
 to the CPU whatever the route table says. IPv6 is routed by a route table of its
 own, translating nothing: a route through the PPPoE WAN of the IPv6 default
 route, or through a resolved gateway on a switch port, is carried both ways,
-and the rest of IPv6 goes to the CPU.
+a host on a local network is found in an IPv6 neighbour table, and the rest of
+IPv6 goes to the CPU.
 
 The engine sits between the two sides of the stick. The SFP port (port 0) faces
 the subscriber's network and the PON port (port 2) the operator's, and the
@@ -34,8 +35,8 @@ adds a session table and an encapsulating next hop; a default route through a
 PPPoE session makes one, and a routed host gets an external-address row of its
 own. This page describes the engine's registers and tables, the order of its
 bring-up, what each notifier writes, the flowtable offload, the PPPoE path, the
-routed hosts, the hit bitmaps that keep an offloaded flow alive, and the
-debugfs views that show the engine. The
+routed hosts, the IPv6 routes and neighbours, the hit bitmaps that keep an
+offloaded flow alive, and the debugfs views that show the engine. The
 address-table entries that the engine depends on are described from the
 engine's side only; the entries themselves are on the *bridging* page.
 
@@ -84,6 +85,25 @@ pointer at all (see "How a translated frame goes through the engine")::
              v
         address-table entry   (destination MAC, egress port)
 
+An IPv6 frame follows the IPv6 route row that its destination matches, and
+the engine translates nothing (see "IPv6 routes"). A route through a next hop
+names it as an IPv4 route does; an on-link prefix of a local network names its
+L3 interface, and the host is looked up in the IPv6 neighbour table by its
+address and that route row's index::
+
+    frame ----> L3 interface   (matched by the destination MAC)
+                IPv6 route row (the destination's prefix)
+                  |                        \
+                  | action 3                `- action 2 --> L3 interface
+                  v                               |         (source MAC, VLAN)
+        next hop  (as above)            IPv6 neighbour  (bucket from the
+                                                  |      host's interface
+                                                  |      identifier and
+                                                  |      the route row)
+                                                  |  RTL9602C_NEIGH6_L2_IDX
+                                                  v
+                                        address-table entry
+
 How the driver runs the engine
 ------------------------------
 
@@ -98,10 +118,11 @@ Six things carry the function:
   external-address row. A resolved ARP neighbour on such a device becomes a
   next-hop row, a neighbour-CAM row and an address-table entry. The main
   routing table is mirrored into the route table, longest prefix first, and its
-  IPv6 routes into the IPv6 route table. A PPPoE WAN gets its rows from the
-  flow rule that first uses it or from a default route through it (see "The
-  notifiers that fill the tables", "The PPPoE encapsulation path" and "IPv6
-  routes").
+  IPv6 routes into the IPv6 route table; a resolved NDP neighbour on a local
+  network becomes an IPv6-neighbour row and an address-table entry. A PPPoE WAN
+  gets its rows from the flow rule that first uses it or from a default route
+  through it (see "The notifiers that fill the tables", "The PPPoE
+  encapsulation path" and "IPv6 routes").
 - A flow is two entries. netfilter's flowtable offers each direction of a flow
   as a flower rule. The driver programs the source-NAT direction as one
   inbound and one outbound NAPT entry, each in the bucket that the engine's
@@ -161,10 +182,10 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The engine: its table port, the clear at setup and the bring-up, the
        entry fields and hashes, the three notifiers, the PPPoE WANs, the IPv6
-       routes, the flowtable offload, the hit bitmaps and the debugfs views
-       ``l3nat``,
-       ``l3flow`` and ``l3capture``. The ACL, the classifier, storm control and
-       the scheduler of the same file are on the *acl-qos* page.
+       routes and neighbours, the flowtable offload, the hit bitmaps and the
+       debugfs views ``l3nat``, ``l3flow``, ``l3neigh6`` and ``l3capture``.
+       The ACL, the classifier, storm control and the scheduler of the same
+       file are on the *acl-qos* page.
    * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``
      - The address-table helpers of the engine: ``rtl9602c_l2_l3lookup_cpu()``,
        ``rtl9602c_l2_nexthop_place()``, the router bit that
@@ -183,8 +204,11 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers of the engine, the entry fields (``RTL9602C_FIELD()``),
        the shadows in ``struct rtl9602c_priv`` (``l34_*``, ``flow_lock``),
-       ``struct rtl9602c_l34_route``, ``struct rtl9602c_l34_route6`` and
-       ``struct rtl9602c_pppoe_wan``.
+       ``struct rtl9602c_l34_route``, ``struct rtl9602c_l34_route6``,
+       ``struct rtl9602c_l34_nb6`` and ``struct rtl9602c_pppoe_wan``.
+   * - ``drivers/net/dsa/realtek/rtl9602c-offload-test.c``
+     - The KUnit cases of the NAPT hashes, the entry fields, the flow
+       records, and the IPv6 route rows and neighbour rows.
    * - ``net/dsa/user.c``
      - ``dsa_user_setup_ft_block()``, which offers ``TC_SETUP_FT`` to the
        switch driver before the conduit.
@@ -223,10 +247,14 @@ Configuration
      - VLAN devices above a switch port or a GEM interface; the VLAN ID goes
        into the L3-interface row.
    * - ``CONFIG_IPV6``
-     - IPv6 routes in the engine (see "IPv6 routes"). Without it the IPv6
-       route table stays empty and all IPv6 goes to the CPU.
+     - IPv6 routes and neighbours in the engine (see "IPv6 routes"). Without
+       it the IPv6 route and neighbour tables stay empty and all IPv6 goes to
+       the CPU.
    * - ``CONFIG_DEBUG_FS``
-     - The views ``l3nat``, ``l3flow`` and ``l3capture``.
+     - The views ``l3nat``, ``l3flow``, ``l3neigh6`` and ``l3capture``.
+   * - ``CONFIG_NET_DSA_RTL9602C_KUNIT_TEST``
+     - The KUnit cases of ``rtl9602c-offload-test.c``, among them those of
+       the IPv6 route and neighbour rows.
 
 ``rtl9602c_defconfig`` sets ``CONFIG_NET_DSA_RTL9602C``, ``CONFIG_PPP``,
 ``CONFIG_PPPOE``, ``CONFIG_VLAN_8021Q``, ``CONFIG_IPV6`` and
@@ -273,18 +301,21 @@ Interfaces to user space
   device of a PPPoE client on a GEM interface gets a PPPoE WAN, as does a
   default route through that device. A /32 host route on a LAN-side device,
   with no gateway, makes the host a routed host (see "Routed hosts and the WAN
-  of the default route").
-- Three debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``l3nat`` and
-  ``l3flow`` (mode 0400), which show the engine's registers and tables, and
-  ``l3capture`` (mode 0600), which reads and arms the engine's per-frame
-  capture (see "The debugfs views" and "The per-frame capture").
+  of the default route"). ``ip -6 route`` and ``ip -6 neigh``: an on-link IPv6
+  prefix of a local network, and its resolved hosts, are routed in the engine
+  (see "IPv6 routes").
+- Four debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``l3nat``,
+  ``l3flow`` and ``l3neigh6`` (mode 0400), which show the engine's registers
+  and tables, and ``l3capture`` (mode 0600), which reads and arms the engine's
+  per-frame capture (see "The debugfs views" and "The per-frame capture").
 - The kernel log lines that begin ``rtl9602c-switch:``. Setup logs ``L3:
   binding actions``, ``L3: auxiliary control`` and ``L3: reset 13 of 13 table
   engine(s), engine ON`` with the control and reset words, and, when it had to
   empty rows, ``cleared N L3/NAT table entries left by the previous kernel``.
   A row write that failed, a route table that cannot be mirrored, an interface
-  that finds no free L3-interface row and a second routed GEM port are logged
-  as warnings that begin ``<l3>``, and a table access that does not complete as
+  that finds no free L3-interface row, IPv6 neighbours that find no room and a
+  second routed GEM port are logged as warnings that begin ``<l3>``, and a
+  table access that does not complete as
   ``L3/NAT table <t> entry <i>: engine still busy after 1 ms``.
 - ``echo 'file rtl9602c-offload.c +p' >
   /sys/kernel/debug/dynamic_debug/control`` enables the debug lines of the file,
@@ -351,7 +382,14 @@ hold the session's address, with a /32 host route to it on the stick: UDP at
 1,500 datagrams a second, under the CPU port's limit, goes from the host to the
 concentrator's side and the other way, also from a source the host never sent
 to. It passes when the far side receives every datagram and the CPU port counts
-only its background, 5 to 8 frames a run.
+only its background, 5 to 8 frames a run. A *local-network IPv6 test* has the
+stick hold a local network, a VLAN device on ``sfp`` with an IPv6 /64, and an
+IPv6 default route through a PPPoE session on a GEM interface; a host in that
+VLAN behind the SFP port sends iperf3 over IPv6 to the far side of the WAN and
+receives it back. It passes when the network's route row reads action 2 in
+``l3nat``, the host's row is in ``l3neigh6``, and the CPU port counts only the
+first frames of each run while gigabytes cross (see "The hosts of a local
+network").
 
 The engine's registers
 ======================
@@ -771,9 +809,9 @@ of ``l3nat`` completing, and step 6 by the round trips of the table above. Step
 Tables, selectors and geometry
 ==============================
 
-The engine has thirteen tables. The driver fills nine of them; the other four,
-the bindings, the WAN types, the IPv6 neighbours and the five-tuple flows, it
-only clears at setup. The selectors are the
+The engine has thirteen tables. The driver fills ten of them; the other three,
+the bindings, the WAN types and the five-tuple flows, it only clears at setup.
+The selectors are the
 ``RTL9602C_L3TBL_CTRL_TABLE_*`` macros. *Rows* is what the driver uses and
 bounds its accesses by, *words* is the entry's size in data registers, and *top
 bit* is the highest entry bit that stores (see the last row of the facts).
@@ -856,7 +894,7 @@ bit* is the highest entry bit that stores (see the last row of the facts).
      - 16
    * - 11
      - ``_NEIGH6``
-     - IPv6 neighbours; cleared at setup, otherwise unused
+     - IPv6 neighbours
      - 128
      - 3
      - 79
@@ -939,6 +977,12 @@ bit* is the highest entry bit that stores (see the last row of the facts).
      - M
      - The walking one of the last row of this table; ``cat
        /sys/kernel/debug/rtl9602c/l3nat``.
+   * - ``_NEIGH6`` (11) is written from the route and neighbour notifiers, one
+       row for each resolved host of a local network (see "IPv6 neighbour
+       (selector 11)" and "IPv6 routes"); ``l3neigh6`` shows every row that
+       is not zero.
+     - I
+     - A local-network IPv6 test.
    * - ``_NEIGH`` (13) is the IPv4 neighbour CAM, 128 rows of 2 words, top bit
        43. It is written from the neighbour notifier.
      - T
@@ -1287,7 +1331,8 @@ default route in the last row (see "IPv6 routes").
    * - 139:136
      - ``RTL9602C_ROUTE6_NEXTHOP_IDX`` and ``RTL9602C_ROUTE6_L3IF_IDX``
      - The same four bits: the next-hop row for action 3, taken to be the
-       L3-interface row for action 2, which the driver does not write.
+       L3-interface row for action 2, which the driver writes for an on-link
+       prefix of a local network.
    * - 141:140
      - ``RTL9602C_ROUTE6_ACTION``
      - The values of the IPv4 row: 0 hands the frame to the CPU,
@@ -1336,6 +1381,27 @@ default route in the last row (see "IPv6 routes").
      - I
      - A blackhole route over a prefix that carries traffic, with the drop
        counters.
+   * - Action 2, ``RTL9602C_ROUTE_ACTION_NEIGH``, is taken to make the prefix
+       on-link on the L3-interface row in bits 139:136
+       (``RTL9602C_ROUTE6_L3IF_IDX``): the engine looks the destination up in
+       the IPv6 neighbour table by its interface identifier and the index of
+       this row, and sends the frame to the address-table entry that the
+       neighbour row names, with the interface row's MAC and VLAN (see "IPv6
+       neighbour (selector 11)"). The driver writes it, ``RT2WAN`` clear, for
+       an on-link prefix of a local network. A local network's
+       2001:db8:1:1::/64 on interface row 4 reads ``00000000 00000000 00010001
+       20010db8 00006440`` (length 64, interface 4, action 2, valid).
+     - I
+     - A local-network IPv6 test, with the engine's output descriptor
+       naming the interface row.
+   * - What the engine does with a frame whose action-2 row finds no
+       neighbour row is not established; it is taken to hand the frame to
+       the CPU, whose stack then resolves the host, as it does for a frame
+       that matches no row (reason 16).
+     - I
+     - Traffic from beyond the WAN to an address of the local network that
+       no neighbour holds, with the CPU port's counter and the per-frame
+       capture.
    * - What ``RTL9602C_ROUTE6_RT2WAN`` changes is not established. The driver
        sets it on a row through the PPPoE WAN or through a gateway behind the
        PON port; both directions are carried with it set on the default route
@@ -1457,6 +1523,20 @@ row for each netdev, and a PPPoE WAN takes one (see "The address notifier" and
      - T
      - A routing test; the storage from the walking one of "Tables, selectors
        and geometry".
+   * - The row has no field for an IPv6 address and needs none for IPv6: the
+       IPv6 side of an interface is the IPv6 route row that names it, action
+       2 for an on-link prefix of a local network (see "IPv6 route (selector
+       5)"). A device whose only addresses are IPv6 ones gets its row from its
+       on-link route, written without an IPv4 address (see "IPv6 routes").
+     - I
+     - A local-network IPv6 test on a network with no IPv4 address.
+   * - Bit 116 is taken to mark an interface towards the WAN that carries
+       IPv6. The driver writes it 0 on every row, a local network's whose IPv6
+       hosts it routes included, and the engine carries IPv6 both ways over a
+       PPPoE WAN whose row has it 0 (see "IPv6 routes").
+     - I
+     - A local-network IPv6 test with the bit 0; for its meaning, the same
+       test with the PPPoE WAN's row written with it set.
 
 Next hop (selector 2)
 ---------------------
@@ -1590,6 +1670,104 @@ back.
        is not established.
      - I
      - Zeroing the CAM rows and repeating the routing test would show it.
+
+IPv6 neighbour (selector 11)
+----------------------------
+
+An IPv6-neighbour row holds one host of a local network: the interface
+identifier of its address, the IPv6 route row of the on-link prefix it is on,
+and the address-table row that holds its MAC. A row is 3 words and the table
+has 128 rows, taken to be sixteen buckets of eight rows; the engine is taken to
+look a host up only in the bucket that a hash of its interface identifier and
+the route row gives. The driver writes the rows from the route and neighbour
+notifiers (see "IPv6 routes").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 38 48
+
+   * - Entry bits
+     - Macro
+     - Meaning
+   * - 63:0
+     - ``RTL9602C_NEIGH6_IFID``
+     - The interface identifier: the low 64 bits of the host's address, the
+       first half of them in word 1.
+   * - 66:64
+     - ``RTL9602C_NEIGH6_RT_IDX``
+     - The IPv6 route row whose on-link prefix holds the address.
+   * - 77:67
+     - ``RTL9602C_NEIGH6_L2_IDX``
+     - The address-table row that holds the host's MAC.
+   * - 78
+     - none
+     - Stores; written 0.
+   * - 79
+     - ``RTL9602C_NEIGH6_VALID``
+     - The row is valid.
+
+The bucket, ``rtl9602c_l34_nb6_bucket()``, where x is the eight octets of the
+interface identifier combined by exclusive or and rt the route row (0 to 7);
+of the two forms of the mix, the driver uses both (see the facts)::
+
+    x      = IFID[63:56] ^ IFID[55:48] ^ ... ^ IFID[7:0]     (8 bits)
+    mix    = (rt[0] << 3) | (rt[1] << 2) | rt                first form
+    mix    = (rt[0] << 3) | (rt[1] << 2) | rt[1:0]           second form
+    bucket = x[7:4] ^ x[3:0] ^ mix                           (bits 3:0)
+
+    the bucket's rows: 8 * bucket to 8 * bucket + 7
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Every bit of the entry to 79 stores.
+     - M
+     - The walking one of "Tables, selectors and geometry".
+   * - The fields are ``RTL9602C_NEIGH6_IFID`` (63:0), the interface
+       identifier, ``RTL9602C_NEIGH6_RT_IDX`` (66:64), the route row,
+       ``RTL9602C_NEIGH6_L2_IDX`` (77:67), the address-table row, and
+       ``RTL9602C_NEIGH6_VALID`` (79). Bit 78 is no field the driver knows;
+       it is written 0.
+     - I
+     - A local-network IPv6 test, with the host's row read in ``l3neigh6``
+       and the engine's output descriptor naming its address-table row.
+   * - The engine finds a host only in the bucket of the hash above and
+       searches all eight rows of it: the driver places a host in the lowest
+       free row of its bucket, and a host that leaves frees its row without
+       the others of the bucket moving.
+     - I
+     - Hosts placed at the rows of their bucket and at other rows, as for the
+       NAPT tables ("The NAPT hashes"), and a host in the last row of a
+       bucket whose first rows are free, traffic to each.
+   * - Two forms of the hash are taken for possible; they differ for route
+       rows 4 and 5 only, in bit 2 of the bucket. The driver writes a host on
+       a prefix in row 4 or 5 in both buckets, which is right whichever form
+       the engine uses: a row is matched by its identifier and its route row,
+       so the copy in the other bucket names no other host.
+     - I
+     - A host on a prefix in row 4 or 5 with one copy written, then the
+       other, traffic to it.
+   * - ``RTL9602C_NEIGH6_RT_IDX`` names the route row the frame matched, so a
+       host's row hangs on its prefix's row: a host's row is written again
+       when the prefix's row moves.
+     - I
+     - A local-network IPv6 test, with a longer prefix added before the
+       network's row while the host's traffic runs.
+
+A worked example, computed from the definitions above: the host
+2001:db8:1:1:211:22ff:fe33:4455 on a prefix in route row 2, its MAC in
+address-table row 132. Its octets combine to x = 0x12, and the bucket is 1 ^ 2
+^ 6 = 5, rows 40 to 47, by either form. The words that the driver writes, word
+0 first::
+
+    IPv6 neighbour 40   fe334455 021122ff 00008422
+
+The KUnit cases of ``rtl9602c-offload-test.c`` check these words and the
+buckets of the example's host on every route row.
 
 External address (selector 4)
 -----------------------------
@@ -2288,7 +2466,7 @@ The neighbour notifier
        since a gateway route resolves only once its neighbour has a row. With
        ``CONFIG_IPV6`` it takes NDP neighbours too, and an NDP update only
        commits the IPv6 route table again, which follows the neighbours of its
-       gateways (see "IPv6 routes").
+       gateways and of the local networks (see "IPv6 routes").
      - T
      - A routing test, and the route rows following ``ip route``; an IPv6
        routing test.
@@ -2430,6 +2608,12 @@ warm restart.
        rtl9602c_l34_route6``), with the same flags; ``l34_route6_hw[8][5]``
        holds the rows last written and ``l34_route6_wan`` the PPPoE WAN of the
        IPv6 default route.
+   * - ``l34_nb6[128]``
+     - The IPv6 neighbours of the local networks (``struct
+       rtl9602c_l34_nb6``): address, device, MAC address, the address-table
+       row placed for it and its VLAN, the L3-interface row and the port;
+       ``l34_neigh6_hw[128][3]`` holds the IPv6-neighbour rows last written,
+       and ``l34_neigh6_want[128][3]`` is where a sync lays them out.
    * - ``l34_netif_ifindex[16]``
      - The netdev of each L3-interface row, by ifindex; 0 for a free row and -1
        for a row that a PPPoE WAN holds. ``l34_netif_v6[16]`` marks the rows
@@ -2884,16 +3068,20 @@ The engine routes IPv6 by a table of its own, eight rows, and translates
 nothing (see "IPv6 route (selector 5)"). The driver mirrors the IPv6 routes of
 the main and local tables into it, as it mirrors the IPv4 routes into the route
 table, and keeps ``RTL9602C_L3_CFG_FLOW6_EN`` set, every IPv6 frame going to the
-CPU, while it carries no IPv6 route (see "The configuration word"). The case
-it is built for is a PPPoE session that carries IPv6 and whose delegated prefix
-is handed on to a host behind the stick: the default route goes through the
-session, the prefix through the host's link-local address, and the engine
-routes both directions.
+CPU, while it carries no IPv6 route (see "The configuration word"). Two cases
+are built for. In the first a PPPoE session carries IPv6 and its delegated
+prefix is handed on to a host behind the stick: the default route goes through
+the session, the prefix through the host's link-local address, and the engine
+routes both directions. In the second the stick holds a local network, a VLAN
+device on ``sfp`` with an IPv6 prefix on it: the default route goes through the
+WAN, a PPPoE session or an IPoE gateway, and the hosts of the network are
+found in the IPv6 neighbour table (see "The hosts of a local network" below).
 
 The route notifier passes the IPv6 entries to ``rtl9602c_l34_fib6_event()``,
 which copies out what a row needs and queues it for the work item of the IPv4
 routes. ``rtl9602c_l34_route6_set()`` records it in a shadow of 32 routes, and
-``rtl9602c_l34_route6_commit()`` builds the eight rows from the shadow:
+``rtl9602c_l34_route6_commit()`` builds the eight rows from the shadow
+(``rtl9602c_l34_route6_build()``):
 
 .. list-table::
    :header-rows: 1
@@ -2907,10 +3095,14 @@ routes. ``rtl9602c_l34_route6_set()`` records it in a shadow of 32 routes, and
    * - Through a gateway on a switch port whose NDP neighbour is resolved
      - Action 3 with a next-hop row for that neighbour; RT2WAN set when the
        port is the PON port.
+   * - Directly attached on a device over a switch port other than the PON
+       port, a local network, whose device has an L3-interface row
+     - Action 2 with that interface row; RT2WAN clear. The network's hosts
+       get IPv6-neighbour rows.
    * - Blackhole
      - Action 1 (drop).
-   * - Any other: an address of this host, a directly attached prefix on a
-       switch port, a gateway not resolved, a nexthop that is dead or has no
+   * - Any other: an address of this host, a directly attached prefix on the
+       PON port, a gateway not resolved, a nexthop that is dead or has no
        carrier, unreachable, prohibit, multipath or a nexthop object
      - Action 0 (the CPU) when it lies inside a route of the rows above, and
        no row otherwise: a frame that matches no row goes to the CPU anyway.
@@ -2965,7 +3157,8 @@ routes. ``rtl9602c_l34_route6_set()`` records it in a shadow of 32 routes, and
        When the routes need more than seven rows beside it, the table is
        written empty and a warning logged once; when more than 32 IPv6 routes
        exist, IPv6 hardware routing stays off until the driver is reloaded.
-       ``FLOW6_EN`` then stays set.
+       ``FLOW6_EN`` then stays set. The KUnit case of the row budget lays out
+       one local network in eight rows and finds a second one too many.
      - I
      - IPv6 routes added until they need more rows, with ``l3nat`` and the
        log.
@@ -2992,6 +3185,92 @@ routes. ``rtl9602c_l34_route6_set()`` records it in a shadow of 32 routes, and
      - M
      - ``ip -6 rule``, ``l3nat`` and iperf3 through the host behind the stick,
        on the kernel before the change and after it.
+
+The hosts of a local network
+----------------------------
+
+A local network's prefix is on-link: a frame to one of its hosts has no next
+hop to follow, and the engine finds the host in the IPv6 neighbour table (see
+"IPv6 neighbour (selector 11)"). The prefix's row, action 2, names the
+network's L3-interface row, which gives the frame its source MAC and VLAN; the
+host's row, found by its interface identifier and the index of the prefix's
+row, names the address-table entry that gives its destination MAC and egress
+port. The frames from the host leave as before, by the default route's row.
+
+So a host's row hangs on the prefix's row, and the commit lays the neighbour
+rows out again whenever it writes the route rows.
+``rtl9602c_l34_route6_commit()``, in order:
+
+1. Bring the next hops of the IPv6 gateways up to date
+   (``rtl9602c_l34_nh6_sync()``). (M)
+2. Lay the route rows out (``rtl9602c_l34_route6_build()``), and set
+   ``FLOW6_EN`` if no route is carried or the routes do not fit. (T)
+3. Write the neighbour rows again against the route rows that do not change,
+   which zeroes the rows of the hosts whose prefix's row is about to change.
+   Purpose: a host's row never names the row of another prefix, whose host of
+   the same interface identifier it would take the frames of. (I)
+4. Write the route rows that changed. (T)
+5. Take the neighbours from the kernel's table (``neigh_for_each()`` over the
+   NDP table, ``rtl9602c_l34_nb6_sync()``): a neighbour in any valid state, a
+   stale one included, at an address beyond the link, that lies in an on-link
+   prefix of a local network whose device has its interface row, keeps its
+   place in ``l34_nb6`` or takes a free one, and the address-table entry of a
+   new one is placed by ``rtl9602c_l2_nexthop_place()`` under the VLAN of the
+   interface row. Purpose: the rows follow the kernel's neighbours whatever
+   order the events came in. (I)
+6. Lay the neighbour rows out (``rtl9602c_l34_nb6_plan()``): each host on a
+   prefix that a route row makes on-link on its interface row gets a row in
+   its bucket, and in both buckets for a prefix in row 4 or 5; a row it holds
+   is kept, and otherwise it takes the lowest free row of the bucket. Write the
+   rows that differ. (I)
+7. Delete the address-table entry of each neighbour that left, once no
+   next hop and no other neighbour names it (``rtl9602c_l34_nh_l2_put()``).
+   Purpose: the rows that named it are gone first. (I)
+8. Clear ``FLOW6_EN`` if routes are carried and every route row took. (M)
+
+A neighbour that finds no room, a 129th or the ninth of a bucket, stays with
+the CPU, and a warning says so once until all fit again.
+
+A local network takes three rows of the eight: its prefix, at action 2, and
+this device's address in it and the subnet-router anycast address, both at
+action 0 since they lie inside a carried route. With the link-local,
+multicast, loopback and default rows, one local network takes seven rows, and
+the eighth is left for a route such as the unreachable route of a delegated
+prefix. A second local network does not fit, and all IPv6 then goes to the
+CPU (see "Known limitations").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A host of a local network is carried both ways by the engine: from the
+       host by the default route's row, to it by the prefix's row, action 2,
+       and its IPv6-neighbour row. Neither direction is measured.
+     - I
+     - A local-network IPv6 test.
+   * - The address-table entry of a host that is an ARP neighbour too is
+       shared by its next hop and its IPv6-neighbour rows, and deleted only
+       when neither names it any more.
+     - I
+     - A local-network IPv6 test on a dual-stack network: the IPv4 flows of
+       the host staying in the engine while its IPv6 neighbour comes and
+       goes would confirm it.
+   * - A neighbour keeps its row while the kernel holds it in a valid state,
+       a stale one included, as an ARP neighbour does; it loses it when the
+       kernel finds it failed or drops it, an NDP update committing the
+       routes again.
+     - I
+     - ``ip -6 neigh`` and ``l3neigh6`` side by side while a host leaves the
+       network and the kernel's entry fails.
+   * - With the routes of one local network, the default route through a
+       PPPoE WAN and this device's own addresses, the rows are: link-local,
+       multicast, ``::1``, this device's address, the anycast address, the
+       prefix at action 2, an empty row, the default route.
+     - T
+     - The KUnit case of the row budget (``rtl9602c_test_route6_budget``).
 
 A local network with IPv6 alone
 -------------------------------
@@ -3085,8 +3364,9 @@ only printed.
        whether reading the PPPoE, five-tuple or neighbour bitmaps clears them is
        not established.
      - I
-     - A neighbour's CAM row hit by traffic, with two reads of the bitmaps,
-       would settle both. Nothing in the driver depends on them.
+     - A neighbour's CAM row and an IPv6-neighbour row hit by traffic, with
+       two reads of the bitmaps (``l3flow``, ``l3neigh6``), would settle
+       both. Nothing in the driver depends on them.
    * - The engine does not remove a NAPT entry by itself (no hardware ageing):
        an entry stays until the driver removes it, as the driver's flow
        records and its free-way scan assume.
@@ -3099,9 +3379,11 @@ only printed.
 The debugfs views
 =================
 
-Three views in ``/sys/kernel/debug/rtl9602c/`` show the engine. The tables that
+Four views in ``/sys/kernel/debug/rtl9602c/`` show the engine. The tables that
 the views print are the small ones whole and the large ones by their first four
-rows; no view prints an inbound NAPT entry.
+rows, but for the IPv6-neighbour table, whose rows lie where their hash puts
+them and which ``l3neigh6`` prints whole; no view prints an inbound NAPT
+entry.
 
 ``l3nat`` (mode 0400) prints the auxiliary word, the configuration word and the
 tables, and ends with a check of the table port's guard. Its top and its last
@@ -3122,6 +3404,19 @@ line::
     global     00000005  engine ON
     l3 cfg     64001e20  flow4 1  flow6 1
     ...
+
+``l3neigh6`` (mode 0400) prints the IPv6 neighbours of the local networks
+that the driver keeps and the rows of the IPv6-neighbour table, here the
+worked example's host of "IPv6 neighbour (selector 11)" on ifindex 9::
+
+    # cat /sys/kernel/debug/rtl9602c/l3neigh6
+    neighbours
+      2001:db8:1:1:211:22ff:fe33:4455 ifindex 9 00:00:5e:00:53:10 vlan 410 l2 132 l3if 4
+
+    neigh6 (table 11, 3 words)
+      [ 40] fe334455 021122ff 00008422  bucket  5 way 0  route6[2] l2 132
+
+    hit 00000000 00000000 00000000 00000000
 
 .. list-table::
    :header-rows: 1
@@ -3163,6 +3458,18 @@ line::
        7 or an armed value above 1 is refused with ``-EINVAL``.
      - M
      - ``echo 2 > /sys/kernel/debug/rtl9602c/l3capture``, then ``cat`` it.
+   * - ``l3neigh6`` (mode 0400) prints, under ``flow_lock``, each IPv6
+       neighbour the driver keeps (``l34_nb6``: address, ifindex, MAC
+       address, VLAN, address-table row ``l2``, L3-interface row ``l3if``),
+       then every row of the IPv6-neighbour table that is not zero or that
+       the driver wrote, read from the hardware, with its bucket and way, the
+       route row and the address-table row it names, and ``!`` where it
+       differs from the row the driver wrote; then the table's hit bitmap,
+       ``hit``, 4 words, raw. Its reads have no side effect, the bitmap's
+       aside, which is not established.
+     - I
+     - ``cat /sys/kernel/debug/rtl9602c/l3neigh6`` during a local-network IPv6
+       test.
 
 The per-frame capture
 =====================
@@ -3450,8 +3757,16 @@ Known limitations
   take two and the default route one, which leaves five. When the routes need
   more, all IPv6 goes to the CPU. One IPv6 default route has a WAN; another
   route through a PPP device is carried only through that WAN.
-- An IPv6 host that is on a link of this device, rather than behind a gateway
-  route, is not carried: the IPv6 neighbour table is not filled.
+- A local network takes three of the five rows, its prefix and this device's
+  two addresses in it, and the loopback address one more: one local network
+  with IPv6 fits, a second does not, and all IPv6 then goes to the CPU.
+- The IPv6 hosts of the local networks are carried, at most 128 rows of them,
+  eight to a bucket, and a host on a prefix in route row 4 or 5 takes a row in
+  two buckets; a host that finds no row is routed by the CPU. A host on the
+  WAN's own link, other than a gateway, is not carried.
+- A host's row stays while the kernel holds its neighbour in a valid state,
+  stale included, and its frames go to the MAC address the kernel last held
+  for it until the kernel finds otherwise, as for an ARP neighbour.
 - The driver programs at most 4096 flows, and fewer when buckets fill.
   netfilter's default connection limit on this board, 1024, bounds them first.
 - A forwarded port has at most four connections in hardware at once: they share
@@ -3507,6 +3822,34 @@ Assumptions the driver depends on
        ``l3capture`` rests on it.
      - Each mode written to ``l3capture`` during a routing test, comparing the
        CPU port's counter and the discard counters.
+   * - IPv6 route action 2 makes a prefix on-link on the interface row it
+       names, and the engine finds the destination in the IPv6 neighbour
+       table by its interface identifier and the route row's index ("IPv6
+       route (selector 5)", "IPv6 neighbour (selector 11)"). The hosts of a
+       local network are carried on it.
+     - A local-network IPv6 test.
+   * - The layout of the IPv6-neighbour row, the hash of its bucket for route
+       rows other than 4 and 5, and that the engine searches all eight rows
+       of a bucket ("IPv6 neighbour (selector 11)").
+     - A local-network IPv6 test with hosts whose rows fall in one bucket,
+       one of them in its last row.
+   * - A frame whose action-2 row finds no neighbour row goes to the CPU, whose
+       stack resolves the host ("IPv6 route (selector 5)"). A host the kernel
+       has not resolved is reached through it.
+     - Traffic from beyond the WAN to an address of a local network that no
+       neighbour holds, with the CPU port's counter.
+   * - A local network's interface row needs no IPv6 field and bit 116 clear
+       ("L3 interface (selector 3)").
+     - A local-network IPv6 test, also on a network with no IPv4 address.
+   * - A frame from one local network to a host of another on the same port
+       leaves by its ingress port; whether the switch discards it there, as it
+       does a translated frame whose next hop is behind its ingress port
+       (reason 228, "How a translated frame goes through the engine"), is
+       not established. Two local networks with IPv6 do not fit the route
+       table today, and the case needs two on-link prefixes on one port.
+     - Two local networks on ``sfp``, each with an on-link IPv6 prefix and no
+       address of this device in it, and traffic from a host of one to a
+       host of the other, with ``rx_forward_discards``.
 
 Questions the code does not depend on
 -------------------------------------
@@ -3556,6 +3899,20 @@ Questions the code does not depend on
        with the drop counters, for each family.
    * - What ``RTL9602C_ROUTE6_RT2WAN`` changes ("IPv6 route (selector 5)").
      - The default-route row written with it clear, with traffic through it.
+   * - Which of the two forms of the IPv6-neighbour hash the engine uses for
+       route rows 4 and 5 ("IPv6 neighbour (selector 11)"). The driver writes
+       such a host in both buckets.
+     - A host on a prefix in row 4 or 5 with one copy written, then the other.
+   * - What bit 116 of the L3-interface row and bit 78 of the IPv6-neighbour
+       row do ("L3 interface (selector 3)", "IPv6 neighbour (selector 11)").
+       The driver writes both 0.
+     - A local-network IPv6 test with each bit set in turn.
+   * - Whether this device's own addresses in a local network need rows of
+       their own ("The hosts of a local network"). If a frame whose
+       action-2 row finds no neighbour reaches the CPU as it arrived, they
+       need none, and a local network would take one row instead of three.
+     - A local-network IPv6 test with the address rows left out, ssh and
+       ping to this device's address from the local network.
    * - Whether the engine takes the longest matching IPv6 prefix or the first
        valid row, and whether the default route has to be in the last row
        ("IPv6 route (selector 5)").

@@ -130,6 +130,386 @@ static void rtl9602c_test_l34_flow_records(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, p->l34_flow_cache);
 }
 
+#if IS_ENABLED(CONFIG_IPV6)
+/*
+ * A local network, 2001:db8:1:1::/64 (RFC 3849), on L3-interface row 4, and a
+ * host on it, whose interface identifier's octets fold to 0x12 and then to 3.
+ */
+#define TEST_NB6_HOST	"2001:db8:1:1:211:22ff:fe33:4455"
+#define TEST_NB6_NETIF	4
+
+static struct in6_addr rtl9602c_test_in6(struct kunit *test, const char *s)
+{
+	struct in6_addr a;
+
+	KUNIT_ASSERT_EQ(test, in6_pton(s, -1, a.s6_addr, -1, NULL), 1);
+	return a;
+}
+
+/*
+ * The neighbour row: the interface identifier across words 0 and 1, its
+ * first half in word 1, and the route row, the address-table row and the
+ * valid bit in word 2.
+ */
+static void rtl9602c_test_nb6_entry(struct kunit *test)
+{
+	struct in6_addr a = rtl9602c_test_in6(test, TEST_NB6_HOST);
+	u32 e[3] = { };
+
+	rtl9602c_l34_nb6_encode(e, &a, 2, 132);
+	KUNIT_EXPECT_EQ(test, e[0], 0xfe334455U);
+	KUNIT_EXPECT_EQ(test, e[1], 0x021122ffU);
+	KUNIT_EXPECT_EQ(test, e[2], 0x00008422U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(e, RTL9602C_NEIGH6_IFID),
+			0x021122fffe334455ULL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(e, RTL9602C_NEIGH6_RT_IDX), 2ULL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(e, RTL9602C_NEIGH6_L2_IDX), 132ULL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(e, RTL9602C_NEIGH6_VALID), 1ULL);
+
+	/* The largest values stay in their fields, and bit 78 stays clear. */
+	memset(e, 0, sizeof(e));
+	rtl9602c_l34_nb6_encode(e, &a, 7, 2047);
+	KUNIT_EXPECT_EQ(test, e[2], 0x0000bfffU);
+}
+
+/*
+ * The bucket: the identifier's octets folded to one, its nibbles to four bits,
+ * and the route row mixed in; the two forms differ for rows 4 and 5 only, and
+ * neither depends on the prefix or on the order of the octets.
+ */
+static void rtl9602c_test_nb6_bucket(struct kunit *test)
+{
+	static const u8 one[8] = { 5, 3, 1, 1, 1, 1, 1, 1 };
+	struct in6_addr a = rtl9602c_test_in6(test, TEST_NB6_HOST);
+	struct in6_addr b = rtl9602c_test_in6(test, "2001:db8:ffff:9:5544:33fe:ff22:1102");
+	struct in6_addr c = { };
+	unsigned int rt;
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 0, false), 3U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 1, false), 10U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 2, false), 5U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 3, false), 12U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 4, false), 7U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 4, true), 3U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 5, false), 14U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 5, true), 10U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 6, false), 5U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, 7, false), 12U);
+
+	for (rt = 0; rt < 8; rt++) {
+		KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&a, rt, false) ==
+				rtl9602c_l34_nb6_bucket(&a, rt, true), rt != 4 && rt != 5);
+		KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&b, rt, false),
+				rtl9602c_l34_nb6_bucket(&a, rt, false));
+		KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_bucket(&b, rt, true),
+				rtl9602c_l34_nb6_bucket(&a, rt, true));
+	}
+
+	/* Every bucket is one of the sixteen. */
+	for (rt = 0; rt < 8 * 256; rt++) {
+		memcpy(&c.s6_addr[8], one, sizeof(one));
+		c.s6_addr[15] = rt / 8;
+		KUNIT_EXPECT_LT(test, rtl9602c_l34_nb6_bucket(&c, rt % 8, false), 16U);
+		KUNIT_EXPECT_LT(test, rtl9602c_l34_nb6_bucket(&c, rt % 8, true), 16U);
+	}
+}
+
+/*
+ * The route rows of a stick whose IPv6 default route leaves by PPPoE WAN 3,
+ * with the local network of TEST_NB6_NETIF in row 3 and another, on
+ * L3-interface row 5, in row 4, as rtl9602c_l34_route6_build() lays them out.
+ */
+static void rtl9602c_test_nb6_rows(struct kunit *test, u32 (*rows)[5])
+{
+	struct in6_addr d;
+
+	memset(rows, 0, 8 * sizeof(rows[0]));
+	d = rtl9602c_test_in6(test, "fe80::");
+	rtl9602c_l34_route6_encode(rows[0], &d, 10, 0, 0, false);
+	d = rtl9602c_test_in6(test, "ff00::");
+	rtl9602c_l34_route6_encode(rows[1], &d, 8, 0, 0, false);
+	d = rtl9602c_test_in6(test, "2001:db8:1:1::1");
+	rtl9602c_l34_route6_encode(rows[2], &d, 128, 0, 0, false);
+	d = rtl9602c_test_in6(test, "2001:db8:1:1::");
+	rtl9602c_l34_route6_encode(rows[3], &d, 64, RTL9602C_ROUTE_ACTION_NEIGH,
+				   TEST_NB6_NETIF, false);
+	d = rtl9602c_test_in6(test, "2001:db8:1:2::");
+	rtl9602c_l34_route6_encode(rows[4], &d, 64, RTL9602C_ROUTE_ACTION_NEIGH, 5,
+				   false);
+	rtl9602c_l34_route6_encode(rows[7], &in6addr_any, 0,
+				   RTL9602C_ROUTE_ACTION_NEXTHOP, 3, true);
+}
+
+/*
+ * A neighbour hangs on the on-link row of its own interface that a frame to
+ * it matches first, and on no other: not on this device's own address, not on
+ * another network's row, not on the default route.
+ */
+static void rtl9602c_test_nb6_route(struct kunit *test)
+{
+	struct in6_addr a;
+	u32 rows[8][5];
+
+	rtl9602c_test_nb6_rows(test, rows);
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(rows[3], RTL9602C_ROUTE6_ACTION),
+			(u64)RTL9602C_ROUTE_ACTION_NEIGH);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(rows[3], RTL9602C_ROUTE6_L3IF_IDX),
+			(u64)TEST_NB6_NETIF);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(rows[3], RTL9602C_ROUTE6_RT2WAN), 0ULL);
+	KUNIT_EXPECT_EQ(test, rows[3][0], 0U);
+	KUNIT_EXPECT_EQ(test, rows[3][1], 0U);
+	KUNIT_EXPECT_EQ(test, rows[3][2], 0x00010001U);
+	KUNIT_EXPECT_EQ(test, rows[3][3], 0x20010db8U);
+	KUNIT_EXPECT_EQ(test, rows[3][4], 0x00006440U);
+
+	a = rtl9602c_test_in6(test, TEST_NB6_HOST);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_route(rows, 8, &a, TEST_NB6_NETIF), 3);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_route(rows, 8, &a, 5), -1);
+	a = rtl9602c_test_in6(test, "2001:db8:1:1::1");
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_route(rows, 8, &a, TEST_NB6_NETIF), -1);
+	a = rtl9602c_test_in6(test, "2001:db8:1:2::9");
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_route(rows, 8, &a, 5), 4);
+	a = rtl9602c_test_in6(test, "2001:db8:9::1");
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_route(rows, 8, &a, TEST_NB6_NETIF), -1);
+	a = rtl9602c_test_in6(test, "fe80::4455");
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_route(rows, 8, &a, TEST_NB6_NETIF), -1);
+
+	/* With the network's row gone, the neighbour has none. */
+	memset(rows[3], 0, sizeof(rows[3]));
+	a = rtl9602c_test_in6(test, TEST_NB6_HOST);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_route(rows, 8, &a, TEST_NB6_NETIF), -1);
+}
+
+static void rtl9602c_test_nb6_put(struct kunit *test, struct rtl9602c_l34_nb6 *nb,
+				  const char *addr, int netif, u16 slot)
+{
+	memset(nb, 0, sizeof(*nb));
+	nb->addr = rtl9602c_test_in6(test, addr);
+	nb->netif = netif;
+	nb->slot = slot;
+	nb->used = true;
+	nb->seen = true;
+}
+
+/* The row index of @nb on route row @rt in @want, or -1. */
+static int rtl9602c_test_nb6_at(u32 (*want)[3], const struct rtl9602c_l34_nb6 *nb,
+				unsigned int rt, unsigned int from)
+{
+	u32 e[3] = { };
+	unsigned int i;
+
+	rtl9602c_l34_nb6_encode(e, &nb->addr, rt, nb->slot);
+	for (i = from; i < RTL9602C_NEIGH6_ENTRIES; i++)
+		if (!memcmp(want[i], e, sizeof(e)))
+			return i;
+	return -1;
+}
+
+/*
+ * The layout: a neighbour takes the lowest free row of its bucket, both
+ * buckets on row 4; a row already held is kept when another neighbour of
+ * the bucket comes before it; a neighbour that leaves frees its row and
+ * moves no other; one neither seen nor in use gets none; a ninth neighbour of
+ * a bucket finds it full.
+ */
+static void rtl9602c_test_nb6_plan(struct kunit *test)
+{
+	static const char * const same[] = {
+		"2001:db8:1:1::3", "2001:db8:1:1::21", "2001:db8:1:1::30",
+		"2001:db8:1:1::47", "2001:db8:1:1::56", "2001:db8:1:1::65",
+		"2001:db8:1:1::74", "2001:db8:1:1::8b",
+	};
+	struct rtl9602c_l34_nb6 *nb;
+	u32 (*cur)[3], (*want)[3];
+	u32 rows[8][5];
+	unsigned int i;
+
+	nb = kunit_kcalloc(test, RTL9602C_NEIGH6_ENTRIES, sizeof(*nb), GFP_KERNEL);
+	cur = kunit_kcalloc(test, RTL9602C_NEIGH6_ENTRIES, sizeof(*cur), GFP_KERNEL);
+	want = kunit_kcalloc(test, RTL9602C_NEIGH6_ENTRIES, sizeof(*want), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, nb);
+	KUNIT_ASSERT_NOT_NULL(test, cur);
+	KUNIT_ASSERT_NOT_NULL(test, want);
+	rtl9602c_test_nb6_rows(test, rows);
+
+	/* The host on row 3, bucket 12; one on row 4, buckets 13 and 9. */
+	rtl9602c_test_nb6_put(test, &nb[1], TEST_NB6_HOST, TEST_NB6_NETIF, 132);
+	rtl9602c_test_nb6_put(test, &nb[2], "2001:db8:1:2::9", 5, 133);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_plan(nb, RTL9602C_NEIGH6_ENTRIES, rows, 8,
+						    cur, want), 0U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[1], 3, 0), 96);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[2], 4, 0), 72);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[2], 4, 73), 104);
+	for (i = 0; i < RTL9602C_NEIGH6_ENTRIES; i++)
+		if (i != 96 && i != 72 && i != 104)
+			KUNIT_EXPECT_EQ(test, want[i][2], 0U);
+
+	/* A newcomer of bucket 12, before the host in the shadow, takes way 1. */
+	memcpy(cur, want, RTL9602C_NEIGH6_ENTRIES * sizeof(*cur));
+	rtl9602c_test_nb6_put(test, &nb[0], "2001:db8:1:1::12", TEST_NB6_NETIF, 140);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_plan(nb, RTL9602C_NEIGH6_ENTRIES, rows, 8,
+						    cur, want), 0U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[1], 3, 0), 96);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[0], 3, 0), 97);
+
+	/* The host leaves: its row is free, and the newcomer stays. */
+	memcpy(cur, want, RTL9602C_NEIGH6_ENTRIES * sizeof(*cur));
+	nb[1].used = false;
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_plan(nb, RTL9602C_NEIGH6_ENTRIES, rows, 8,
+						    cur, want), 0U);
+	KUNIT_EXPECT_EQ(test, want[96][2], 0U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[0], 3, 0), 97);
+
+	/* Not seen in the kernel's table, or not yet placed: no row. */
+	nb[0].seen = false;
+	nb[2].fresh = true;
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_plan(nb, RTL9602C_NEIGH6_ENTRIES, rows, 8,
+						    cur, want), 0U);
+	for (i = 0; i < RTL9602C_NEIGH6_ENTRIES; i++)
+		KUNIT_EXPECT_EQ(test, want[i][2], 0U);
+
+	/* Nine neighbours of bucket 12: eight rows, one left out. */
+	memset(nb, 0, RTL9602C_NEIGH6_ENTRIES * sizeof(*nb));
+	memset(cur, 0, RTL9602C_NEIGH6_ENTRIES * sizeof(*cur));
+	for (i = 0; i < ARRAY_SIZE(same); i++)
+		rtl9602c_test_nb6_put(test, &nb[i], same[i], TEST_NB6_NETIF, 200 + i);
+	rtl9602c_test_nb6_put(test, &nb[i], "2001:db8:1:1::12", TEST_NB6_NETIF, 300);
+	KUNIT_EXPECT_EQ(test, rtl9602c_l34_nb6_plan(nb, RTL9602C_NEIGH6_ENTRIES, rows, 8,
+						    cur, want), 1U);
+	for (i = 0; i < ARRAY_SIZE(same); i++)
+		KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[i], 3, 0), 96 + (int)i);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_nb6_at(want, &nb[i], 3, 0), -1);
+}
+
+/*
+ * Which neighbours may have a row: resolved ones, a stale one included, at a
+ * unicast address beyond the link; not one that failed, is still being
+ * resolved or is gone, nor a link-local or multicast address.
+ */
+static void rtl9602c_test_nb6_wanted(struct kunit *test)
+{
+	struct in6_addr a = rtl9602c_test_in6(test, TEST_NB6_HOST);
+	struct in6_addr ll = rtl9602c_test_in6(test, "fe80::4455");
+	struct in6_addr mc = rtl9602c_test_in6(test, "ff02::1");
+
+	KUNIT_EXPECT_TRUE(test, rtl9602c_l34_nb6_wanted(NUD_REACHABLE, false, &a));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_l34_nb6_wanted(NUD_STALE, false, &a));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_l34_nb6_wanted(NUD_DELAY, false, &a));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_l34_nb6_wanted(NUD_PROBE, false, &a));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_l34_nb6_wanted(NUD_PERMANENT, false, &a));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_nb6_wanted(NUD_FAILED, false, &a));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_nb6_wanted(NUD_INCOMPLETE, false, &a));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_nb6_wanted(NUD_NONE, false, &a));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_nb6_wanted(NUD_STALE, true, &a));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_nb6_wanted(NUD_REACHABLE, false, &ll));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_nb6_wanted(NUD_REACHABLE, false, &mc));
+}
+
+/* Route @i of the shadow of @p: @dst/@prefix on @ifindex and @port. */
+static void rtl9602c_test_rt6(struct kunit *test, struct rtl9602c_priv *p,
+			      unsigned int i, const char *dst, u8 prefix,
+			      int ifindex, int port, u8 flags)
+{
+	struct rtl9602c_l34_route6 *r = &p->l34_route6[i];
+
+	memset(r, 0, sizeof(*r));
+	r->dst = rtl9602c_test_in6(test, dst);
+	r->prefix = prefix;
+	r->ifindex = ifindex;
+	r->port = port;
+	r->flags = flags;
+	r->used = true;
+}
+
+/*
+ * The row budget: a local network takes its on-link row, NEIGH on its
+ * interface row, and a CPU row for each address of this device in it; with
+ * the link-local, multicast, loopback and default rows one network fits, a
+ * second does not, and the table is then left empty. A network whose device
+ * has no interface row, or whose link is down, is the CPU's.
+ */
+static void rtl9602c_test_route6_budget(struct kunit *test)
+{
+	struct rtl9602c_priv *p;
+	u32 hw[8][5] = { };
+	unsigned int i, neigh = 0, cpu = 0;
+	bool carried;
+
+	p = kunit_kzalloc(test, sizeof(*p), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, p);
+	p->l34_netif_ifindex[TEST_NB6_NETIF] = 10;
+	p->l34_netif_ifindex[5] = 11;
+	p->l34_route6_wan = 3;
+	p->l34_pppoe[3].ifindex = 20;
+
+	rtl9602c_test_rt6(test, p, 0, "::", 0, 20, -1, 0);
+	rtl9602c_test_rt6(test, p, 1, "::1", 128, 1, -1, RTL9602C_L34_RT_CPU);
+	rtl9602c_test_rt6(test, p, 2, "2001:db8:1:1::", 64, 10, 0, 0);
+	rtl9602c_test_rt6(test, p, 3, "2001:db8:1:1::1", 128, 10, 0, RTL9602C_L34_RT_CPU);
+	rtl9602c_test_rt6(test, p, 4, "2001:db8:1:1::", 128, 10, 0, RTL9602C_L34_RT_CPU);
+
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_route6_build(p, hw, &carried));
+	KUNIT_EXPECT_TRUE(test, carried);
+	for (i = 0; i < 7; i++) {
+		u64 act = rtl9602c_flow_get(hw[i], RTL9602C_ROUTE6_ACTION);
+
+		if (!rtl9602c_flow_get(hw[i], RTL9602C_ROUTE6_VALID))
+			continue;
+		if (act == RTL9602C_ROUTE_ACTION_NEIGH) {
+			neigh++;
+			KUNIT_EXPECT_EQ(test, i, 5U);
+			KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[i], RTL9602C_ROUTE6_DST_LEN),
+					64ULL);
+			KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[i], RTL9602C_ROUTE6_L3IF_IDX),
+					(u64)TEST_NB6_NETIF);
+			KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[i], RTL9602C_ROUTE6_RT2WAN),
+					0ULL);
+		} else {
+			KUNIT_EXPECT_EQ(test, act, 0ULL);
+			cpu++;
+		}
+	}
+	KUNIT_EXPECT_EQ(test, neigh, 1U);
+	KUNIT_EXPECT_EQ(test, cpu, 5U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[7], RTL9602C_ROUTE6_ACTION),
+			(u64)RTL9602C_ROUTE_ACTION_NEXTHOP);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[7], RTL9602C_ROUTE6_NEXTHOP_IDX), 3ULL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[7], RTL9602C_ROUTE6_RT2WAN), 1ULL);
+
+	/* Without its interface row, or with its link down, the CPU's. */
+	p->l34_netif_ifindex[TEST_NB6_NETIF] = 0;
+	memset(hw, 0, sizeof(hw));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_route6_build(p, hw, &carried));
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[5], RTL9602C_ROUTE6_ACTION), 0ULL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[5], RTL9602C_ROUTE6_VALID), 1ULL);
+	p->l34_netif_ifindex[TEST_NB6_NETIF] = 10;
+	p->l34_route6[2].linkdown = true;
+	memset(hw, 0, sizeof(hw));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_route6_build(p, hw, &carried));
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[5], RTL9602C_ROUTE6_ACTION), 0ULL);
+	p->l34_route6[2].linkdown = false;
+
+	/* A second network: nine rows before the default route's. */
+	rtl9602c_test_rt6(test, p, 5, "2001:db8:1:2::", 64, 11, 0, 0);
+	rtl9602c_test_rt6(test, p, 6, "2001:db8:1:2::1", 128, 11, 0, RTL9602C_L34_RT_CPU);
+	rtl9602c_test_rt6(test, p, 7, "2001:db8:1:2::", 128, 11, 0, RTL9602C_L34_RT_CPU);
+	memset(hw, 0, sizeof(hw));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_l34_route6_build(p, hw, &carried));
+	for (i = 0; i < 8; i++)
+		KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[i], RTL9602C_ROUTE6_VALID), 0ULL);
+
+	/* Without this device's addresses in it, the second network fits. */
+	p->l34_route6[6].used = false;
+	p->l34_route6[7].used = false;
+	memset(hw, 0, sizeof(hw));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_l34_route6_build(p, hw, &carried));
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[6], RTL9602C_ROUTE6_ACTION),
+			(u64)RTL9602C_ROUTE_ACTION_NEIGH);
+	KUNIT_EXPECT_EQ(test, rtl9602c_flow_get(hw[6], RTL9602C_ROUTE6_L3IF_IDX), 5ULL);
+}
+#endif
+
 /* The @len bits at @lsb of the action of ACL rule words @w. */
 static u32 rtl9602c_test_act_get(const u32 *w, unsigned int lsb, unsigned int len)
 {
@@ -1204,6 +1584,14 @@ static struct kunit_case rtl9602c_offload_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_napt_buckets),
 	KUNIT_CASE(rtl9602c_test_flow_fields),
 	KUNIT_CASE(rtl9602c_test_l34_flow_records),
+#if IS_ENABLED(CONFIG_IPV6)
+	KUNIT_CASE(rtl9602c_test_nb6_entry),
+	KUNIT_CASE(rtl9602c_test_nb6_bucket),
+	KUNIT_CASE(rtl9602c_test_nb6_route),
+	KUNIT_CASE(rtl9602c_test_nb6_plan),
+	KUNIT_CASE(rtl9602c_test_nb6_wanted),
+	KUNIT_CASE(rtl9602c_test_route6_budget),
+#endif
 	KUNIT_CASE(rtl9602c_test_acl_classes),
 	KUNIT_CASE(rtl9602c_test_gem_ds_units),
 	KUNIT_CASE(rtl9602c_test_gem_ds_bucket),

@@ -488,8 +488,9 @@ Interfaces to user space
 - ``/sys/kernel/debug/rtl9602c/``, one directory whose views the blocks of the
   driver create; the GPON MAC's driver makes its own in it when it binds and
   removes them when it unbinds. ``rtl9602c-offload.c`` creates ``qdepth``, ``rma``,
-  ``svlan``, ``egress_capture``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf``,
-  ``l3capture`` and ``qos``; ``rtl9602c-l2.c`` creates ``fdb``;
+  ``svlan``, ``egress_capture``, ``l3nat``, ``l3flow``, ``l3neigh6``,
+  ``l2learn``, ``cf``, ``l3capture`` and ``qos``; ``rtl9602c-l2.c`` creates
+  ``fdb``;
   ``rtl9602c-gpon.c`` creates ``gpontbl``, ``gpon``, ``ploamlog``,
   ``usburst``, ``gemusintr``, ``bwmap`` and ``uscntr``, and ``ploaminject``
   with ``CONFIG_PON_RTL9602C_PLOAM_INJECT``; ``rtl9602c-ponmac.c`` creates

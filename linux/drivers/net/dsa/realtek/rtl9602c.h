@@ -569,8 +569,10 @@ struct rtl9602c_field {
  * IPv6 route entry: as the IPv4 one, with a 128-bit destination, its high
  * word last, and a prefix length that is the length itself. RT2WAN is set
  * on a row whose frames leave by the WAN. Action 0 hands the frame to the
- * CPU. The layout and the actions are not verified beyond what routes
- * through the default route and a gateway on the LAN need.
+ * CPU; NEIGH makes the prefix on-link on the interface row in L3IF_IDX, its
+ * hosts found in the IPv6 neighbour table. The layout and the actions are
+ * not verified beyond what routes through the default route and a gateway
+ * on the LAN need.
  */
 #define RTL9602C_ROUTE6_DST(w)		RTL9602C_FIELD(32 * (w), 32)
 #define RTL9602C_ROUTE6_DST_LEN		RTL9602C_FIELD(128, 8)
@@ -635,6 +637,21 @@ struct rtl9602c_field {
 #define RTL9602C_NEIGH_IP			RTL9602C_FIELD(0, 32)
 #define RTL9602C_NEIGH_VALID		RTL9602C_FIELD(32, 1)
 #define RTL9602C_NEIGH_L2_IDX		RTL9602C_FIELD(33, 11)
+
+/*
+ * IPv6 neighbour entry: a host on a prefix that an IPv6 route row makes
+ * on-link, by the interface identifier of its address, the low 64 bits, and
+ * that row's index, with the address-table row that holds its MAC. Taken to
+ * be sixteen buckets of eight entries, the bucket a hash of the identifier
+ * and the route row (rtl9602c_l34_nb6_bucket()); the layout and the lookup
+ * are not verified. Bit 78 stores and is written 0.
+ */
+#define RTL9602C_NEIGH6_IFID		RTL9602C_FIELD(0, 64)
+#define RTL9602C_NEIGH6_RT_IDX		RTL9602C_FIELD(64, 3)
+#define RTL9602C_NEIGH6_L2_IDX		RTL9602C_FIELD(67, 11)
+#define RTL9602C_NEIGH6_VALID		RTL9602C_FIELD(79, 1)
+#define RTL9602C_NEIGH6_ENTRIES		128
+#define RTL9602C_NEIGH6_WAYS		8
 
 /* PPPoE entry: the session ID, with no valid bit. */
 #define RTL9602C_PPPOE_ENTRY_SESSION		RTL9602C_FIELD(0, 16)
@@ -1632,6 +1649,37 @@ struct rtl9602c_l34_route6 {
 };
 
 /**
+ * struct rtl9602c_l34_nb6 - an IPv6 neighbour on a local network
+ * @addr: its address
+ * @ifindex: its device
+ * @mac: its MAC address
+ * @vid: the VLAN its address-table entry is filed under
+ * @slot: that entry's row in the address table
+ * @netif: the L3-interface row of its device
+ * @port: the switch port its device runs over
+ * @used: the slot holds a neighbour
+ * @seen: the kernel holds the neighbour as it is, in the sync under way
+ * @fresh: its address-table entry is still to be placed, in that sync
+ *
+ * A neighbour whose address lies in an on-link prefix of a local network, as
+ * an IPv6 route on a device over a switch port other than the PON port makes
+ * it, has its address-table entry placed while the kernel holds it resolved;
+ * its row in the IPv6 neighbour table follows the route row of that prefix.
+ */
+struct rtl9602c_l34_nb6 {
+	struct in6_addr	addr;
+	int		ifindex;
+	u8		mac[ETH_ALEN];
+	u16		vid;
+	u16		slot;
+	s8		netif;
+	s8		port;
+	bool		used;
+	bool		seen;
+	bool		fresh;
+};
+
+/**
  * struct rtl9602c_l34_fib_ev - a route event queued for the work item
  * @list: its place in rtl9602c_priv.l34_fib_q
  * @route: what the row needs, copied out in the notifier
@@ -1985,6 +2033,17 @@ struct rtl9602c_priv {
 	 * IPv4 address
 	 */
 	bool l34_netif_v6[16];
+	/** @l34_nb6: the IPv6 neighbours of the local networks */
+	struct rtl9602c_l34_nb6 l34_nb6[RTL9602C_NEIGH6_ENTRIES];
+	/** @l34_neigh6_hw: the IPv6 neighbour rows last written */
+	u32 l34_neigh6_hw[RTL9602C_NEIGH6_ENTRIES][3];
+	/** @l34_neigh6_want: the rows a sync lays out, before they are written */
+	u32 l34_neigh6_want[RTL9602C_NEIGH6_ENTRIES][3];
+	/**
+	 * @l34_nb6_warned: a neighbour found no room, in the shadow or in its
+	 * bucket, and it was said
+	 */
+	bool l34_nb6_warned;
 
 	/**
 	 * @flow_lock: serialises the L3/NAT bookkeeping: rows, routes, flows

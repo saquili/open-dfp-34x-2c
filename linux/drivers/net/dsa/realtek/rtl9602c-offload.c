@@ -4679,10 +4679,27 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 }
 
 /*
+ * Whether an IPv6 neighbour of a local network names the address-table entry
+ * of @mac at @vid, as a host that is an ARP neighbour too does.
+ */
+static bool rtl9602c_l34_nb6_names(struct rtl9602c_priv *p,
+				   const unsigned char *mac, u16 vid)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_nb6); i++)
+		if (p->l34_nb6[i].used && !p->l34_nb6[i].fresh &&
+		    p->l34_nb6[i].vid == vid &&
+		    ether_addr_equal(p->l34_nb6[i].mac, mac))
+			return true;
+	return false;
+}
+
+/*
  * Record that next-hop row @row names the address-table entry of @mac at @vid,
  * or, with @mac NULL, that it names none. The entry the row named before is
  * deleted when no other row names it: rtl9602c_l34_nh_l2_put() deletes an
- * entry that no row names.
+ * entry that no next-hop row and no IPv6 neighbour names.
  */
 static void rtl9602c_l34_nh_l2_put(struct rtl9602c_priv *p,
 				   const unsigned char *mac, u16 vid)
@@ -4693,6 +4710,8 @@ static void rtl9602c_l34_nh_l2_put(struct rtl9602c_priv *p,
 		if (ether_addr_equal(p->l34_nh_mac[i], mac) &&
 		    p->l34_nh_vid[i] == vid)
 			return;
+	if (rtl9602c_l34_nb6_names(p, mac, vid))
+		return;
 	if (rtl9602c_l2_nexthop_drop(p, mac, vid))
 		pr_warn("<l3> %pM vlan %u: the next hop's address-table entry was not deleted\n",
 			mac, vid);
@@ -4722,11 +4741,12 @@ static void rtl9602c_l34_nh_l2_set(struct rtl9602c_priv *p, unsigned int row,
  * @p: the switch, its L3 notifiers unregistered
  *
  * The undoing of rtl9602c_l34_init() at teardown: this device's own addresses
- * are trapped to the CPU again, the address-table entries of the next hops are
- * deleted, the engine's master enable is cleared, and its tables are reset and
- * emptied, so that no flow is forwarded by rows that no driver keeps any more,
- * and a driver bound again finds the engine as its bookkeeping starts. The
- * flow records go with the tables, and a flow offered after this is declined.
+ * are trapped to the CPU again, the address-table entries of the next hops and
+ * of the IPv6 neighbours are deleted, the engine's master enable is cleared,
+ * and its tables are reset and emptied, so that no flow is forwarded by rows
+ * that no driver keeps any more, and a driver bound again finds the engine as
+ * its bookkeeping starts. The flow records go with the tables, and a flow
+ * offered after this is declined.
  */
 void rtl9602c_l34_fini(struct rtl9602c_priv *p)
 {
@@ -4738,6 +4758,16 @@ void rtl9602c_l34_fini(struct rtl9602c_priv *p)
 	p->l34_up = false;
 	for (i = 0; i < ARRAY_SIZE(p->l34_nh_mac); i++)
 		rtl9602c_l34_nh_l2_set(p, i, NULL, 0);
+	for (i = 0; i < ARRAY_SIZE(p->l34_nb6); i++) {
+		struct rtl9602c_l34_nb6 *nb = &p->l34_nb6[i];
+
+		if (!nb->used || nb->fresh)
+			continue;
+		nb->used = false;
+		rtl9602c_l34_nh_l2_put(p, nb->mac, nb->vid);
+	}
+	memset(p->l34_nb6, 0, sizeof(p->l34_nb6));
+	memset(p->l34_neigh6_hw, 0, sizeof(p->l34_neigh6_hw));
 	memset(p->l34_netif_v6, 0, sizeof(p->l34_netif_v6));
 	rtl9602c_rmw(p, RTL9602C_L3_GLOBAL_CTRL, RTL9602C_L3_GLOBAL_CTRL_EN, 0);
 	rtl9602c_l34_tables_reset(p, &done, &busy);
@@ -6104,10 +6134,54 @@ static bool rtl9602c_l34_route6_nh(struct rtl9602c_priv *p,
 	return false;
 }
 
-/* Row @e for @dst/@prefix with @action, through next hop @nh. */
+/*
+ * Whether route @r is on-link on a local network whose device holds
+ * L3-interface row @netif: the engine then finds the prefix's hosts in the
+ * IPv6 neighbour table (rtl9602c_l34_nb6_sync()).
+ */
+static bool rtl9602c_l34_route6_onlink(struct rtl9602c_priv *p,
+				       const struct rtl9602c_l34_route6 *r,
+				       unsigned int *netif)
+{
+	int row;
+
+	if (!rtl9602c_l34_route6_lan(r) || r->linkdown)
+		return false;
+	row = rtl9602c_l34_netif_row(p, r->ifindex);
+	if (row < 0)
+		return false;
+	*netif = row;
+	return true;
+}
+
+/*
+ * The action of route @r's row: a drop for a blackhole; a next hop through
+ * the WAN or a resolved gateway (rtl9602c_l34_route6_nh()), the next-hop row in
+ * @idx and whether it leaves by the WAN in @wan; on-link on a local network
+ * (rtl9602c_l34_route6_onlink()), the L3-interface row in @idx; or 0, the CPU.
+ */
+static unsigned int rtl9602c_l34_route6_action(struct rtl9602c_priv *p,
+					       const struct rtl9602c_l34_route6 *r,
+					       unsigned int *idx, bool *wan)
+{
+	*idx = 0;
+	*wan = false;
+	if (r->flags & RTL9602C_L34_RT_DROP)
+		return RTL9602C_ROUTE_ACTION_DROP;
+	if (rtl9602c_l34_route6_nh(p, r, idx, wan))
+		return RTL9602C_ROUTE_ACTION_NEXTHOP;
+	if (rtl9602c_l34_route6_onlink(p, r, idx))
+		return RTL9602C_ROUTE_ACTION_NEIGH;
+	return 0;
+}
+
+/*
+ * Row @e for @dst/@prefix with @action: through next-hop row @idx, or on-link
+ * on L3-interface row @idx, the same bits.
+ */
 static void rtl9602c_l34_route6_encode(u32 *e, const struct in6_addr *dst,
 				       u8 prefix, unsigned int action,
-				       unsigned int nh, bool wan)
+				       unsigned int idx, bool wan)
 {
 	unsigned int w;
 
@@ -6118,62 +6192,55 @@ static void rtl9602c_l34_route6_encode(u32 *e, const struct in6_addr *dst,
 	rtl9602c_flow_put(e, RTL9602C_ROUTE6_VALID, 1);
 	rtl9602c_flow_put(e, RTL9602C_ROUTE6_ACTION, action);
 	if (action == RTL9602C_ROUTE_ACTION_NEXTHOP) {
-		rtl9602c_flow_put(e, RTL9602C_ROUTE6_NEXTHOP_IDX, nh);
+		rtl9602c_flow_put(e, RTL9602C_ROUTE6_NEXTHOP_IDX, idx);
 		rtl9602c_flow_put(e, RTL9602C_ROUTE6_RT2WAN, wan);
+	} else if (action == RTL9602C_ROUTE_ACTION_NEIGH) {
+		rtl9602c_flow_put(e, RTL9602C_ROUTE6_L3IF_IDX, idx);
 	}
 }
 
 /*
- * Write the IPv6 route rows. Only what the hardware can carry gets a row of
- * its own: a route through the default route's WAN or through a resolved
- * gateway on a switch port, and a blackhole. A route the CPU must decide gets
- * a CPU row only where a carried route would otherwise take its frames, that
- * is when it lies inside one, and the link-local and multicast prefixes always
- * do; with no carried route there are no rows at all, every frame going to
- * the CPU. The rows go longest prefix first and the default route last, in
- * the last row. A table that does not fit is written empty.
+ * Lay the IPv6 route rows out into @hw. Only what the hardware can carry gets a
+ * row of its own: a route through the default route's WAN or through a
+ * resolved gateway on a switch port, an on-link prefix of a local network, and
+ * a blackhole. A route the CPU must decide gets a CPU row only where a carried
+ * route would otherwise take its frames, that is when it lies inside one, and
+ * the link-local and multicast prefixes always do; with no carried route there
+ * are no rows at all, every frame going to the CPU. The rows go longest prefix
+ * first and the default route last, in the last row. @carried says whether a
+ * route is carried.
  *
- * With RTL9602C_L3_CFG_FLOW6_EN set the engine sends every IPv6 frame it
- * takes to the CPU, whatever the rows say; it is cleared once there are rows
- * and set again before they go.
+ * Return: true when the routes need more rows than the table has, or cannot
+ * be followed, and @hw is left empty.
  */
-static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
+static bool rtl9602c_l34_route6_build(struct rtl9602c_priv *p, u32 (*hw)[5],
+				      bool *carried)
 {
 	static const struct in6_addr ll = { { { 0xfe, 0x80 } } };
 	static const struct in6_addr mc = { { { 0xff } } };
 	unsigned int rows = rtl9602c_nat_tbl_entries[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
-	unsigned int words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
-	u32 hw[ARRAY_SIZE(p->l34_route6_hw)][5] = {};
 	/*
 	 * The engine routes IPv6 by the destination alone: with a rule that
 	 * may route a host by a table of its own, the CPU routes all of it.
 	 */
-	bool carried = false, failed = false,
-	     bail = p->l34_route6_over || !rtl9602c_l34_rules6_plain();
-	unsigned int n = 0, i, j, nh;
+	bool bail = p->l34_route6_over || !rtl9602c_l34_rules6_plain();
+	unsigned int n = 0, i, j, idx;
 	int prefix;
 	bool wan;
 
-	if (WARN_ON(rows > ARRAY_SIZE(hw) || words > ARRAY_SIZE(hw[0])))
-		return;
+	*carried = false;
+	for (i = 0; i < ARRAY_SIZE(p->l34_route6); i++)
+		if (p->l34_route6[i].used &&
+		    rtl9602c_l34_route6_action(p, &p->l34_route6[i], &idx, &wan))
+			*carried = true;
 
-	rtl9602c_l34_nh6_sync(p);
-
-	for (i = 0; i < ARRAY_SIZE(p->l34_route6); i++) {
-		const struct rtl9602c_l34_route6 *r = &p->l34_route6[i];
-
-		if (r->used && (r->flags & RTL9602C_L34_RT_DROP ||
-				rtl9602c_l34_route6_nh(p, r, &nh, &wan)))
-			carried = true;
-	}
-
-	if (carried && !bail) {
+	if (*carried && !bail) {
 		/* The link-local and multicast prefixes stay the CPU's. */
 		rtl9602c_l34_route6_encode(hw[n++], &ll, 10, 0, 0, false);
 		rtl9602c_l34_route6_encode(hw[n++], &mc, 8, 0, 0, false);
 	}
 
-	for (prefix = 128; prefix >= 0 && carried && !bail; prefix--) {
+	for (prefix = 128; prefix >= 0 && *carried && !bail; prefix--) {
 		for (i = 0; i < ARRAY_SIZE(p->l34_route6); i++) {
 			const struct rtl9602c_l34_route6 *r = &p->l34_route6[i];
 			unsigned int action, at;
@@ -6185,30 +6252,23 @@ static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
 			    ipv6_prefix_equal(&r->dst, &mc, 8))
 				continue;
 
-			nh = 0;
-			wan = false;
-			if (r->flags & RTL9602C_L34_RT_DROP) {
-				action = RTL9602C_ROUTE_ACTION_DROP;
-			} else if (rtl9602c_l34_route6_nh(p, r, &nh, &wan)) {
-				action = RTL9602C_ROUTE_ACTION_NEXTHOP;
-			} else {
+			action = rtl9602c_l34_route6_action(p, r, &idx, &wan);
+			if (!action) {
 				/* For the CPU: only inside a carried route. */
 				for (j = 0; j < ARRAY_SIZE(p->l34_route6) && !inside; j++) {
 					const struct rtl9602c_l34_route6 *c =
 						&p->l34_route6[j];
-					unsigned int cnh;
+					unsigned int cidx;
 					bool cwan;
 
 					inside = c->used && c->prefix < prefix &&
-						 (c->flags & RTL9602C_L34_RT_DROP ||
-						  rtl9602c_l34_route6_nh(p, c, &cnh,
-									 &cwan)) &&
+						 rtl9602c_l34_route6_action(p, c, &cidx,
+									    &cwan) &&
 						 ipv6_prefix_equal(&r->dst, &c->dst,
 								   c->prefix);
 				}
 				if (!inside)
 					continue;
-				action = 0;
 			}
 
 			/* The default route takes the last row. */
@@ -6220,14 +6280,387 @@ static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
 			if (!prefix && !ipv6_addr_any(&r->dst))
 				continue;
 			rtl9602c_l34_route6_encode(hw[at], &r->dst, prefix, action,
-						   nh, wan);
+						   idx, wan);
 			if (prefix)
 				n++;
 		}
 	}
 
+	if (bail)
+		memset(hw, 0, rows * sizeof(hw[0]));
+	return bail;
+}
+
+/*
+ * The IPv6 neighbours of the local networks. A frame to a host on a prefix
+ * that is on-link on a local network matches that prefix's route row, action
+ * NEIGH, which names the network's L3-interface row; the engine then looks the
+ * host up in the IPv6 neighbour table by the interface identifier of its
+ * address and the index of that route row, and sends the frame to the
+ * address-table entry the neighbour row names, from the interface row's MAC
+ * and VLAN. The table is taken to be sixteen buckets of eight rows, the bucket
+ * a hash of the identifier and the route row; neither the hash nor that the
+ * engine searches all eight rows of a bucket is verified.
+ */
+
+/*
+ * The bucket of the neighbour at @addr on route row @rt: the eight octets of
+ * the interface identifier folded into one by exclusive or, its two nibbles
+ * folded into four bits, and the route row mixed in. Two forms of the mix are
+ * taken for possible, the row whole and its low two bits; they give the same
+ * bucket except for rows 4 and 5, and @second asks for the second.
+ */
+static unsigned int rtl9602c_l34_nb6_bucket(const struct in6_addr *addr,
+					    unsigned int rt, bool second)
+{
+	unsigned int mix = (rt & 1) << 3 | (rt & 2) << 1 | (second ? rt & 3 : rt);
+	unsigned int i;
+	u8 x = 0;
+
+	for (i = 8; i < 16; i++)
+		x ^= addr->s6_addr[i];
+	return ((x >> 4) ^ (x & 0xf) ^ mix) & 0xf;
+}
+
+/* Neighbour row @e: @addr on route row @rt, its MAC in address-table row @slot. */
+static void rtl9602c_l34_nb6_encode(u32 *e, const struct in6_addr *addr,
+				    unsigned int rt, unsigned int slot)
+{
+	u64 ifid = (u64)be32_to_cpu(addr->s6_addr32[2]) << 32 |
+		   be32_to_cpu(addr->s6_addr32[3]);
+
+	rtl9602c_flow_put(e, RTL9602C_NEIGH6_IFID, ifid);
+	rtl9602c_flow_put(e, RTL9602C_NEIGH6_RT_IDX, rt);
+	rtl9602c_flow_put(e, RTL9602C_NEIGH6_L2_IDX, slot);
+	rtl9602c_flow_put(e, RTL9602C_NEIGH6_VALID, 1);
+}
+
+/*
+ * The route row of @n_rows rows @rows that a frame to @addr matches, if it is
+ * on-link on L3-interface row @netif: the first valid row whose prefix holds
+ * @addr, the rows going longest prefix first. -1 when it is another row, or
+ * none.
+ */
+static int rtl9602c_l34_nb6_route(u32 (*rows)[5], unsigned int n_rows,
+				  const struct in6_addr *addr, unsigned int netif)
+{
+	struct in6_addr dst;
+	unsigned int i, w;
+
+	for (i = 0; i < n_rows; i++) {
+		if (!rtl9602c_flow_get(rows[i], RTL9602C_ROUTE6_VALID))
+			continue;
+		for (w = 0; w < 4; w++)
+			dst.s6_addr32[3 - w] =
+				cpu_to_be32(rtl9602c_flow_get(rows[i],
+							      RTL9602C_ROUTE6_DST(w)));
+		if (!ipv6_prefix_equal(addr, &dst,
+				       rtl9602c_flow_get(rows[i], RTL9602C_ROUTE6_DST_LEN)))
+			continue;
+		if (rtl9602c_flow_get(rows[i], RTL9602C_ROUTE6_ACTION) !=
+		    RTL9602C_ROUTE_ACTION_NEIGH ||
+		    rtl9602c_flow_get(rows[i], RTL9602C_ROUTE6_L3IF_IDX) != netif)
+			return -1;
+		return i;
+	}
+	return -1;
+}
+
+/*
+ * Lay the IPv6 neighbour rows out into @want for route rows @rows: each
+ * neighbour of the @n of @nb that is in use and seen, and whose address a
+ * route row makes on-link on its L3-interface row, gets a row in its bucket,
+ * and one in the other bucket where the two forms of the hash differ. A row
+ * that already holds it in @cur is kept; otherwise it takes the lowest row of
+ * the bucket that nothing else takes.
+ *
+ * Return: how many neighbours found a bucket full.
+ */
+static unsigned int rtl9602c_l34_nb6_plan(const struct rtl9602c_l34_nb6 *nb,
+					  unsigned int n, u32 (*rows)[5],
+					  unsigned int n_rows, u32 (*cur)[3],
+					  u32 (*want)[3])
+{
+	DECLARE_BITMAP(placed, 2 * RTL9602C_NEIGH6_ENTRIES);
+	unsigned int i, copy, way, b, idx, missed = 0;
+	unsigned int pass;
+	u32 e[3];
+	int rt;
+
+	bitmap_zero(placed, 2 * RTL9602C_NEIGH6_ENTRIES);
+	memset(want, 0, RTL9602C_NEIGH6_ENTRIES * sizeof(want[0]));
+	n = min_t(unsigned int, n, RTL9602C_NEIGH6_ENTRIES);
+
+	/* The rows already held first, then the lowest free ones. */
+	for (pass = 0; pass < 2; pass++) {
+		for (i = 0; i < n; i++) {
+			bool full = false;
+
+			if (!nb[i].used || !nb[i].seen || nb[i].fresh)
+				continue;
+			rt = rtl9602c_l34_nb6_route(rows, n_rows, &nb[i].addr,
+						    nb[i].netif);
+			if (rt < 0)
+				continue;
+			memset(e, 0, sizeof(e));
+			rtl9602c_l34_nb6_encode(e, &nb[i].addr, rt, nb[i].slot);
+
+			for (copy = 0; copy < 2; copy++) {
+				b = rtl9602c_l34_nb6_bucket(&nb[i].addr, rt, copy);
+				if (copy && b == rtl9602c_l34_nb6_bucket(&nb[i].addr, rt, 0))
+					continue;
+				if (test_bit(2 * i + copy, placed))
+					continue;
+				for (way = 0; way < RTL9602C_NEIGH6_WAYS; way++) {
+					idx = b * RTL9602C_NEIGH6_WAYS + way;
+					if (rtl9602c_flow_get(want[idx], RTL9602C_NEIGH6_VALID))
+						continue;
+					if (!pass && memcmp(cur[idx], e, sizeof(e)))
+						continue;
+					memcpy(want[idx], e, sizeof(e));
+					set_bit(2 * i + copy, placed);
+					break;
+				}
+				if (pass && way == RTL9602C_NEIGH6_WAYS)
+					full = true;
+			}
+			if (full)
+				missed++;
+		}
+	}
+	return missed;
+}
+
+/*
+ * Whether a neighbour in NUD state @state, @dead or not, at @addr may have a
+ * row: resolved, in any valid state, a stale one included, as an ARP
+ * neighbour is, and at a unicast address beyond the link, since a frame to a
+ * link-local address is not routed.
+ */
+static bool rtl9602c_l34_nb6_wanted(u8 state, bool dead,
+				    const struct in6_addr *addr)
+{
+	int type = ipv6_addr_type(addr);
+
+	return !dead && (state & NUD_VALID) && (type & IPV6_ADDR_UNICAST) &&
+	       !(type & (IPV6_ADDR_LINKLOCAL | IPV6_ADDR_LOOPBACK |
+			 IPV6_ADDR_MAPPED));
+}
+
+/*
+ * The L3-interface row of the local network whose on-link prefix holds @addr
+ * on device @ifindex, with its switch port in @port; -1 for none.
+ */
+static int rtl9602c_l34_nb6_netif(struct rtl9602c_priv *p,
+				  const struct in6_addr *addr, int ifindex,
+				  int *port)
+{
+	unsigned int i, netif;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_route6); i++) {
+		const struct rtl9602c_l34_route6 *r = &p->l34_route6[i];
+
+		if (r->ifindex != ifindex ||
+		    !rtl9602c_l34_route6_onlink(p, r, &netif) ||
+		    !ipv6_prefix_equal(addr, &r->dst, r->prefix))
+			continue;
+		*port = r->port;
+		return netif;
+	}
+	return -1;
+}
+
+struct rtl9602c_l34_nb6_walk {
+	struct rtl9602c_priv	*p;
+	bool			full;
+};
+
+/*
+ * For each NDP neighbour, under the neighbour table's lock: one that may have
+ * a row and lies in an on-link prefix of a local network is marked seen in
+ * the shadow, or, when the shadow does not hold it as it is, takes a free
+ * slot there, fresh, its address-table entry still to be placed.
+ */
+static void rtl9602c_l34_nb6_seen(struct neighbour *n, void *arg)
+{
+	const struct in6_addr *addr = (const struct in6_addr *)n->primary_key;
+	struct rtl9602c_l34_nb6_walk *w = arg;
+	struct rtl9602c_l34_nb6 *nb, *free = NULL;
+	struct rtl9602c_priv *p = w->p;
+	u8 mac[ETH_ALEN];
+	int netif, port;
+	unsigned int i;
+
+	if (!n->dev || n->dev->addr_len != ETH_ALEN ||
+	    !rtl9602c_l34_nb6_wanted(READ_ONCE(n->nud_state), n->dead, addr))
+		return;
+	netif = rtl9602c_l34_nb6_netif(p, addr, n->dev->ifindex, &port);
+	if (netif < 0)
+		return;
+	neigh_ha_snapshot(mac, n, n->dev);
+	if (!is_valid_ether_addr(mac))
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_nb6); i++) {
+		nb = &p->l34_nb6[i];
+		if (!nb->used) {
+			if (!free)
+				free = nb;
+			continue;
+		}
+		if (nb->ifindex == n->dev->ifindex && nb->netif == netif &&
+		    ipv6_addr_equal(&nb->addr, addr) &&
+		    ether_addr_equal(nb->mac, mac)) {
+			nb->seen = true;
+			return;
+		}
+	}
+	if (!free) {
+		w->full = true;
+		return;
+	}
+
+	memset(free, 0, sizeof(*free));
+	free->addr = *addr;
+	free->ifindex = n->dev->ifindex;
+	ether_addr_copy(free->mac, mac);
+	free->netif = netif;
+	free->port = port;
+	free->used = true;
+	free->seen = true;
+	free->fresh = true;
+}
+
+/*
+ * Place the address-table entry of a fresh neighbour, under the VLAN of its
+ * L3-interface row, as for an ARP neighbour (rtl9602c_l34_neigh_set()).
+ */
+static int rtl9602c_l34_nb6_place(struct rtl9602c_priv *p,
+				  struct rtl9602c_l34_nb6 *nb)
+{
+	unsigned int nif_words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_L3IF];
+	u32 e[RTL9602C_L3TBL_DATA_WORDS] = {};
+	unsigned int slot;
+	u16 vid;
+	int err;
+
+	if (rtl9602c_nat_tbl_read(p, RTL9602C_L3TBL_CTRL_TABLE_L3IF, nb->netif, e,
+				  nif_words))
+		return -EIO;
+	vid = rtl9602c_flow_get(e, RTL9602C_L3IF_VID);
+
+	err = rtl9602c_l2_nexthop_place(p, nb->mac, nb->port, &vid, &slot);
+	if (err)
+		return err;
+	nb->vid = vid;
+	nb->slot = slot;
+	return 0;
+}
+
+/*
+ * Bring the IPv6 neighbour rows in line with route rows @rows. With @refresh
+ * the neighbours are taken from the kernel's table again first: a resolved
+ * neighbour in an on-link prefix of a local network keeps its place in the
+ * shadow, or takes one with its address-table entry, and the others leave the
+ * shadow, their entries deleted once no row names them any more
+ * (rtl9602c_l34_nh_l2_put()). A neighbour that finds no room, in the shadow or
+ * in its bucket, stays with the CPU, which is said once until all fit again.
+ * Context: flow_lock held.
+ */
+static void rtl9602c_l34_nb6_sync(struct rtl9602c_priv *p, u32 (*rows)[5],
+				  bool refresh)
+{
+	unsigned int words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_NEIGH6];
+	unsigned int n_rows = rtl9602c_nat_tbl_entries[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
+	struct rtl9602c_l34_nb6_walk walk = { .p = p };
+	struct rtl9602c_l34_nb6 *nb;
+	unsigned int i, missed;
+
+	if (refresh) {
+		for (i = 0; i < ARRAY_SIZE(p->l34_nb6); i++)
+			p->l34_nb6[i].seen = false;
+		neigh_for_each(&nd_tbl, rtl9602c_l34_nb6_seen, &walk);
+		for (i = 0; i < ARRAY_SIZE(p->l34_nb6); i++) {
+			nb = &p->l34_nb6[i];
+			if (!nb->used || !nb->fresh)
+				continue;
+			if (rtl9602c_l34_nb6_place(p, nb)) {
+				pr_debug("<l3> %pI6c: no address-table entry for %pM\n",
+					 &nb->addr, nb->mac);
+				nb->used = false;
+			}
+			nb->fresh = false;
+		}
+	}
+
+	missed = rtl9602c_l34_nb6_plan(p->l34_nb6, ARRAY_SIZE(p->l34_nb6), rows,
+				       n_rows, p->l34_neigh6_hw,
+				       p->l34_neigh6_want);
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_neigh6_hw); i++) {
+		if (!memcmp(p->l34_neigh6_hw[i], p->l34_neigh6_want[i],
+			    words * sizeof(u32)))
+			continue;
+		if (rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NEIGH6, i,
+					   p->l34_neigh6_want[i], words)) {
+			pr_warn("<l3> neigh6[%u] did not take\n", i);
+			continue;
+		}
+		memcpy(p->l34_neigh6_hw[i], p->l34_neigh6_want[i],
+		       words * sizeof(u32));
+		pr_debug("<l3> neigh6[%u] = %08x %08x %08x\n", i,
+			 p->l34_neigh6_hw[i][0], p->l34_neigh6_hw[i][1],
+			 p->l34_neigh6_hw[i][2]);
+	}
+
+	if (!refresh)
+		return;
+
+	/* Their rows gone, the neighbours that left give their entries back. */
+	for (i = 0; i < ARRAY_SIZE(p->l34_nb6); i++) {
+		nb = &p->l34_nb6[i];
+		if (!nb->used || nb->seen)
+			continue;
+		nb->used = false;
+		pr_debug("<l3> %pI6c at %pM is no longer a neighbour of a local network\n",
+			 &nb->addr, nb->mac);
+		rtl9602c_l34_nh_l2_put(p, nb->mac, nb->vid);
+	}
+
+	if ((missed || walk.full) && !p->l34_nb6_warned)
+		pr_warn("<l3> %s; the CPU routes to the IPv6 hosts left out\n",
+			walk.full ?
+			"more IPv6 neighbours on the local networks than the driver keeps" :
+			"an IPv6 neighbour table bucket is full");
+	p->l34_nb6_warned = missed || walk.full;
+}
+
+/*
+ * Write the IPv6 route rows (rtl9602c_l34_route6_build()) and the neighbour
+ * rows that hang on them: the neighbour rows of a route row about to change go
+ * first, and the neighbours are laid out again once the route rows are in. A
+ * table that does not fit is written empty, with one warning.
+ *
+ * With RTL9602C_L3_CFG_FLOW6_EN set the engine sends every IPv6 frame it
+ * takes to the CPU, whatever the rows say; it is cleared once there are rows
+ * and set again before they go.
+ */
+static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
+{
+	unsigned int rows = rtl9602c_nat_tbl_entries[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
+	unsigned int words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
+	u32 hw[ARRAY_SIZE(p->l34_route6_hw)][5] = {};
+	u32 keep[ARRAY_SIZE(p->l34_route6_hw)][5] = {};
+	bool carried, bail, failed = false;
+	unsigned int i;
+
+	if (WARN_ON(rows > ARRAY_SIZE(hw) || words > ARRAY_SIZE(hw[0])))
+		return;
+
+	rtl9602c_l34_nh6_sync(p);
+	bail = rtl9602c_l34_route6_build(p, hw, &carried);
+
 	if (bail) {
-		memset(hw, 0, sizeof(hw));
 		if (!p->l34_route6_warned)
 			pr_warn("<l3> this IPv6 routing table cannot be mirrored faithfully; every IPv6 destination goes to the CPU\n");
 		p->l34_route6_warned = true;
@@ -6238,6 +6671,12 @@ static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
 	/* FLOW6_EN is set before rows go and cleared once all are in. */
 	if (!carried || bail)
 		rtl9602c_rmw(p, RTL9602C_L3_CFG, 0, RTL9602C_L3_CFG_FLOW6_EN);
+
+	/* A neighbour row goes before the route row it names changes. */
+	for (i = 0; i < rows; i++)
+		if (!memcmp(p->l34_route6_hw[i], hw[i], words * sizeof(u32)))
+			memcpy(keep[i], hw[i], words * sizeof(u32));
+	rtl9602c_l34_nb6_sync(p, keep, false);
 
 	for (i = 0; i < rows; i++) {
 		if (!memcmp(p->l34_route6_hw[i], hw[i], words * sizeof(u32)))
@@ -6252,6 +6691,8 @@ static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
 		pr_debug("<l3> route6[%u] = %08x %08x %08x %08x %08x\n", i,
 			 hw[i][0], hw[i][1], hw[i][2], hw[i][3], hw[i][4]);
 	}
+
+	rtl9602c_l34_nb6_sync(p, p->l34_route6_hw, true);
 
 	if (carried && !bail && !failed)
 		rtl9602c_rmw(p, RTL9602C_L3_CFG, RTL9602C_L3_CFG_FLOW6_EN, 0);
@@ -7893,6 +8334,76 @@ static int rtl9602c_l3nat_open(struct inode *inode, struct file *file)
 	return single_open(file, rtl9602c_l3nat_show, inode->i_private);
 }
 
+/*
+ * l3neigh6: the IPv6 neighbours of the local networks that the driver keeps,
+ * each with its device, MAC address, VLAN, address-table row and
+ * L3-interface row; then every row of the IPv6 neighbour table that is not
+ * zero, read from the hardware, with its bucket and way, the route row and
+ * the address-table row it names, and "!" where it differs from the row the
+ * driver wrote; then the table's hit bitmap, raw.
+ */
+static int rtl9602c_l3neigh6_show(struct seq_file *s, void *unused)
+{
+	unsigned int words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_NEIGH6];
+	struct rtl9602c_priv *p = s->private;
+	unsigned int i;
+
+	mutex_lock(&p->flow_lock);
+	seq_puts(s, "neighbours\n");
+	for (i = 0; i < ARRAY_SIZE(p->l34_nb6); i++) {
+		const struct rtl9602c_l34_nb6 *nb = &p->l34_nb6[i];
+
+		if (!nb->used)
+			continue;
+		seq_printf(s, "  %pI6c ifindex %d %pM vlan %u l2 %u l3if %d\n",
+			   &nb->addr, nb->ifindex, nb->mac, nb->vid, nb->slot,
+			   nb->netif);
+	}
+
+	seq_printf(s, "\nneigh6 (table %u, %u words)\n",
+		   RTL9602C_L3TBL_CTRL_TABLE_NEIGH6, words);
+	for (i = 0; i < RTL9602C_NEIGH6_ENTRIES; i++) {
+		u32 e[RTL9602C_L3TBL_DATA_WORDS] = {};
+		int err;
+
+		err = rtl9602c_nat_tbl_read(p, RTL9602C_L3TBL_CTRL_TABLE_NEIGH6, i,
+					    e, words);
+		if (err) {
+			seq_printf(s, "  [%u] read error %d\n", i, err);
+			break;
+		}
+		if (!e[0] && !e[1] && !e[2] && !p->l34_neigh6_hw[i][2])
+			continue;
+		seq_printf(s, "  [%3u] %08x %08x %08x  bucket %2u way %u  route6[%llu] l2 %llu%s\n",
+			   i, e[0], e[1], e[2], i / RTL9602C_NEIGH6_WAYS,
+			   i % RTL9602C_NEIGH6_WAYS,
+			   rtl9602c_flow_get(e, RTL9602C_NEIGH6_RT_IDX),
+			   rtl9602c_flow_get(e, RTL9602C_NEIGH6_L2_IDX),
+			   memcmp(e, p->l34_neigh6_hw[i], words * sizeof(u32)) ?
+			   "  !" : "");
+	}
+	mutex_unlock(&p->flow_lock);
+
+	seq_puts(s, "\nhit");
+	for (i = 0; i < 4; i++)
+		seq_printf(s, " %08x", rtl9602c_r(p, RTL9602C_NEIGH6_HIT(i)));
+	seq_putc(s, '\n');
+	return 0;
+}
+
+static int rtl9602c_l3neigh6_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rtl9602c_l3neigh6_show, inode->i_private);
+}
+
+static const struct file_operations rtl9602c_l3neigh6_fops = {
+	.owner		= THIS_MODULE,
+	.open		= rtl9602c_l3neigh6_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
 static const struct file_operations rtl9602c_rma_fops = {
 	.owner		= THIS_MODULE,
 	.open		= rtl9602c_rma_open,
@@ -8490,9 +9001,9 @@ void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p)
  * rtl9602c_offload_debugfs_init() - create this file's debugfs views
  * @p: the switch, with its debugfs directory created
  *
- * Creates rma, svlan, l3nat, l3flow, l2learn, qos and cf, mode 0400, and
- * qdepth, egress_capture, l3capture and fsel, mode 0600, since a write to them
- * changes the hardware's state.
+ * Creates rma, svlan, l3nat, l3flow, l3neigh6, l2learn, qos and cf, mode 0400,
+ * and qdepth, egress_capture, l3capture and fsel, mode 0600, since a write to
+ * them changes the hardware's state.
  */
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 {
@@ -8508,6 +9019,8 @@ void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_l3nat_fops);
 	debugfs_create_file("l3flow", 0400, p->debugfs, p,
 			    &rtl9602c_l3flow_fops);
+	debugfs_create_file("l3neigh6", 0400, p->debugfs, p,
+			    &rtl9602c_l3neigh6_fops);
 	debugfs_create_file("l2learn", 0400, p->debugfs, p,
 			    &rtl9602c_l2learn_fops);
 	debugfs_create_file("qos", 0400, p->debugfs, p, &rtl9602c_qos_fops);
