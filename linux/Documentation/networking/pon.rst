@@ -46,9 +46,12 @@ and the MAC driver takes them by the firmware node its own firmware names
 (``devm_pon_optics_get()``), as a MAC takes an SFP cage. Through them the MAC
 asserts and releases the transmitter's disable input as the activation state
 requires, prepares the transmitter before an activation, and sets the transmit
-power level the OLT asks for (ITU-T G.984.2 clause 8.3.2). A device link makes
-the driver core unbind the MAC before the optics go. A MAC whose firmware names
-no optics runs without them.
+power level the OLT asks for (ITU-T G.984.2 clause 8.3.2). It says with each
+level whether the transmitter sends often enough for its power to be measured:
+before ranging the ONU sends only its answers to the OLT's serial-number
+requests, and optics that can set a level only by measuring it leave it unset
+there. A device link makes the driver core unbind the MAC before the optics go.
+A MAC whose firmware names no optics runs without them.
 
 The class has no device tree node and no compatible string. It is created by
 the MAC driver's own registrations, and the device tree describes only the

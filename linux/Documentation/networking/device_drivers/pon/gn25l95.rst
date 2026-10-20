@@ -1153,6 +1153,14 @@ bias has room. With the modulation held it has little: the bias reaches its
 floor about 1.5 dB down. So a lower level takes a lower modulation too, scaled
 by the same factor, and then a lower set point.
 
+The set point of a lower level is found by measuring, and the module measures
+the power only in bursts, which come often only from O4 on. So the MAC says
+with each request whether the power can be measured: in O4 and O5 the driver
+finds the set point and keeps it for the mode; before, where the ONU sends only
+its answers to serial-number requests, it writes the set point kept for the
+mode without measuring, and leaves a mode it has not measured since probe
+unset, with the optics where they are.
+
 .. list-table::
    :header-rows: 1
    :widths: 18 22 60
@@ -1164,7 +1172,9 @@ by the same factor, and then a lower set point.
      - ``GN25L95_TBL2_APCSET``
      - The power control's set point. Keeps the module's own value at the
        first hold since probe; writes lower values for modes 1 and 2, never a
-       higher one, and the module's own back for mode 0.
+       higher one, and the module's own back for mode 0. Keeps the value at
+       which each lower mode was last measured, and writes it again for that
+       mode without measuring.
    * - ``0xab``, ``0xac``
      - ``GN25L95_TBL2_MOD_DAC``
      - The modulation DAC. Keeps the module's own value, read with the
@@ -1218,6 +1228,19 @@ by the same factor, and then a lower set point.
        PON taken down and up from mode 2 came back at mode 0, at 1672 uW.
      - T
      - The hwmon readings after each injected message, on an OLT.
+   * - A set point kept from a measurement gives the mode's power again when
+       it is written later without measuring, in another activation and before
+       the laser has sent a burst at it: the power control loop holds the
+       monitor photodiode's current at the set point whatever the bias, so the
+       power follows the set point while the photodiode tracks the laser, and
+       the loop settles within the ONU's first answers to serial-number
+       requests.
+     - I
+     - Not run on the board. A mode measured through an injected
+       Change_Power_Level in O5, the ONU then taken back to O2 and an
+       Upstream_Overhead naming that mode injected: the transmitted power in O5
+       (hwmon) against the one measured before, and the OLT ranging the ONU at
+       it.
    * - That the extinction ratio stays as it is at modes 1 and 2: scaling the
        modulation with the power keeps it while the light grows linearly with
        the current above the laser's threshold, which is not verified.
@@ -1241,36 +1264,45 @@ by the same factor, and then a lower set point.
        been run.
 
 Setting a level (``gn25l95_set_power_level()``, called from the GPON MAC's
-work, ``rtl9602c_gpon_power_work()``, which the MAC queues for each request):
+work, ``rtl9602c_gpon_power_work()``, which the MAC queues for each request and
+which says whether the power can be measured):
 
 1. Take the mode the MAC asks for; if the optics are already at it, stop.
    Purpose: one work item serves every request. (T)
 2. Before a hold has kept the module's own settings, as when the bus refuses
    writes, give up with ``-EOPNOTSUPP``. Purpose: nothing is written that could
    not be put back. (I)
-3. Show the table and check PERSIST as the hold does, giving up with
+3. When the power cannot be measured, give up with ``-ENODATA`` for a lower
+   mode that has no set point kept, writing nothing. Purpose: no set point is
+   guessed; the optics stay where they are, and the MAC declares that. (I)
+4. Show the table and check PERSIST as the hold does, giving up with
    ``-EPERM`` when register changes would reach the EEPROM. Purpose: the
    writes stay in registers. (M)
-4. For mode 0, write the module's modulation and then its set point. (M)
-5. For a lower mode, read the transmitted power while the optics are still at
-   mode 0: the module measures the bursts, so the power read is that of mode 0
-   (no power read gives ``-ENODATA``). The target is that power divided by 2
-   for mode 1 and by 4 for mode 2. Purpose: the level is made from this
-   module's own power. (T)
-6. Write the scaled modulation. Purpose: going down, the loop then holds the
+5. For mode 0, write the module's modulation and then its set point. (M)
+6. For a lower mode when the power cannot be measured, write the scaled
+   modulation and then the set point kept for the mode. Purpose: the level the
+   last measurement found, before the ONU is ranged. (I)
+7. For a lower mode when it can, read the transmitted power while the optics
+   are still at mode 0: the module measures the bursts, so the power read is
+   that of mode 0 (no power read gives ``-ENODATA``). The target is that power
+   divided by 2 for mode 1 and by 4 for mode 2. Purpose: the level is made from
+   this module's own power. (T)
+8. Write the scaled modulation. Purpose: going down, the loop then holds the
    power with more bias, which the set point lowers next; going up, the bias
    falls first. (M)
-7. Move the set point one step at a time towards the target, reading the
-   power and the bias after each, until the power crosses the target. A set
-   point above the module's own, a power of 0 or a bias above
-   ``GN25L95_LEVEL_BIAS_MAX`` (40 mA) gives ``-ERANGE``. Purpose: the
-   power lands at the level without the laser going out. (T)
-8. On a failure, put mode 0 back; when even that fails, log it and count the
-   optics at no known level, which the next request and the next hold try to
-   leave. (I)
-9. Write the page select back, log the level with the power and the bias, and
-   tell the MAC what was set, which declares it in Serial_Number_ONU.
-   (T)
+9. Move the set point one step at a time towards the target, reading the
+   power and the bias after each, until the power crosses the target, and keep
+   the set point it crossed at for the mode. A set point above the module's
+   own, a power of 0 or a bias above ``GN25L95_LEVEL_BIAS_MAX`` (40 mA) gives
+   ``-ERANGE``. Purpose: the power lands at the level without the laser going
+   out. (T)
+10. On a failure, put mode 0 back; when even that fails, log it and count the
+    optics at no known level, which the next request and the next hold try to
+    leave. (I)
+11. Write the page select back, log the level, with the power, the bias and
+    the set point when the power was measured and with the set point alone,
+    rate-limited, when it was not, and tell the MAC what was set, which
+    declares it in Serial_Number_ONU. (T)
 
 The modules the driver writes
 =============================
@@ -1392,8 +1424,12 @@ prefix ``rtl9602c-switch:``, and the GPON MAC with ``<GPON>``.
        rows above, this line follows the line of that reason.
    * - Bring-up, a lower power level was set
      - ``transmit power back at level mode 0``
-   * - A power level was set
-     - ``transmit power level mode <n>: <uW>.<d> uW, bias <mA>.<dd> mA``
+   * - A power level was set, measured
+     - ``transmit power level mode <n>: <uW>.<d> uW, bias <mA>.<dd> mA, set
+       point <hh>``
+   * - A power level was set without measuring, before the ONU is ranged
+     - ``transmit power level mode <n> at set point <hh>, not measured``,
+       rate-limited
    * - Neither the level asked for nor mode 0 could be set
      - ``transmit power level not restored to mode 0``
    * - A power level was not set
@@ -1504,6 +1540,12 @@ Assumptions the driver depends on
        1 and 2 ("Transmit power levelling").
      - The eye of the transmitted light at each mode, with an optical
        instrument.
+   * - That a set point kept from a measurement gives the mode's power again
+       when written later without measuring, before the ONU is ranged
+       ("Transmit power levelling").
+     - The transmitted power in O5 after an injected Upstream_Overhead naming
+       a mode measured earlier through Change_Power_Level, against that
+       measurement.
    * - The read-only build still exposes a writable adapter ("The read-only
        build").
      - Checking the image's configuration for ``CONFIG_I2C_CHARDEV`` settles

@@ -11,7 +11,7 @@
  * transmitter's hard TX_DISABLE input, and offers the optics to the ONU's
  * MAC through the PON class (struct pon_optics): before every activation it
  * turns the part's automatic extinction-ratio loop off (gn25l95_start()),
- * and it sets the transmit power level the OLT asks for
+ * and it sets the transmit power levels the MAC asks for
  * (gn25l95_set_power_level()). In the client's debugfs directory it offers
  * two views that only read, "a2" and "eeblocks", a third, "tables", that
  * selects each table to read it, and, with CONFIG_PON_GN25L95_STORE,
@@ -65,6 +65,9 @@
 #define GN25L95_A2_PASSWORD		0x7b
 #define GN25L95_A2_PAGE			0x7f
 
+/* Transmit power level modes 0 to 2; see "Transmit power levelling" below. */
+#define GN25L95_LEVEL_MODES	3
+
 /**
  * enum gn25l95_ddm - the diagnostics of SFF-8472, in A2h order
  * @GN25L95_TEMP: temperature, signed, 1/256 degC
@@ -116,6 +119,9 @@ enum gn25l95_limit {
  *	neither the mode asked for nor mode 0 could be set
  * @p0: the transmitted power at mode 0 in 0.1 uW, measured before the first
  *	lower mode of a session
+ * @apcset: the set point at which each lower mode was last measured to
+ *	reach its power, 0 for a mode not measured since probe; index 0 is
+ *	unused, mode 0 being @apcset0
  * @t2_open: table 2 is open for storing through t2write, which keeps
  *	@t2_eectl and @t2_tabsel, EEPROM_CTRL and the page select as found
  * @t2_eectl: EEPROM_CTRL as found by t2write's "open"
@@ -138,6 +144,7 @@ struct gn25l95 {
 	bool ref;
 	u8 mode;
 	u16 p0;
+	u8 apcset[GN25L95_LEVEL_MODES];
 	bool t2_open;
 	u8 t2_eectl;
 	u8 t2_tabsel;
@@ -485,14 +492,17 @@ static int gn25l95_hwmon_register(struct gn25l95 *gn)
  * point is then moved one step at a time, never above the module's own,
  * until the transmitted power has crossed 2^-mode times the power measured at
  * mode 0.  The module measures the power of the bursts, which come often only
- * from O4 on, so a lower level is set only there.
+ * from O4 on, so a lower level is measured only there.  The set point at which
+ * it was reached is kept, and before O4, where the ONU sends only its answers
+ * to serial-number requests, a lower level is set to the kept set point
+ * without measuring; a level not measured since probe is not set there.
  *
  * Going down, the scaled modulation first makes the loop hold the power with
  * more bias, about 21 mA at mode 2 on that module, which the set point then
  * lowers; going up, the modulation first lets the bias fall.  Either way the
  * set point moves last.
  */
-#define GN25L95_LEVEL_MODES	3
+
 /* The power is read this long after each change. */
 #define GN25L95_LEVEL_SETTLE_MS	20
 /* A change that needs more bias than this, in 2 uA, is given up. */
@@ -531,13 +541,18 @@ static int gn25l95_put_mod(struct gn25l95 *gn, u16 mod)
 /*
  * Set level mode @mode, with the configuration table shown and ready for
  * writes.  Mode 0 is the module's own modulation and set point, written in
- * that order.  A lower mode needs the module's settings known and the laser
- * sending bursts: the power at mode 0 is measured when the optics are still
- * at mode 0, and a power of 0 there gives -ENODATA.  A set point that would
- * pass the module's own, a power that falls to 0 or a bias above
+ * that order.  A lower mode needs the module's settings known, and takes the
+ * modulation scaled and then a set point.  With @measure the set point is
+ * found with the laser sending bursts: the power at mode 0 is measured when
+ * the optics are still at mode 0, a power of 0 there gives -ENODATA, and the
+ * set point at which the power crosses its target is kept for the mode.
+ * Without @measure the kept set point is written, and a mode that has none
+ * gives -ENODATA with nothing written.  A set point that would pass the
+ * module's own, a power that falls to 0 or a bias above
  * GN25L95_LEVEL_BIAS_MAX gives -ERANGE; the caller then puts mode 0 back.
  */
-static int gn25l95_level_set(struct gn25l95 *gn, unsigned int mode)
+static int gn25l95_level_set(struct gn25l95 *gn, unsigned int mode,
+			     bool measure)
 {
 	const u16 apc_reg = GN25L95_A2 + GN25L95_TBL2_APCSET;
 	u16 dac = FIELD_GET(GN25L95_TBL2_MOD_DAC_FIELD, gn->mod0);
@@ -548,6 +563,15 @@ static int gn25l95_level_set(struct gn25l95 *gn, unsigned int mode)
 	if (!mode)
 		return gn25l95_put_mod(gn, gn->mod0) ?:
 		       gn25l95_write(gn, apc_reg, gn->apcset0);
+
+	mod = (gn->mod0 & ~GN25L95_TBL2_MOD_DAC_FIELD) |
+	      FIELD_PREP(GN25L95_TBL2_MOD_DAC_FIELD, dac >> mode);
+	if (!measure) {
+		if (!gn->apcset[mode])
+			return -ENODATA;
+		return gn25l95_put_mod(gn, mod) ?:
+		       gn25l95_write(gn, apc_reg, gn->apcset[mode]);
+	}
 
 	if (!gn->mode) {
 		err = gn25l95_tx_bias(gn, &tx, &bias);
@@ -561,8 +585,6 @@ static int gn25l95_level_set(struct gn25l95 *gn, unsigned int mode)
 		return -ENODATA;
 	target = gn->p0 >> mode;
 
-	mod = (gn->mod0 & ~GN25L95_TBL2_MOD_DAC_FIELD) |
-	      FIELD_PREP(GN25L95_TBL2_MOD_DAC_FIELD, dac >> mode);
 	err = gn25l95_put_mod(gn, mod) ?:
 	      gn25l95_read(gn, apc_reg, &cur) ?:
 	      gn25l95_tx_bias(gn, &tx, &bias);
@@ -574,8 +596,10 @@ static int gn25l95_level_set(struct gn25l95 *gn, unsigned int mode)
 	for (i = 0; i <= U8_MAX; i++) {
 		if (!tx || bias > GN25L95_LEVEL_BIAS_MAX)
 			return -ERANGE;
-		if (step < 0 ? tx <= target : tx >= target)
+		if (step < 0 ? tx <= target : tx >= target) {
+			gn->apcset[mode] = apc;
 			return 0;
+		}
 		apc += step;
 		if (apc < 0 || apc > gn->apcset0)
 			return -ERANGE;
@@ -616,8 +640,8 @@ static void gn25l95_t2_hide(struct gn25l95 *gn, u8 tabsel)
  * module keeps its registers across a warm reboot of the SoC, and the next
  * kernel takes the settings it finds for the module's own.  A reset that
  * shuts no device down, such as the watchdog's, leaves a lower level in
- * place until the module loses power, and a level the OLT asks for after it
- * is counted down from that lower one.
+ * place until the module loses power, and a level asked for after it is
+ * counted down from that lower one.
  */
 static void gn25l95_shutdown(struct i2c_client *client)
 {
@@ -631,7 +655,7 @@ static void gn25l95_shutdown(struct i2c_client *client)
 	err = gn25l95_read(gn, GN25L95_A2 + GN25L95_A2_PAGE, &tabsel);
 	if (!err) {
 		err = gn25l95_t2_show(gn) ?:
-		      gn25l95_level_set(gn, 0);
+		      gn25l95_level_set(gn, 0, false);
 		gn25l95_t2_hide(gn, tabsel);
 	}
 	if (!err)
@@ -659,27 +683,30 @@ static int gn25l95_refused(struct gn25l95 *gn, int err)
  * gn25l95_set_power_level() - set the optics to a transmit power level mode
  * @optics: &gn25l95.optics
  * @mode: the mode the MAC asks for
+ * @measure: the laser sends bursts often enough for its power to be measured
  * @now: set to the mode the optics are at afterwards
  *
  * Sets @mode with the configuration table shown and its writes kept out of
  * the EEPROM as in the modulation hold; a failure puts mode 0 back. Nothing
  * is written before the first modulation hold has kept the module's own
- * settings.
+ * settings, nor, without @measure, for a lower mode not measured since probe:
+ * the optics then stay where they are.
  *
  * Context: process context.  May sleep, with the driver's lock held, for up
- * to about six seconds: 20 ms or more for each step of the set point, of
- * which there are at most 256.
+ * to about six seconds with @measure: 20 ms or more for each step of the set
+ * point, of which there are at most 256.
  * Return: 0; -EOPNOTSUPP before the first hold or for a mode above 2;
- * -EPERM when table writes would reach the EEPROM or the bus refuses them;
- * -ENODATA, -ERANGE or -EIO when the level could not be set; or the error of
- * a failed transfer.
+ * -ENODATA without @measure for a mode not measured since probe; -EPERM when
+ * table writes would reach the EEPROM or the bus refuses them; -ENODATA,
+ * -ERANGE or -EIO when the level could not be set; or the error of a failed
+ * transfer.
  */
 static int gn25l95_set_power_level(struct pon_optics *optics, unsigned int mode,
-				   unsigned int *now)
+				   bool measure, unsigned int *now)
 {
 	struct gn25l95 *gn = container_of(optics, struct gn25l95, optics);
 	u16 tx = 0, bias = 0;
-	u8 tabsel;
+	u8 tabsel, apc = 0;
 	int err;
 
 	scoped_guard(gn25l95, gn) {
@@ -687,22 +714,21 @@ static int gn25l95_set_power_level(struct pon_optics *optics, unsigned int mode,
 			*now = mode;
 			return 0;
 		}
-		if (!gn->ref || mode >= GN25L95_LEVEL_MODES) {
-			*now = gn->mode < GN25L95_LEVEL_MODES ? gn->mode : 0;
+		*now = gn->mode < GN25L95_LEVEL_MODES ? gn->mode : 0;
+		if (!gn->ref || mode >= GN25L95_LEVEL_MODES)
 			return -EOPNOTSUPP;
-		}
+		if (!measure && mode && !gn->apcset[mode])
+			return -ENODATA;
 
 		err = gn25l95_read(gn, GN25L95_A2 + GN25L95_A2_PAGE, &tabsel);
-		if (err) {
-			*now = gn->mode < GN25L95_LEVEL_MODES ? gn->mode : 0;
+		if (err)
 			return err;
-		}
 		err = gn25l95_t2_show(gn);
 		if (!err) {
-			err = gn25l95_level_set(gn, mode);
+			err = gn25l95_level_set(gn, mode, measure);
 			if (!err) {
 				gn->mode = mode;
-			} else if (gn25l95_level_set(gn, 0)) {
+			} else if (gn25l95_level_set(gn, 0, false)) {
 				/*
 				 * Neither the mode nor mode 0: the optics are
 				 * at no known level, which the next request and
@@ -716,15 +742,27 @@ static int gn25l95_set_power_level(struct pon_optics *optics, unsigned int mode,
 			}
 		}
 		gn25l95_t2_hide(gn, tabsel);
-		if (!err)
+		if (!err && measure)
 			gn25l95_tx_bias(gn, &tx, &bias);
+		if (!err)
+			apc = mode ? gn->apcset[mode] : gn->apcset0;
 		*now = gn->mode < GN25L95_LEVEL_MODES ? gn->mode : 0;
 	}
 
-	if (!err)
+	/*
+	 * Before ranging the ONU may step through the modes every few
+	 * serial-number requests for as long as the OLT does not answer, so
+	 * that line is rate-limited.
+	 */
+	if (!err && measure)
 		dev_info(&gn->client->dev,
-			 "transmit power level mode %u: %u.%u uW, bias %u.%02u mA\n",
-			 *now, tx / 10, tx % 10, bias / 500, bias % 500 / 5);
+			 "transmit power level mode %u: %u.%u uW, bias %u.%02u mA, set point %02x\n",
+			 *now, tx / 10, tx % 10, bias / 500, bias % 500 / 5,
+			 apc);
+	else if (!err)
+		dev_info_ratelimited(&gn->client->dev,
+				     "transmit power level mode %u at set point %02x, not measured\n",
+				     *now, apc);
 	return err;
 }
 
@@ -766,7 +804,7 @@ static int __gn25l95_hold(struct gn25l95 *gn)
 	 * back to the module's own modulation and set point.
 	 */
 	if (gn->ref && gn->mode) {
-		err = gn25l95_level_set(gn, 0);
+		err = gn25l95_level_set(gn, 0, false);
 		if (err)
 			goto out;
 		gn->mode = 0;

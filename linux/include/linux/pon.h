@@ -455,8 +455,11 @@ struct pon_optics;
  *	among it; optional
  * @set_power_level: set transmit power level mode @mode (ITU-T G.984.2
  *	clause 8.3.2: 0 the normal one, 1 and 2 3 dB and 6 dB below it) and set
- *	@now to the mode the optics are at afterwards, on a failure too;
- *	optional
+ *	@now to the mode the optics are at afterwards, on a failure too. With
+ *	@measure false the transmitter sends too seldom for its power to be
+ *	measured, as before ranging, where it answers only the OLT's
+ *	serial-number requests, and the optics set only a mode they can set
+ *	without measuring; optional
  *
  * All are called in process context and may sleep, @set_power_level for
  * seconds; the class does not serialise them.
@@ -465,7 +468,7 @@ struct pon_optics_ops {
 	int (*tx_disable)(struct pon_optics *optics, bool disable);
 	int (*start)(struct pon_optics *optics);
 	int (*set_power_level)(struct pon_optics *optics, unsigned int mode,
-			       unsigned int *now);
+			       bool measure, unsigned int *now);
 };
 
 /**
@@ -508,6 +511,7 @@ static inline int pon_optics_start(struct pon_optics *optics)
  * pon_optics_set_power_level() - set a transmit power level mode
  * @optics: the optics, or NULL for a MAC without them
  * @mode: the mode to set
+ * @measure: the transmitter sends often enough for its power to be measured
  * @now: set to the mode the optics are at afterwards
  *
  * Without @optics or the operation the optics are at mode 0, the normal one,
@@ -517,13 +521,14 @@ static inline int pon_optics_start(struct pon_optics *optics)
  * another, with @now 0; else the result of the operation.
  */
 static inline int pon_optics_set_power_level(struct pon_optics *optics,
-					     unsigned int mode, unsigned int *now)
+					     unsigned int mode, bool measure,
+					     unsigned int *now)
 {
 	if (!optics || !optics->ops->set_power_level) {
 		*now = 0;
 		return mode ? -EOPNOTSUPP : 0;
 	}
-	return optics->ops->set_power_level(optics, mode, now);
+	return optics->ops->set_power_level(optics, mode, measure, now);
 }
 
 #if IS_ENABLED(CONFIG_PON)

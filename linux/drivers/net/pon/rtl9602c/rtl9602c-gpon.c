@@ -782,8 +782,11 @@ int rtl9602c_gpon_reboot_register(struct rtl9602c_pon *p)
  * @work: &rtl9602c_pon.gpon_power_work
  *
  * Takes the mode the ONU is to send at and has the optics set it, which may
- * take seconds, with gpon_lock not held; then takes what they set. Without
- * optics, mode 0 is set and any other fails with -EOPNOTSUPP.
+ * take seconds, with gpon_lock not held; then takes what they set. In O4 and
+ * O5 the ONU sends bursts often enough for the optics to measure the power;
+ * in the other states it sends at most its answers to serial-number requests,
+ * and the optics set only what they can without measuring. Without optics,
+ * mode 0 is set and any other fails with -EOPNOTSUPP.
  *
  * Context: process context; takes gpon_lock.
  */
@@ -792,14 +795,17 @@ void rtl9602c_gpon_power_work(struct work_struct *work)
 	struct rtl9602c_pon *p = container_of(work, struct rtl9602c_pon,
 					      gpon_power_work);
 	unsigned int now;
+	bool measure;
 	u8 asked;
 	int err;
 
 	mutex_lock(&p->gpon_lock);
 	asked = p->gpon_power_mode;
+	measure = p->gpon_state == RTL9602C_ONU_O4_RANGING ||
+		  p->gpon_state == RTL9602C_ONU_O5_OPERATION;
 	mutex_unlock(&p->gpon_lock);
 
-	err = pon_optics_set_power_level(p->optics, asked, &now);
+	err = pon_optics_set_power_level(p->optics, asked, measure, &now);
 	rtl9602c_gpon_power_applied(p, asked, now, err);
 }
 
