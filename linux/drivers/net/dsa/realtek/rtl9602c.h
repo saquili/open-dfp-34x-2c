@@ -2409,6 +2409,8 @@ struct rtl9602c_priv {
  *	number
  * @RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD: gpon_password, the password the
  *	ONU gives when the OLT asks for it
+ * @RTL9602C_DEVLINK_PARAM_ID_GPON_DISABLED: gpon_disabled, whether the OLT
+ *	has disabled the ONU, which then comes up in O7
  * @RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS: cpu_rx_pps, the packets a second
  *	the switch hands the CPU
  * @RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC: l3_ttl_decrement, whether the
@@ -2447,6 +2449,7 @@ enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_LOOPDET_PERIOD,
 	RTL9602C_DEVLINK_PARAM_ID_GPON_SERIAL,
 	RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
+	RTL9602C_DEVLINK_PARAM_ID_GPON_DISABLED,
 	RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS,
 	RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC,
 	RTL9602C_DEVLINK_PARAM_ID_SFP_LANE,
@@ -2650,6 +2653,8 @@ int rtl9602c_pon_sn_set(struct rtl9602c_priv *p, const char *s);
 int rtl9602c_pon_sn_get(struct rtl9602c_priv *p, char *buf, size_t len);
 int rtl9602c_pon_password_set(struct rtl9602c_priv *p, const char *s);
 bool rtl9602c_pon_password_is_set(struct rtl9602c_priv *p);
+int rtl9602c_pon_disabled_set(struct rtl9602c_priv *p, bool on);
+bool rtl9602c_pon_disabled_get(struct rtl9602c_priv *p);
 bool rtl9602c_pon_us_ready(struct rtl9602c_priv *p, unsigned int flow);
 int rtl9602c_pon_second_enable(struct rtl9602c_priv *p, bool on);
 

@@ -158,6 +158,12 @@ struct rtl9602c_pon {
 	u8 gpon_password[RTL9602C_GPON_PASSWORD_BYTES];
 	/** @gpon_have_password: @gpon_password is set */
 	bool gpon_have_password;
+	/**
+	 * @gpon_disabled: the OLT disabled the ONU with Disable_Serial_Number
+	 * and has not enabled it again; while the PON is up the ONU is in O7
+	 * exactly when it is set, and a bring-up starts in O7
+	 */
+	bool gpon_disabled;
 
 	/** @gpon_state: the activation state, an RTL9602C_ONU_O* value */
 	u8 gpon_state;
@@ -415,6 +421,7 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_pon *p,
 int rtl9602c_gpon_start(struct rtl9602c_pon *p);
 int rtl9602c_gpon_sn_set(struct rtl9602c_pon *p, const char *s);
 int rtl9602c_gpon_password_set(struct rtl9602c_pon *p, const char *s);
+int rtl9602c_gpon_disabled_set(struct rtl9602c_pon *p, bool on);
 void rtl9602c_gpon_stop(struct rtl9602c_pon *p);
 int rtl9602c_gpon_port_bind(struct rtl9602c_pon *p, unsigned int idx,
 			    u16 port_id);
@@ -465,6 +472,7 @@ u8 rtl9602c_gpon_power_cpl(u8 mode, u8 ind);
 bool rtl9602c_gpon_power_sn_step(u32 *answered, u8 *mode);
 const char *rtl9602c_ploam_ds_name(u8 id);
 const char *rtl9602c_ploam_us_name(u8 id);
+u8 rtl9602c_gpon_disable_sn(u8 state, u8 ctrl, bool mine);
 void rtl9602c_gem_rate_units(u64 cir, u64 pir, bool limited, u32 *cir_u,
 			     u32 *pir_u);
 u32 rtl9602c_gem_tcont_qmap(const struct pon_gem_config *cfg,

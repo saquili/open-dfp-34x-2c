@@ -20,7 +20,8 @@
  * LOS or LOF sends an ONU in O2 to O4 back to O1 and one in O5 to O6, where it
  * keeps its ranging and sends nothing until POPUP or TO2; O1 moves on to O2
  * once both have cleared. Disable_Serial_Number stops the ONU in O7, laser off,
- * until it is enabled again. It acts on Upstream_Overhead,
+ * until it is enabled again; the devlink parameter gpon_disabled carries that
+ * across a restart. It acts on Upstream_Overhead,
  * Extended_Burst_Length, Assign_ONU-ID, Ranging_Time, Ranging_Adjustment,
  * Deactivate_ONU-ID, Disable_Serial_Number, POPUP, Swift_POPUP,
  * Request_Password, Request_Key, Key_Switching_Time, Encrypted_Port-ID,
@@ -2371,23 +2372,26 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
 		 * serial number: O7, from any state the downstream can reach,
 		 * with the laser off and the ONU-ID given back. Enable with
 		 * this serial number, or enable for every ONU: an ONU in O7
-		 * goes to O2 and is discovered again.
+		 * goes to O2 and is discovered again. gpon_disabled follows,
+		 * so that a bring-up of the PON starts in O7 again, and user
+		 * space learns the change from the state the PON class
+		 * reports.
 		 */
 		bool mine = p->gpon_have_sn &&
 			    !memcmp(&msg[RTL9602C_PLOAM_DISABLE_SN_SERIAL],
 				    p->gpon_sn, RTL9602C_GPON_SN_BYTES);
-		u8 ctrl = msg[RTL9602C_PLOAM_DISABLE_SN_CTRL];
+		u8 to = rtl9602c_gpon_disable_sn(p->gpon_state,
+						 msg[RTL9602C_PLOAM_DISABLE_SN_CTRL],
+						 mine);
 
-		if (ctrl == RTL9602C_PLOAM_DISABLE_SN_DISABLE && mine &&
-		    p->gpon_state != RTL9602C_ONU_O7_EMERGENCY_STOP) {
-			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O7_EMERGENCY_STOP);
+		if (to == p->gpon_state)
+			return;
+		p->gpon_disabled = to == RTL9602C_ONU_O7_EMERGENCY_STOP;
+		rtl9602c_gpon_set_state(p, to);
+		if (p->gpon_disabled)
 			pr_info("<GPON> the OLT disabled this ONU\n");
-		} else if (p->gpon_state == RTL9602C_ONU_O7_EMERGENCY_STOP &&
-			   (ctrl == RTL9602C_PLOAM_DISABLE_SN_ENABLE_ALL ||
-			    (ctrl == RTL9602C_PLOAM_DISABLE_SN_ENABLE && mine))) {
-			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O2_STANDBY);
+		else
 			pr_info("<GPON> the OLT enabled this ONU again\n");
-		}
 		return;
 	}
 
@@ -3052,9 +3056,17 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 	/*
 	 * No ONU-ID, and O1 until LOS and LOF have cleared, then O2, to wait
 	 * for Upstream_Overhead; on a dark fibre the ONU stays in O1 with the
-	 * LOS alarm, and the worker moves it on once the light comes.
+	 * LOS alarm, and the worker moves it on once the light comes. An ONU
+	 * the OLT disabled powers up in O7 (G.984.3 clause 10.2.4, Table 10-1,
+	 * and clause 11.1.2, DIS): laser off, and only Disable_Serial_Number
+	 * enabling it moves it on, which the interrupt enabled below
+	 * dispatches.
 	 */
 	p->gpon_onu_id = RTL9602C_ONU_ONUID_UNASSIGNED;
+	if (p->gpon_disabled) {
+		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O7_EMERGENCY_STOP);
+		pr_info("<GPON> the OLT disabled this ONU before: it stays in O7 until the OLT enables it\n");
+	}
 	rtl9602c_gpon_ds_sync(p);
 
 	/* The templates, ready before the first discovery grant. */
@@ -3134,14 +3146,55 @@ int rtl9602c_gpon_password_set(struct rtl9602c_pon *p, const char *s)
 }
 
 /**
+ * rtl9602c_gpon_disabled_set() - keep the ONU disabled, or enable it by hand
+ * @p: the PON driver
+ * @on: whether the OLT has disabled the ONU
+ *
+ * G.984.3 has an ONU that Disable_Serial_Number disabled stay in O7 even after
+ * a power-off, until the OLT enables it (clause 10.2.4, Table 10-1, and clause
+ * 11.1.2, DIS). The driver keeps the disable across a take-down and a bring-up
+ * of the PON, and user space across a restart: it gives the disable back
+ * through the devlink parameter gpon_disabled before the PON comes up, which
+ * then comes up in O7. While the PON is down either value is taken. While it
+ * is up only clearing is: that is the enable by hand, which takes an ONU in O7
+ * to O2 as the OLT's enable would; only the OLT disables an ONU in service.
+ *
+ * Context: process context; takes gpon_lock.
+ * Return: 0, or -EBUSY for a disable while the PON is up.
+ */
+int rtl9602c_gpon_disabled_set(struct rtl9602c_pon *p, bool on)
+{
+	int err = 0;
+
+	mutex_lock(&p->gpon_lock);
+	if (p->gpon_up && on) {
+		err = -EBUSY;
+	} else if (on != p->gpon_disabled) {
+		p->gpon_disabled = on;
+		if (p->gpon_up) {
+			if (p->gpon_state == RTL9602C_ONU_O7_EMERGENCY_STOP)
+				rtl9602c_gpon_set_state(p, RTL9602C_ONU_O2_STANDBY);
+			pr_info("<GPON> enabled by hand, not by the OLT\n");
+		} else if (on) {
+			pr_info("<GPON> kept disabled: the PON comes up in O7\n");
+		} else {
+			pr_info("<GPON> no longer kept disabled\n");
+		}
+	}
+	mutex_unlock(&p->gpon_lock);
+	return err;
+}
+
+/**
  * rtl9602c_gpon_start() - bring the PON up
  * @p: the switch
  *
  * Called when the pon interface is opened. Brings the GPON MAC up, building the
  * PON MAC first if it is not built yet, and leaves the ONU in O2 waiting for
- * Upstream_Overhead; the counter totals start again from zero, and both AES
- * keys are zeroed. A PON that is up already is left alone, since a second
- * bring-up would reset the MAC under a live session.
+ * Upstream_Overhead, or in O7 when the OLT has disabled it
+ * (rtl9602c_gpon_disabled_set()); the counter totals start again from zero,
+ * and both AES keys are zeroed. A PON that is up already is left alone, since
+ * a second bring-up would reset the MAC under a live session.
  *
  * Context: process context; takes gpon_lock.
  * Return: 0; -ENXIO when no serial number has been set; the error of the PON
@@ -3209,7 +3262,8 @@ void rtl9602c_gpon_second_enable(struct rtl9602c_pon *p, bool on)
  * Called when the pon interface is stopped. The ONU goes to O1, which asserts
  * TX_DISABLE and gives back the ONU-ID, the Alloc-IDs and the OMCC, and the PON
  * counts as down. The MAC is not reset, and its interrupt and the worker stay
- * active; in O1 no message from the OLT is acted on.
+ * active; in O1 no message from the OLT is acted on. A disable by the OLT stays
+ * for the next bring-up.
  *
  * Context: process context; takes gpon_lock.
  */

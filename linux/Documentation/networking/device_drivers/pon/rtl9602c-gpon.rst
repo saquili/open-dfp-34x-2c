@@ -88,7 +88,12 @@ of each step.
 
 The table lists every event that changes the state. TO1 is the timer of G.984.3
 that bounds the time in O3 and O4, and TO2 the one that bounds the time in O6;
-the driver's use of them is described with the state machine.
+the driver's use of them is described with the state machine. An ONU that the
+OLT disabled stays disabled, in O7, even across a power-off, until the OLT
+enables it. The driver keeps the disable, the devlink parameter
+``gpon_disabled``, across a take-down and a bring-up of the PON; across a
+restart user space keeps it and sets the parameter again before the PON comes
+up.
 
 .. list-table::
    :header-rows: 1
@@ -103,6 +108,12 @@ the driver's use of them is described with the state machine.
      - O1
      - Bring-up sets O1, builds and programs everything (see "Bring-up and
        take-down") and ends with no ONU-ID.
+   * - ``ip link set pon up`` with ``gpon_disabled`` true
+     - any
+     - O7
+     - As above, and the ONU goes on to O7 before the GPON interrupt is
+       enabled: the OLT disabled it before the PON went down or the system
+       restarted.
    * - LOS and LOF both clear
      - O1
      - O2
@@ -162,17 +173,22 @@ the driver's use of them is described with the state machine.
    * - Disable_Serial_Number disabling this ONU's serial number
      - any but O7
      - O7
-     - Asserts TX_DISABLE and gives back the ONU-ID, the Alloc-IDs and the
-       OMCC; asks for transmit power level mode 0, as on entering O1 and O2.
+     - Asserts TX_DISABLE, gives back the ONU-ID, the Alloc-IDs and the OMCC,
+       sets ``gpon_disabled``, and asks for transmit power level mode 0, as on
+       entering O1 and O2.
    * - Disable_Serial_Number enabling this ONU's serial number, or every ONU
      - O7
      - O2
-     - Nothing more: the OLT discovers the ONU again.
+     - Clears ``gpon_disabled``; the OLT discovers the ONU again.
+   * - ``gpon_disabled`` set false by hand
+     - O7
+     - O2
+     - As the OLT's enable: the ONU leaves O7 without it.
    * - ``ip link set pon down``
      - any
      - O1
      - Asserts TX_DISABLE and gives back the ONU-ID, the Alloc-IDs and the OMCC.
-       The MAC is not reset.
+       The MAC is not reset, and ``gpon_disabled`` stays as it is.
 
 Configuration
 -------------
@@ -319,7 +335,9 @@ Interfaces to user space
   that ``ip link show pon`` then shows it so is not verified.
 - The devlink parameter ``gpon_serial`` on ``platform/1b000000.switch`` sets the
   serial number, and ``devlink dev info`` reports the MAC's revision word as the
-  fixed version ``gpon.mac``. The parameter list is on
+  fixed version ``gpon.mac``. The parameter ``gpon_disabled`` reads whether the
+  OLT has disabled the ONU, and sets it before the PON comes up: user space
+  keeps it across a restart. The parameter list is on
   Documentation/networking/devlink/rtl9602c.rst.
 - Through the PON class (Documentation/networking/pon.rst): the OMCI port
   ``/dev/pon0omci0``, which carries the OMCC; the ``gem`` interfaces; and the
@@ -445,6 +463,21 @@ name the others.
    * - ``<GPON> TO1 expired in O4; trying again``
      - info
      - TO1 took the ONU back to O2.
+   * - ``<GPON> the OLT disabled this ONU`` or ``<GPON> the OLT enabled this
+       ONU again``
+     - info
+     - Disable_Serial_Number took the ONU to O7, or out of it to O2.
+   * - ``<GPON> the OLT disabled this ONU before: it stays in O7 until the OLT
+       enables it``
+     - info
+     - The bring-up ended in O7, with ``gpon_disabled`` set.
+   * - ``<GPON> kept disabled: the PON comes up in O7`` or ``<GPON> no longer
+       kept disabled``
+     - info
+     - ``gpon_disabled`` was set or cleared while the PON was down.
+   * - ``<GPON> enabled by hand, not by the OLT``
+     - info
+     - ``gpon_disabled`` was cleared while the PON was up.
    * - ``<GPON> signal detect disagrees with the burst (latch 0x...)``
      - warning, rate-limited
      - The upstream latch reported bit 8 or 9. The device name replaces the
@@ -1269,6 +1302,29 @@ The report to the PON class follows the log line
        the ONU again in about 2 s, after which bridged traffic crossed both
        ways. A disable for another serial number, and Deactivate_ONU-ID in O7,
        changed nothing.
+   * - An ONU whose last state before a power-off was O7 powers up in O7, and
+       a disabled ONU stays disabled even after a power-off, until the OLT
+       enables it with Disable_Serial_Number.
+     - P
+     - ITU-T G.984.3 clause 10.2.4, Table 10-1, the event "ONU power up", and
+       clause 11.1.2, the alarm DIS.
+   * - ``gpon_disabled``, the devlink parameter of that name, is set when
+       Disable_Serial_Number disables the ONU and cleared when it enables it
+       (``rtl9602c_gpon_disable_sn()`` decides the state); while the PON is up
+       it is set exactly while the ONU is in O7. A bring-up with it set ends in
+       O7 before the GPON interrupt is enabled, so that the first message
+       dispatched finds the ONU stopped; a take-down keeps it. A set to true
+       while the PON is up is refused with ``-EBUSY``, and a set to false then
+       takes an ONU in O7 to O2, as the OLT's enable would. The driver keeps no
+       state across a restart or a rebind: user space sets the parameter
+       again before the PON comes up.
+     - I
+     - Read from the code; the KUnit case ``rtl9602c_test_disable_sn`` checks
+       the decision on the message. On the board: a disable injected through
+       ``ploaminject`` in O5, then ``ip link set pon down`` and ``up``, then a
+       restart with the parameter set before ``up``; each time O7 with the
+       module's bias and transmitted power 0; then the enable injected, and O2
+       and O5 again.
    * - Assign_ONU-ID carrying the ONU's own serial number, acted on only in O3,
        takes it to O4.
      - P
@@ -3302,7 +3358,11 @@ code (see Documentation/networking/device_drivers/pon/rtl9602c.rst), and its
 ``gpon_lock``, so that a report is one moment of the activation.
 ``rtl9602c_gpon_notify()`` sends the class the report when it changes. The
 serial number that the ONU presents to the OLT is the devlink parameter
-``gpon_serial``.
+``gpon_serial``. Whether the OLT has disabled the ONU is ``gpon_disabled``.
+User space learns of a disable and of an enable from the state the class
+reports and announces: while the PON is up the ONU is in O7 exactly while
+``gpon_disabled`` is set, and it leaves O7 for O2 only when it is enabled. A
+take-down reports O1, then no state, and keeps the disable.
 
 .. list-table::
    :header-rows: 1
@@ -3525,8 +3585,10 @@ Known limitations
   so it cannot tell a stuck laser from a busy one (see "Upstream timing"). An
   ONU that sends out of turn is left to the OLT, which disables it; in O7
   TX_DISABLE keeps the laser dark even with its driver forced on.
-- A disabled ONU stays in O7 only until it restarts: G.984.3 has the disabled
-  state survive a power-off, and the driver keeps no state across a restart.
+- A disabled ONU stays in O7 across a restart only through user space: the
+  driver keeps the disable across a take-down and a bring-up of the PON, and
+  user space has to keep it across a restart and set ``gpon_disabled`` again
+  before the PON comes up. The bring-up in O7 has not been run on the board.
 - Dying_Gasp is sent before an orderly restart, and on the test OLT only its
   first copy leaves (see "PLOAM transmit"). What makes the MAC send the
   Dying_Gasp template it holds armed, and whether the supply-loss interrupt
@@ -3617,6 +3679,11 @@ Assumptions the driver depends on
    * - That the PON port is dormant below O5 and up in O5 ("The activation state
        machine").
      - ``ip link show pon`` in each state.
+   * - That a bring-up straight into O7 keeps the laser dark and still acts on
+       the Disable_Serial_Number that enables the ONU ("The activation state
+       machine").
+     - ``gpon_disabled`` set before ``ip link set pon up``: bias and transmitted
+       power 0 in O7, then an injected enable and the ONU in O5 again.
    * - That a write into a full upstream PLOAM queue overwrites its tail ("PLOAM
        transmit").
      - Filling a queue and reading its slot.

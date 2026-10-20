@@ -16,11 +16,12 @@ Overview
 
 The driver implements these devlink objects and no others:
 
-- 27 driver-specific parameters, all of mode ``runtime``. They configure the
+- 30 driver-specific parameters, all of mode ``runtime``. They configure the
   malformed-frame (DoS) checks, the four storm-control classes that ``tc``
   cannot describe, the limit on the frames handed to the CPU, the TTL of
-  routed frames, the SFP lane, the header capture, loop detection, and the
-  ONU's serial number and password (see "Parameters").
+  routed frames, the SFP lane, the header capture, loop detection, the ONU's
+  serial number and password, whether the OLT has disabled the ONU, and the
+  PTP transparent clock (see "Parameters").
 - One region, ``frame_capture``, that holds a snapshot of the header capture
   (see "The region frame_capture").
 - The reply to ``devlink dev info``, which names the part and the revision of
@@ -117,7 +118,7 @@ Interfaces to user space
 ------------------------
 
 - ``devlink dev show`` and ``devlink dev info platform/1b000000.switch``.
-- ``devlink dev param show`` and ``devlink dev param set`` on the 27
+- ``devlink dev param show`` and ``devlink dev param set`` on the 30
   parameters.
 - ``devlink region show``, ``new``, ``read``, ``dump`` and ``del`` on
   ``platform/1b000000.switch/frame_capture``.
@@ -131,7 +132,7 @@ Tests
 
 The kselftests in ``tools/testing/selftests/drivers/net/rtl9602c`` check what
 this page states of the parameters and the region, and of the filters of
-``tc`` that the switch carries out, on a board: ``devlink_params.sh`` (the 27
+``tc`` that the switch carries out, on a board: ``devlink_params.sh`` (the 30
 names, a value read back, a value out of range refused, the storm-control
 classes, the refusals of the lane and of the mode ``driverinit``, the reply of
 the info command), ``devlink_region.sh`` (a snapshot refused while the capture
@@ -170,14 +171,15 @@ on an OLT; the storm-control rates match their settings.
 Parameters
 ==========
 
-All 27 parameters are driver-specific, of type bool, u8, u32 or string, and of
+All 30 parameters are driver-specific, of type bool, u8, u32 or string, and of
 mode ``runtime``: a value takes effect at once. There are six for the DoS
 checks, eight for storm control, one for the limit on the frames handed to the
 CPU, one for the TTL of routed frames, two for the SFP lane, four for the header
-capture, three for loop detection and two for the ONU's serial number and
-password. The driver registers them at setup. If it
-cannot, it logs ``devlink parameters unavailable; the switch's own features
-cannot be configured`` and the switch carries on without them.
+capture, three for loop detection, three for the ONU's serial number, its
+password and whether the OLT has disabled it, and two for the PTP transparent
+clock. The driver registers them at setup. If it cannot, it logs ``devlink
+parameters unavailable; the switch's own features cannot be configured`` and
+the switch carries on without them.
 
 Reading and setting
 -------------------
@@ -226,10 +228,11 @@ defaults that the tables give: the DoS checks off with their thresholds at 0;
 storm control off with every meter free; the frames handed to the CPU limited
 to 5000 a second, which takes one meter back; loop detection off; the header
 capture armed in mode 1, which never captures, with both port masks 15 and
-reason 0; and no serial number. The one exception is ``loop_detect_period``,
-which setup does not write, so it keeps the value it had. Nothing is saved:
-after a reboot or a reload of the module the parameters are back at their
-defaults, and the serial number is empty.
+reason 0; no serial number; and the ONU not disabled. The one exception is
+``loop_detect_period``, which setup does not write, so it keeps the value it
+had. Nothing is saved: after a reboot or a reload of the module the parameters
+are back at their defaults, the serial number is empty and ``gpon_disabled``
+false, which user space that keeps a disable across a restart sets again.
 
 .. list-table::
    :header-rows: 1
@@ -238,13 +241,14 @@ defaults, and the serial number is empty.
    * - Fact
      - Tag
      - Checked by
-   * - The driver registers 27 parameters, all of mode ``runtime``, at setup.
+   * - The driver registers 30 parameters, all of mode ``runtime``, at setup.
      - M, I
      - M: ``devlink dev param show platform/1b000000.switch`` listed the first
        24 after boot, and every measurement below sets or reads one of them.
        I: ``l3_ttl_decrement``, ``sfp_lane`` and ``sfp_lane_now``, added
-       since, are read from the code until they are listed after a boot;
-       ``ptp_transparent_clock`` and ``ptp_path_delay_ns`` were listed.
+       since, are read from the code until they are listed after a boot, and
+       so is ``gpon_disabled``; ``ptp_transparent_clock`` and
+       ``ptp_path_delay_ns`` were listed.
    * - Every range check is made in the set callback, and a value too wide for
        its field is refused with ``-ERANGE``, not truncated.
      - M
@@ -927,6 +931,20 @@ reports the same serial number in the status of the PON device
        ``-EBUSY``. A valid value is kept and the kernel log says ``<GPON>
        password set``. Reads ``set`` once a password is kept and empty
        otherwise, never the password itself.
+   * - ``gpon_disabled``
+     - bool
+     - runtime
+     - Whether the OLT has disabled the ONU with Disable_Serial_Number and not
+       enabled it again: true while the ONU is in O7, and kept while the
+       ``pon`` interface is down, so that bringing it up again ends in O7. The
+       driver sets and clears it as the OLT's messages come. While the
+       interface is down a set of either value is taken: user space that
+       keeps the disable across a restart sets true before bringing it up, and
+       the kernel log says ``<GPON> kept disabled: the PON comes up in O7``.
+       While the interface is up true is refused with ``-EBUSY``, and false
+       enables the ONU by hand: it leaves O7 for O2, as the OLT's enable
+       would take it, and the kernel log says ``<GPON> enabled by hand, not by
+       the OLT``. False after every probe.
 
 To set the serial number, read it back and bring the interface up::
 
@@ -966,6 +984,19 @@ To set the serial number, read it back and bring the interface up::
        Request_Password.
      - P
      - ITU-T G.984.3, clause 9.2.3.9 and clause 9.2.4.2.
+   * - A disabled ONU stays disabled even after a power-off, and powers up in
+       O7, until the OLT enables it.
+     - P
+     - ITU-T G.984.3, clause 10.2.4, Table 10-1, and clause 11.1.2, the alarm
+       DIS.
+   * - ``gpon_disabled`` follows Disable_Serial_Number, ends a bring-up in O7
+       when true, and takes the sets and refusals of its row.
+     - I
+     - Read from the code; not run on the board. A disable injected through
+       ``ploaminject`` and the parameter read true; ``ip link set pon down``
+       and ``up``, O7 again; a restart, the parameter set true before ``up``
+       and O7; true refused with ``-EBUSY`` while up; false while up and the
+       ONU in O2.
 
 The region frame_capture
 ========================

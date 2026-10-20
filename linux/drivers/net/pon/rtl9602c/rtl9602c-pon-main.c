@@ -80,6 +80,18 @@ static bool rtl9602c_pon_op_password_is_set(void *pon)
 	return p->gpon_have_password;
 }
 
+static int rtl9602c_pon_op_disabled_set(void *pon, bool on)
+{
+	return rtl9602c_gpon_disabled_set(pon, on);
+}
+
+static bool rtl9602c_pon_op_disabled_get(void *pon)
+{
+	struct rtl9602c_pon *p = pon;
+
+	return READ_ONCE(p->gpon_disabled);
+}
+
 static bool rtl9602c_pon_op_us_ready(void *pon, unsigned int flow)
 {
 	return rtl9602c_gem_us_ready(pon, flow);
@@ -100,6 +112,8 @@ static const struct rtl9602c_pon_ops rtl9602c_pon_ops = {
 	.sn_get		= rtl9602c_pon_op_sn_get,
 	.password_set	= rtl9602c_pon_op_password_set,
 	.password_is_set = rtl9602c_pon_op_password_is_set,
+	.disabled_set	= rtl9602c_pon_op_disabled_set,
+	.disabled_get	= rtl9602c_pon_op_disabled_get,
 	.us_ready	= rtl9602c_pon_op_us_ready,
 	.second_enable	= rtl9602c_pon_op_second_enable,
 };
@@ -190,9 +204,9 @@ int rtl9602c_pon_probe(struct rtl9602c_pon_data *pd, struct device *dev)
  * dark and the PON interface has no carrier, then cancels the worker and
  * unregisters the data path before the OMCI port: the PON device is
  * unregistered with its last child, the OMCI port, and the data path must not
- * outlive it. The ONU's serial number and password go with the driver's
- * state: after a bind they are set again, and the PON interface, which stays
- * up, is cycled to bring the MAC up.
+ * outlive it. The ONU's serial number and password, and a disable by the OLT,
+ * go with the driver's state: after a bind they are set again, and the PON
+ * interface, which stays up, is cycled to bring the MAC up.
  */
 void rtl9602c_pon_remove(struct rtl9602c_pon_data *pd)
 {

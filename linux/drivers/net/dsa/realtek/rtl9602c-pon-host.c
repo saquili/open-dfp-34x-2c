@@ -547,6 +547,30 @@ bool rtl9602c_pon_password_is_set(struct rtl9602c_priv *p)
 	return set;
 }
 
+int rtl9602c_pon_disabled_set(struct rtl9602c_priv *p, bool on)
+{
+	struct rtl9602c_pon_data *pd = &p->pon;
+	int err = -ENODEV;
+
+	down_read(&pd->sem);
+	if (pd->pon_ops)
+		err = pd->pon_ops->disabled_set(pd->pon, on);
+	up_read(&pd->sem);
+	return err;
+}
+
+bool rtl9602c_pon_disabled_get(struct rtl9602c_priv *p)
+{
+	struct rtl9602c_pon_data *pd = &p->pon;
+	bool on = false;
+
+	down_read(&pd->sem);
+	if (pd->pon_ops)
+		on = pd->pon_ops->disabled_get(pd->pon);
+	up_read(&pd->sem);
+	return on;
+}
+
 /**
  * rtl9602c_pon_us_ready() - whether a GEM port's upstream is programmed
  * @p: the switch

@@ -5,7 +5,8 @@
  * number and the password, the length of a burst's overhead, the split of the
  * equalization delay, the transmit power level modes, the units of a queue's
  * rates, the numbering of T-CONTs and their queues, the queues a T-CONT's GEM
- * ports send through, and the names of the PLOAM messages.
+ * ports send through, the names of the PLOAM messages, and the state
+ * Disable_Serial_Number leaves the ONU in.
  */
 
 #include <kunit/test.h>
@@ -479,6 +480,46 @@ static void rtl9602c_test_ploam_names(struct kunit *test)
 	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_us_name(255), "unknown");
 }
 
+/*
+ * Disable_Serial_Number (G.984.3 clause 10.2.5.1 i) and j)): the disable with
+ * the ONU's serial number stops it in O7 from any other state; only the enable
+ * with its serial number, or the enable of every ONU, takes it out, to O2.
+ */
+static void rtl9602c_test_disable_sn(struct kunit *test)
+{
+	static const u8 others[] = { 0x01, 0x0e, 0x10, 0xf0, 0xfe };
+	const u8 disable = RTL9602C_PLOAM_DISABLE_SN_DISABLE;
+	const u8 enable = RTL9602C_PLOAM_DISABLE_SN_ENABLE;
+	const u8 all = RTL9602C_PLOAM_DISABLE_SN_ENABLE_ALL;
+	const u8 o7 = RTL9602C_ONU_O7_EMERGENCY_STOP;
+	const u8 o5 = RTL9602C_ONU_O5_OPERATION;
+	const u8 o2 = RTL9602C_ONU_O2_STANDBY;
+	u8 state;
+	unsigned int i;
+
+	for (state = RTL9602C_ONU_O1_INITIAL; state < o7; state++) {
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(state, disable, true), o7);
+		/* Another ONU's disable, and any enable, leave it as it is. */
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(state, disable, false), state);
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(state, enable, true), state);
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(state, all, true), state);
+	}
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(o7, enable, true), o2);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(o7, enable, false), o7);
+	/* The enable of every disabled ONU does not look at the serial number. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(o7, all, false), o2);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(o7, all, true), o2);
+	/* A second disable keeps it stopped. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(o7, disable, true), o7);
+
+	/* Any other octet 3 changes nothing, in O7 or out of it. */
+	for (i = 0; i < ARRAY_SIZE(others); i++) {
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(o7, others[i], true), o7);
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_disable_sn(o5, others[i], true), o5);
+	}
+}
+
 static struct kunit_case rtl9602c_pon_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_sn_parse),
 	KUNIT_CASE(rtl9602c_test_sn_parse_refuses),
@@ -495,6 +536,7 @@ static struct kunit_case rtl9602c_pon_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_tcont_numbers),
 	KUNIT_CASE(rtl9602c_test_tcont_qmap),
 	KUNIT_CASE(rtl9602c_test_ploam_names),
+	KUNIT_CASE(rtl9602c_test_disable_sn),
 	{ }
 };
 

@@ -129,6 +129,10 @@ struct rtl9602c_pon_host_ops {
  *	-ENODATA if none is set
  * @password_set: set the ONU's registration password
  * @password_is_set: whether one is set
+ * @disabled_set: keep the ONU disabled, as the OLT left it, so that the MAC
+ *	comes up in O7; or clear that, which while the MAC is up takes an ONU
+ *	in O7 to O2. -EBUSY for a disable while the MAC is up
+ * @disabled_get: whether the OLT has disabled the ONU
  * @us_ready: whether the GEM port in @flow has its upstream programmed
  * @second_enable: whether the GPON interrupt comes once every 8000
  *	downstream frames, a second of the OLT's clock, for
@@ -144,6 +148,8 @@ struct rtl9602c_pon_ops {
 	int (*sn_get)(void *pon, char *buf, size_t len);
 	int (*password_set)(void *pon, const char *s);
 	bool (*password_is_set)(void *pon);
+	int (*disabled_set)(void *pon, bool on);
+	bool (*disabled_get)(void *pon);
 	bool (*us_ready)(void *pon, unsigned int flow);
 	void (*second_enable)(void *pon, bool on);
 };

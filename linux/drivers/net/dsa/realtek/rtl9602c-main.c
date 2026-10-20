@@ -1179,6 +1179,9 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 		strscpy(ctx->val.vstr, rtl9602c_pon_password_is_set(p) ? "set" : "",
 			sizeof(ctx->val.vstr));
 		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_GPON_DISABLED:
+		ctx->val.vbool = rtl9602c_pon_disabled_get(p);
+		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS:
 		ctx->val.vu32 = rtl9602c_cpu_rate_get(p);
 		return 0;
@@ -1246,6 +1249,13 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 		if (rtl9602c_pon_is_up(p))
 			return -EBUSY;
 		return rtl9602c_pon_password_set(p, ctx->val.vstr);
+	case RTL9602C_DEVLINK_PARAM_ID_GPON_DISABLED:
+		/*
+		 * Taken while the PON is down; while it is up only false is,
+		 * which enables an ONU in O7 by hand, and true is refused
+		 * with -EBUSY there.
+		 */
+		return rtl9602c_pon_disabled_set(p, ctx->val.vbool);
 	case RTL9602C_DEVLINK_PARAM_ID_DOS_PORTS:
 		if (ctx->val.vu32 & ~(u32)RTL9602C_DOS_PORT_EN_MASK)
 			return -ERANGE;
@@ -1468,6 +1478,13 @@ static const struct devlink_param rtl9602c_devlink_params[] = {
 	/* The password the ONU gives the OLT when asked; reads back "set". */
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
 				 "gpon_password", DEVLINK_PARAM_TYPE_STRING,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	/*
+	 * Whether the OLT has disabled the ONU, which then comes up in O7:
+	 * user space keeps it across a restart, as G.984.3 asks.
+	 */
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_GPON_DISABLED,
+				 "gpon_disabled", DEVLINK_PARAM_TYPE_BOOL,
 				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS,
 				 "cpu_rx_pps", DEVLINK_PARAM_TYPE_U32,

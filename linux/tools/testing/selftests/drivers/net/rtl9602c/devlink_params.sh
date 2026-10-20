@@ -1,15 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 #
-# The devlink parameters of the RTL9602C switch driver: the 27 that
+# The devlink parameters of the RTL9602C switch driver: the 30 that
 # Documentation/networking/devlink/rtl9602c.rst lists, what each gives back
 # after it is set, the refusals of a value out of range, and the storm-control
 # classes, whose rate must exist before their ports can.
 #
 # Every parameter that a test changes is put back as it was, whether the test
-# passes or not. The two that name the ONU (gpon_serial and gpon_password) and
-# the SFP lane are read and refused, never set to a value that is taken: that
-# would change what a unit that is in service says to its OLT or to its host.
+# passes or not. The three of the ONU (gpon_serial, gpon_password and
+# gpon_disabled) and the SFP lane are read and refused, never set to a value
+# that is taken: that would change what a unit that is in service says to its
+# OLT or to its host, or keep it off its OLT.
 
 ALL_TESTS="
 	test_the_parameters_are_there
@@ -35,7 +36,8 @@ PARAMS="
 	loop_detect loop_detect_ports loop_detect_period
 	cpu_rx_pps l3_ttl_decrement
 	sfp_lane sfp_lane_now
-	gpon_serial gpon_password
+	gpon_serial gpon_password gpon_disabled
+	ptp_transparent_clock ptp_path_delay_ns
 "
 
 # Every parameter a test sets, in the order they are put back in: the ports
@@ -218,6 +220,12 @@ test_the_lane_is_read_only_or_a_name()
 	case $(param_get gpon_password) in
 	set | unset | "") ;;
 	*) mismatch "gpon_password" "set or not" "$(param_get gpon_password)"; ret=1 ;;
+	esac
+
+	# Whether the OLT disabled the ONU is read, never set.
+	case $(param_get gpon_disabled) in
+	true | false) ;;
+	*) mismatch "gpon_disabled" "true or false" "$(param_get gpon_disabled)"; ret=1 ;;
 	esac
 	return $ret
 }

@@ -194,6 +194,11 @@ The PON operations are the MAC's to the switch driver (``rtl9602c-pon-main.c``):
      - The ONU's identity, which the devlink parameters ``gpon_serial`` and
        ``gpon_password`` set and read; refused with ``-EBUSY`` while the MAC is
        up.
+   * - ``disabled_set``, ``disabled_get``
+     - Whether the OLT has disabled the ONU, which the devlink parameter
+       ``gpon_disabled`` sets and reads: the MAC then comes up in O7. While
+       the MAC is up a disable is refused with ``-EBUSY``, and clearing it
+       enables an ONU in O7 by hand.
    * - ``us_ready``
      - Whether a GEM port's upstream is programmed (the flowtable offload asks).
 
@@ -206,9 +211,10 @@ driver unbinds, it removes its debugfs views, takes the MAC down if it is up
 (the laser goes dark and the ``pon`` interface loses its carrier), cancels its
 worker and unregisters the data path before the OMCI port (the PON class
 unregisters its device with its last child). The ONU's serial number and
-password are the driver's state and go with it: after a bind they are set again
-(``gpon_serial`` and ``gpon_password`` of the devlink instance), and cycling the
-``pon`` interface, which stays up through the unbind, brings the MAC up.
+password, and a disable by the OLT, are the driver's state and go with it:
+after a bind they are set again (``gpon_serial``, ``gpon_password`` and
+``gpon_disabled`` of the devlink instance), and cycling the ``pon`` interface,
+which stays up through the unbind, brings the MAC up.
 
 The blocks and their files
 --------------------------

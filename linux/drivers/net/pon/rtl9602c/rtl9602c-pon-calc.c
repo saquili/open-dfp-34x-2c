@@ -5,8 +5,8 @@
  * file includes with CONFIG_PON_RTL9602C_KUNIT_TEST): the parsing of the
  * serial number and the password, the length of a burst's overhead, the
  * split of the equalization delay, the transmit power level modes, the units
- * of a queue's rates, the queues a T-CONT's GEM ports send through, and the
- * names of the PLOAM messages.
+ * of a queue's rates, the queues a T-CONT's GEM ports send through, the names
+ * of the PLOAM messages, and the state Disable_Serial_Number leaves the ONU in.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
@@ -312,6 +312,33 @@ const char *rtl9602c_ploam_us_name(u8 id)
 	};
 
 	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
+}
+
+/**
+ * rtl9602c_gpon_disable_sn() - the state Disable_Serial_Number leaves the ONU in
+ * @state: the activation state, an RTL9602C_ONU_O* value
+ * @ctrl: octet 3 of the message: RTL9602C_PLOAM_DISABLE_SN_DISABLE,
+ *	  RTL9602C_PLOAM_DISABLE_SN_ENABLE or RTL9602C_PLOAM_DISABLE_SN_ENABLE_ALL
+ * @mine: octets 4 to 11 are the ONU's own serial number
+ *
+ * ITU-T G.984.3 clause 9.2.3.6 and clause 10.2.5.1 i) and j): the disable with
+ * the ONU's serial number takes it to O7, the emergency stop, from any other
+ * state; the enable with its serial number, or the enable of every disabled
+ * ONU whatever the serial number, takes an ONU in O7 to O2, where the OLT
+ * discovers it again. Any other octet 3 changes nothing.
+ *
+ * Return: the new state, or @state when the message changes nothing.
+ */
+u8 rtl9602c_gpon_disable_sn(u8 state, u8 ctrl, bool mine)
+{
+	if (state != RTL9602C_ONU_O7_EMERGENCY_STOP)
+		return ctrl == RTL9602C_PLOAM_DISABLE_SN_DISABLE && mine ?
+		       RTL9602C_ONU_O7_EMERGENCY_STOP : state;
+
+	if (ctrl == RTL9602C_PLOAM_DISABLE_SN_ENABLE_ALL ||
+	    (ctrl == RTL9602C_PLOAM_DISABLE_SN_ENABLE && mine))
+		return RTL9602C_ONU_O2_STANDBY;
+	return state;
 }
 
 #if IS_ENABLED(CONFIG_PON_RTL9602C_KUNIT_TEST)
