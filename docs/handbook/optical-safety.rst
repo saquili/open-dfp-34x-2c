@@ -133,8 +133,11 @@ What it cannot do
   the line, the transmitter is as the loader and the module leave it; nothing
   here measured it (I: a trace of the line from power-up would settle it).
 * **After a watchdog reset at a lower power level.** The module stays at the
-  level the OLT last set until it loses power (``gn25l95.rst``,
-  "Known limitations").
+  lower level until it loses power: the one the OLT named or set, or, before
+  the ONU was ranged, the one it took itself after serial-number requests went
+  unanswered. The ONU sends at a lower level only from O3 to O6; below O3 and
+  in O7 the driver asks for the normal level again (I: not run on the board;
+  ``gn25l95.rst``, "Known limitations").
 * **Dying_Gasp** is sent before an orderly restart; whether the loss of supply
   makes the MAC send it is not known.
 
