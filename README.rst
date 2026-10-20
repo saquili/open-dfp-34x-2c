@@ -15,6 +15,10 @@
           src="https://img.shields.io/badge/licence-GPL--2.0--only-blue">
    </p>
    <p align="center">
+     <b>Try the panel in your browser</b>: a demo with a mock stick, no stick
+     needed, on this repository's GitHub Pages site
+   </p>
+   <p align="center">
      <a href="#what-it-does">What it does</a> ·
      <a href="#how-it-was-made">How it was made</a> ·
      <a href="#status">Status</a> ·
@@ -59,19 +63,29 @@ What it does
   to seven sessions and hands each session's IPv4 address and IPv6 prefix
   down to the router behind it. The rest of what the OLT sets up, such as
   television and telephone, stays bridged.
-* **Can route local networks itself.** Up to eight networks on the host
-  link, each with a DHCP server, NAT behind a connection's address, port
-  forwards and a DMZ, and a firewall whose rules the switch judges in
-  hardware (`ADR 0019
+* **Can be the router itself.** Its own connections, PPPoE sessions and IPoE
+  ones with an address from DHCP or typed in, seven together; up to eight
+  networks on the host link, each with a DHCP server (512 fixed addresses in
+  all), NAT behind a connection's address, 96 port forwards and a DMZ; and a
+  firewall of 96 rules. The switch's engine carries the flows, and its ACL
+  judges the firewall's rules (`ADR 0019
   <docs/adr/0019-the-firewalls-rules-are-the-switchs-acl.rst>`__).
 * **2.5 or 1 Gb/s to the router**, found by itself: 2500BASE-X, or 1000BASE-X
   with or without auto-negotiation.
 * **Is managed from the router's side**: ssh, and a web panel with an API
-  over HTTPS, on the stick's addresses on that side only.
+  over HTTPS, on VLAN 4094 of the host link, at the address the shipped
+  firmware's page had. A demo of the panel, with a mock stick, runs in a
+  browser on this repository's GitHub Pages site.
+* **Keeps time from the host**: PTP with the switch's hardware timestamps,
+  or NTP, or the OLT's time of day and the seconds of its frames; and it is
+  the PTP master of the host link while it hears no better clock (`timed
+  <timed/README.rst>`__).
 * **Updates safely.** An update goes into the other flash bank and starts on
   trial; the stick keeps it once it has come up, and goes back to the old
-  one otherwise. A change of the settings is tried the same way and undone
-  after 90 seconds unless the panel confirms it.
+  one otherwise. Until the first update the other bank keeps the shipped
+  firmware, and the panel goes back to it with one button. A change of the
+  settings is tried the same way and undone after 90 seconds unless the
+  panel confirms it.
 
 How the parts fit together is in `docs/handbook/system.rst
 <docs/handbook/system.rst>`__.
@@ -99,9 +113,12 @@ Status
 **It works on a lab OLT, and it needs more testing.** The system runs on a
 DFP-34X-2C3 against a laboratory OLT, where 24 runs of the device tests are
 recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
-2026-10-12, is of an earlier image: the firewall, the router, the new laser
-driver, the address on VLAN 4094 and the MAC address of the label came after
-it, and have been tried by hand.
+2026-10-12, is of an earlier image: PTP and the stick's clock, the router, the
+firewall, the laser driver of its own, the address on VLAN 4094, the first
+start's import from the shipped firmware and the way back to it came after
+it, and have been tried by hand. On 2026-10-20 the files of the first release
+were installed on a stick through the shipped firmware's page, by hand
+(`install-guide.rst <docs/handbook/install-guide.rst>`__).
 
 | 🟢 **Tested**: passed the recorded device tests on the lab OLT.
 | 🟡 **Bench**: works on the developer's stick; no recorded test run yet.
@@ -132,15 +149,17 @@ it, and have been tried by hand.
    * - The host lane, 2.5 or 1 Gb/s, found by itself
      - 🟢 Tested
      - 2500BASE-X, 1000BASE-X with and without auto-negotiation (2026-10-07);
-       the current image's link came up at 2500 Mb/s
+       the current image's link came up at 2500 Mb/s. On sticks whose host
+       identity page was changed (`Before you install`_)
    * - The management VLAN kept off the PON
      - 🟢 Tested
      - Both ways, also after a PPPoE session (2026-10-07, an earlier
-       image); the run on the current image reaches the stick through it
+       image); the run of 2026-10-12 reaches the stick through it. The panel
+       on VLAN 4094 at the shipped firmware's address: by hand, 2026-10-20
    * - Update into the other bank, start on trial, keep it
      - 🟢 Tested
-     - Into both banks over ssh, and back, on the current image; from the
-       panel on 2026-10-07
+     - Into both banks over ssh, and back, on the image of 2026-10-12; from
+       the panel on 2026-10-07
    * - Back to the old bank after a failed start
      - 🟡 Bench
      - Measured: a kernel panic, a damaged kernel, power lost during a write
@@ -156,9 +175,13 @@ it, and have been tried by hand.
    * - A change of the settings tried, and undone without a confirmation
      - 🟡 Bench
      - By hand; no device test yet
-   * - Local networks: DHCP, NAT, port forwards, DMZ
+   * - The stick as the router: IPoE connections, local networks, DHCP,
+       NAT, port forwards, DMZ
      - 🟡 Bench
-     - On the developer's stick, with flows carried by the switch; no
+     - On the developer's stick, an IPoE connection among them (2026-10-19);
+       129 flows at once carried by the switch's engine, of the 4096 it can
+       hold (`rtl9602c-l3-nat.rst
+       <linux/Documentation/networking/dsa/rtl9602c-l3-nat.rst>`__); no
        recorded test run yet
    * - The firewall's rules in the switch
      - 🟡 Bench
@@ -166,8 +189,28 @@ it, and have been tried by hand.
        (``docs/handbook/system.rst``, "The firewall, as measured")
    * - IPv6 routed to the local networks
      - ⚪ Not on a stick yet
-     - The sessions' IPv6 is handed to the router behind the stick; routing
-       it to the local networks is still to come
+     - The sessions' IPv6 is handed to the router behind the stick. The
+       panel takes a network's IPv6 setting, but the stick does not apply it
+       yet (``onu-apply``)
+   * - The PTP hardware clock, its pulse once a second, its receive stamps
+     - 🟢 Tested
+     - ``system.phc``, 2026-10-12
+   * - The stick's clock (``timed``): PTP with the switch's receive and
+       transmit stamps, the PHC's servo and the system clock on the PHC; the
+       OLT's time of day and seconds; PTP master on the host link; NTP
+     - 🟡 Bench
+     - By hand (`timed <timed/README.rst>`__): the PHC within 1 to 3 us of a
+       master that stamps in software, the system clock within 1 us of the
+       PHC, the PHC within 15 us of the OLT's frames over 8 minutes. Not yet
+       against a master that stamps in hardware; two assumptions of the
+       driver are open (`rtl9602c-ptp.rst
+       <linux/Documentation/networking/dsa/rtl9602c-ptp.rst>`__, "Open
+       questions")
+   * - The laser driver as a driver of its own (GN25L95), with its hwmon
+       device
+     - 🟡 Bench
+     - The release's image reached O5 with it on 2026-10-20; its
+       diagnostics are not in a recorded run yet
    * - The web panel and its API over HTTPS
      - 🟢 Tested
      - The API and the delivery of the page. What the panel shows in a
@@ -177,16 +220,27 @@ it, and have been tried by hand.
      - A save leaves the shipped firmware's 13 files as they were. Eight
        builds of the shipped firmware, started from the other bank, found
        their own files and left this system's alone (by hand)
-   * - Install through the shipped firmware's web page
+   * - Install through the shipped firmware's web page, with the first
+       start's import of the identity, the administrator's password, the LAN
+       address and the MAC address
      - 🟡 Bench
      - On 2026-10-19, from two builds of the shipped firmware, one of them on a
-       copy of a stick as sold: the identity, the MAC address and the
-       administrator's password taken, and the way back to the shipped firmware
-       with its settings (by hand)
-   * - The panel's copy of the whole flash, and its way back to the shipped
-       firmware
+       copy of a stick as sold; on 2026-10-20 with the files of the first
+       release, which reached O5 in about 10 s, kept its bank and took the
+       administrator's password (by hand, ``updating.rst``)
+   * - The panel's way back to the shipped firmware
+     - 🟡 Bench
+     - On 2026-10-20 with the first release: the shipped firmware started
+       with its own settings, its page at 192.168.1.1 without a VLAN tag
+       (by hand)
+   * - The panel's copy of the whole flash
      - ⚪ Not on a stick yet
-     - Tested on the build machine; the release test runs them on a stick
+     - Tested on the build machine (``onu-utils/tests/test_onu_update.sh``)
+   * - Releases built by the release workflow, twice and compared, with a
+       pinned toolchain release
+     - 🟡 Bench
+     - The first draft release, v2026.10.20-1522, built so and its files
+       installed on a stick by hand (`Releases`_)
 
 ..
 
@@ -253,11 +307,29 @@ ports are welcome.
 Before you install
 ==================
 
+* **Follow the guide.** `install-guide.rst
+  <docs/handbook/install-guide.rst>`__ takes a stick through the install, the
+  first sign-in, an update and the ways back, step by step, with what to do
+  when a step fails.
 * **Take the files from a release** (`Releases`_), and check them against
   its ``SHA256SUMS`` before you install them.
+* **The sticks tested here do not carry the host's identity page as
+  shipped.** As shipped, the page that the host reads over the cage's
+  two-wire bus declares RX_LOS. A Linux host then keeps the link down while
+  that line is high, which left it down after warm restarts of the host, and
+  drops the link, the stick's only way in, whenever the fibre is dark. On the
+  sticks tested two bytes of that page were written from the host, at the
+  owner's risk: the claim of RX_LOS taken away, and the page's check byte
+  with it. That is what lets a Linux host bring the 2.5 Gb/s link up every
+  time and keep it while the fibre is dark; RX_LOS stays a line the host may
+  read on its own. This system cannot change that page. The page also makes
+  Linux 6.4 to 6.7 find no mode for the lane; only 6.12 and 6.18 were tried
+  (`install-guide.rst
+  <docs/handbook/install-guide.rst>`__, "The host's view of the stick").
 * **Two ways in.** Through the shipped firmware's web page, with the package
   ``web-install.tar`` of a release, which needs no console
-  (`updating.rst <docs/handbook/updating.rst>`__). Or from the bench, which
+  (`install-guide.rst <docs/handbook/install-guide.rst>`__, `updating.rst
+  <docs/handbook/updating.rst>`__). Or from the bench, which
   writes the flash from the boot loader's prompt over the serial console
   (`flashing.rst <docs/handbook/flashing.rst>`__). Either way the shipped
   firmware stays in the other bank, as the way back, with its settings.
@@ -270,8 +342,8 @@ Before you install
   too (`backup.rst <docs/handbook/backup.rst>`__). Keep the copy private: it
   holds the unit's registration identity.
 * **The way back.** While the other bank holds the shipped firmware, the
-  same page has "Go back to the shipped firmware", which starts it with its
-  own settings.
+  same page has "Go back to the shipped firmware (system A)", or B, which
+  makes it the bank that starts, with its own settings.
 * **The first update overwrites the shipped firmware.** The panel names the
   bank that holds it and asks before it writes over it; ``onu-update write``
   on the command line does not ask (`updating.rst
@@ -362,7 +434,13 @@ Where to start
 
    * - I want to
      - Read
-   * - Try it on a stick
+   * - Install it on a stick
+     - `install-guide.rst <docs/handbook/install-guide.rst>`__, after
+       `Before you install`_
+   * - See the panel without a stick
+     - The demo on this repository's GitHub Pages site, with a mock stick
+       (``.github/workflows/demo.yml``)
+   * - Try a build of your own on a stick
      - `board.rst <docs/handbook/board.rst>`__ for the stick and its
        interfaces, then `building.rst <docs/handbook/building.rst>`__,
        `updating.rst <docs/handbook/updating.rst>`__, and for a stick on a
@@ -465,6 +543,8 @@ Documentation
 * `system.rst <docs/handbook/system.rst>`__: how the system works;
 * `boot-contract.rst <docs/handbook/boot-contract.rst>`__: the flash layout,
   the image formats, how a bank is chosen, and the watchdog;
+* `install-guide.rst <docs/handbook/install-guide.rst>`__: the install,
+  the panel, an update and the ways back, step by step;
 * `building.rst <docs/handbook/building.rst>`__: the images, their budgets,
   the boot script, and how to build, check and reproduce them;
 * `updating.rst <docs/handbook/updating.rst>`__: updates from the panel or a
