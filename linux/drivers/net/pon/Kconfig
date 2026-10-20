@@ -62,11 +62,12 @@ config PON_GN25L95
 	  DFP-34X-2C. The driver publishes the SFF-8472 diagnostics through
 	  hwmon as "gn25l95", drives the transmitter's TX_DISABLE input, and
 	  offers the optics to the ONU's MAC, which names them in the device
-	  tree: before an activation it turns the part's automatic
-	  extinction-ratio loop off, and it sets the transmit power levels the
-	  MAC asks for. Those changes stay in the part's registers and last
-	  until the part loses power. A bus that refuses writes leaves the
-	  part as it is, and the driver then only reads it.
+	  tree: before an activation it puts back the configuration the part
+	  loads at power-up, its automatic extinction-ratio loop on, and it
+	  sets the transmit power levels the MAC asks for. Those changes stay
+	  in the part's registers and last until the part loses power. A bus
+	  that refuses writes leaves the part as it is, and the driver then
+	  only reads it.
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called gn25l95.

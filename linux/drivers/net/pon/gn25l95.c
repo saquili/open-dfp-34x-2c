@@ -10,9 +10,10 @@
  * The driver publishes the SFF-8472 diagnostics through hwmon, drives the
  * transmitter's hard TX_DISABLE input, and offers the optics to the ONU's
  * MAC through the PON class (struct pon_optics): before every activation it
- * turns the part's automatic extinction-ratio loop off (gn25l95_start()),
- * and it sets the transmit power levels the MAC asks for
- * (gn25l95_set_power_level()). In the client's debugfs directory it offers
+ * puts back the configuration the part loads at power-up, the automatic
+ * extinction-ratio loop on (gn25l95_start()), and it sets the transmit power
+ * levels the MAC asks for (gn25l95_set_power_level()). In the client's
+ * debugfs directory it offers
  * two views that only read, "a2" and "eeblocks", a third, "tables", that
  * selects each table to read it, and, with CONFIG_PON_GN25L95_STORE,
  * "t2write", which stores table 2 bytes in the part's EEPROM on request.
@@ -25,12 +26,11 @@
  * The hwmon reads, the debugfs views and the MAC's operations drive the same
  * registers, and the hwmon core and the I2C core each serialize their own
  * callers only. So every user holds the driver's lock for its whole
- * sequence and the adapter's bus lock inside it (gn25l95_lock()): the
- * modulation hold switches the page of A2h 128-255 and puts it back, and no
- * other user, a client of the adapter included, sees the switched page.
+ * sequence and the adapter's bus lock inside it (gn25l95_lock()): a
+ * bring-up switches the page of A2h 128-255 and puts it back, and no other
+ * user, a client of the adapter included, sees the switched page.
  */
 
-#include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/cleanup.h>
 #include <linux/debugfs.h>
@@ -111,10 +111,9 @@ enum gn25l95_limit {
  * @hwmon: the hwmon device, once registered
  * @refused: the adapter refused a write; reset by the next write it takes
  * @told_refused: the refusal was logged
- * @apcset0: the power control's set point the part came with, that of
- *	transmit power level mode 0
- * @mod0: the modulation DAC the part came with
- * @ref: @apcset0 and @mod0 are known
+ * @apcset0: the power control's set point found at the first bring-up since
+ *	probe, that of transmit power level mode 0
+ * @ref: @apcset0 is known
  * @mode: the transmit power level mode the optics are set to; U8_MAX when
  *	neither the mode asked for nor mode 0 could be set
  * @p0: the transmitted power at mode 0 in 0.1 uW, measured before the first
@@ -140,7 +139,6 @@ struct gn25l95 {
 	bool refused;
 	bool told_refused;
 	u8 apcset0;
-	u16 mod0;
 	bool ref;
 	u8 mode;
 	u16 p0;
@@ -452,12 +450,12 @@ static int gn25l95_hwmon_register(struct gn25l95 *gn)
  * The laser driver's configuration table ("table 2"), shown at A2h 128-255
  * while the page select, A2h byte 127, holds 02h.  The addresses are A2h byte
  * numbers.  Measured on the ODI DFP-34X-2C3: ER_CTRL_AUTO runs the automatic
- * extinction-ratio loop, and ER_CTRL reads 0xe3 after the module powers up.
- * MOD_DAC (16 bits, most significant byte first) sets the modulation while
- * the loop is off.  With both PERSIST_OFF bits set, register changes are not
- * copied into the part's EEPROM; with PERSIST at 0x00 every change is copied,
- * the diagnostic words included, and the part does not acknowledge on the
- * bus while a copy runs.  That module reads 0x03 in PERSIST.
+ * extinction-ratio loop, which sets the modulation current, and ER_CTRL reads
+ * 0xe3 after the module powers up; APCSET is the power control loop's set
+ * point.  With both PERSIST_OFF bits set, register changes are not copied
+ * into the part's EEPROM; with PERSIST at 0x00 every change is copied, the
+ * diagnostic words included, and the part does not acknowledge on the bus
+ * while a copy runs.  That module reads 0x03 in PERSIST.
  *
  * Nothing else is written for the table to take a write.  The text of the
  * GN25L95's datasheet places the access control of the upper page at 0xcc,
@@ -465,42 +463,28 @@ static int gn25l95_hwmon_register(struct gn25l95 *gn)
  * the same datasheet places that control at 0xc4 and the PW1 password at
  * 0xc9-0xcc, so that write went to the password.  That module reads 00h at
  * 0xc4.  A write the table refuses shows in the read-backs of ER_CTRL and
- * MOD_DAC.
- *
- * Not verified: MOD_LIMIT as a limit on the modulation DAC, 0xff meaning
- * none.  MOD_RANGE only decides how the log shows the modulation.
+ * APCSET.
  */
 #define GN25L95_TBL2_ER_CTRL		0xa5
 #define GN25L95_TBL2_ER_CTRL_AUTO		BIT(0)
-#define GN25L95_TBL2_ER_CTRL_MOD_RANGE	GENMASK(3, 2)
 #define GN25L95_TBL2_APCSET		0xa8
-#define GN25L95_TBL2_MOD_DAC		0xab
-#define GN25L95_TBL2_MOD_DAC_FIELD	GENMASK(15, 6)
-#define GN25L95_TBL2_MOD_LIMIT		0xaf
 #define GN25L95_TBL2_PERSIST		0xc7
 #define GN25L95_TBL2_PERSIST_OFF	(BIT(1) | BIT(0))
 
 /*
  * Transmit power levelling (ITU-T G.984.2 clause 8.3.2): level mode 0 is the
  * power the module came with, modes 1 and 2 are 3 dB and 6 dB below it.  The
- * power control loop holds the power at which the monitor photodiode reaches
- * the set point, moving the bias, so a lower level takes a lower set point
- * and, for the light to keep its shape, a modulation lower by the same
- * factor; with the modulation held, the bias reaches its floor about 1.5 dB
- * down and the power stops following the set point (measured on the ODI
- * DFP-34X-2C3).  So the modulation is scaled first, by 2^-mode, and the set
- * point is then moved one step at a time, never above the module's own,
- * until the transmitted power has crossed 2^-mode times the power measured at
- * mode 0.  The module measures the power of the bursts, which come often only
- * from O4 on, so a lower level is measured only there.  The set point at which
- * it was reached is kept, and before O4, where the ONU sends only its answers
- * to serial-number requests, a lower level is set to the kept set point
- * without measuring; a level not measured since probe is not set there.
- *
- * Going down, the scaled modulation first makes the loop hold the power with
- * more bias, about 21 mA at mode 2 on that module, which the set point then
- * lowers; going up, the modulation first lets the bias fall.  Either way the
- * set point moves last.
+ * power control loop moves the bias until the monitor photodiode reaches the
+ * set point, and the automatic extinction-ratio loop sets the modulation for
+ * the bias it finds, so a lower level is set by the set point alone.  That is
+ * moved one step at a time, never above the module's own, until the
+ * transmitted power has crossed 2^-mode times the power measured at mode 0; a
+ * power that falls to 0 on the way ends the search.  The module measures the
+ * power of the bursts, which come often only from O4 on, so a lower level is
+ * measured only there.  The set point at which it was reached is kept, and
+ * before O4, where the ONU sends only its answers to serial-number requests, a
+ * lower level is set to the kept set point without measuring; a level not
+ * measured since probe is not set there.
  */
 
 /* The power is read this long after each change. */
@@ -517,66 +501,36 @@ static int gn25l95_tx_bias(struct gn25l95 *gn, u16 *tx, u16 *bias)
 }
 
 /*
- * Write MOD_DAC and read it back.  The register takes its two bytes together
- * when the less significant is written, the more significant one waiting
- * until then: written alone, it reads back unchanged (measured).  So the more
- * significant byte goes first, and the modulation steps from the old value to
- * the new with nothing in between.
- */
-static int gn25l95_put_mod(struct gn25l95 *gn, u16 mod)
-{
-	const u16 reg = GN25L95_A2 + GN25L95_TBL2_MOD_DAC;
-	u8 hi, lo;
-	int err;
-
-	err = gn25l95_write(gn, reg, mod >> 8) ?:
-	      gn25l95_write(gn, reg + 1, mod & 0xff) ?:
-	      gn25l95_read(gn, reg, &hi) ?:
-	      gn25l95_read(gn, reg + 1, &lo);
-	if (!err && ((hi << 8) | lo) != mod)
-		err = -EIO;
-	return err;
-}
-
-/*
  * Set level mode @mode, with the configuration table shown and ready for
- * writes.  Mode 0 is the module's own modulation and set point, written in
- * that order.  A lower mode needs the module's settings known, and takes the
- * modulation scaled and then a set point.  With @measure the set point is
- * found with the laser sending bursts: the power at mode 0 is measured when
- * the optics are still at mode 0, a power of 0 there gives -ENODATA, and the
- * set point at which the power crosses its target is kept for the mode.
- * Without @measure the kept set point is written, and a mode that has none
- * gives -ENODATA with nothing written.  A set point that would pass the
- * module's own, a power that falls to 0 or a bias above
- * GN25L95_LEVEL_BIAS_MAX gives -ERANGE; the caller then puts mode 0 back.
+ * writes.  Mode 0 is the set point found at the first bring-up since probe.
+ * With @measure the set point of a lower mode is found with the laser sending
+ * bursts: the power read while the optics are still at mode 0 is that of mode
+ * 0, a power of 0 there gives -ENODATA, and the set point at which the power
+ * crosses its target is kept for the mode.  Without @measure the kept set
+ * point is written, and a mode that has none gives -ENODATA with nothing
+ * written.  A set point that would pass the module's own, a power that falls
+ * to 0 or a bias above GN25L95_LEVEL_BIAS_MAX gives -ERANGE; the caller then
+ * puts mode 0 back.
  */
 static int gn25l95_level_set(struct gn25l95 *gn, unsigned int mode,
 			     bool measure)
 {
 	const u16 apc_reg = GN25L95_A2 + GN25L95_TBL2_APCSET;
-	u16 dac = FIELD_GET(GN25L95_TBL2_MOD_DAC_FIELD, gn->mod0);
-	u16 mod, tx, bias, target;
+	u16 tx, bias, target;
 	int apc, step, i, err;
 	u8 cur;
 
 	if (!mode)
-		return gn25l95_put_mod(gn, gn->mod0) ?:
-		       gn25l95_write(gn, apc_reg, gn->apcset0);
+		return gn25l95_write(gn, apc_reg, gn->apcset0);
+	if (!measure)
+		return gn->apcset[mode] ?
+		       gn25l95_write(gn, apc_reg, gn->apcset[mode]) : -ENODATA;
 
-	mod = (gn->mod0 & ~GN25L95_TBL2_MOD_DAC_FIELD) |
-	      FIELD_PREP(GN25L95_TBL2_MOD_DAC_FIELD, dac >> mode);
-	if (!measure) {
-		if (!gn->apcset[mode])
-			return -ENODATA;
-		return gn25l95_put_mod(gn, mod) ?:
-		       gn25l95_write(gn, apc_reg, gn->apcset[mode]);
-	}
-
+	err = gn25l95_read(gn, apc_reg, &cur) ?:
+	      gn25l95_tx_bias(gn, &tx, &bias);
+	if (err)
+		return err;
 	if (!gn->mode) {
-		err = gn25l95_tx_bias(gn, &tx, &bias);
-		if (err)
-			return err;
 		if (!tx)
 			return -ENODATA;
 		gn->p0 = tx;
@@ -584,12 +538,6 @@ static int gn25l95_level_set(struct gn25l95 *gn, unsigned int mode,
 	if (!gn->p0)
 		return -ENODATA;
 	target = gn->p0 >> mode;
-
-	err = gn25l95_put_mod(gn, mod) ?:
-	      gn25l95_read(gn, apc_reg, &cur) ?:
-	      gn25l95_tx_bias(gn, &tx, &bias);
-	if (err)
-		return err;
 
 	apc = cur;
 	step = tx > target ? -1 : 1;
@@ -638,10 +586,10 @@ static void gn25l95_t2_hide(struct gn25l95 *gn, u8 tabsel)
 /*
  * Put level mode 0 back when the system restarts, powers off or halts: the
  * module keeps its registers across a warm reboot of the SoC, and the next
- * kernel takes the settings it finds for the module's own.  A reset that
- * shuts no device down, such as the watchdog's, leaves a lower level in
- * place until the module loses power, and a level asked for after it is
- * counted down from that lower one.
+ * kernel takes the set point it finds at its first bring-up for the module's
+ * own.  A reset that shuts no device down, such as the watchdog's, leaves a
+ * lower level in place until the module loses power, and a level asked for
+ * after it is counted down from that lower one.
  */
 static void gn25l95_shutdown(struct i2c_client *client)
 {
@@ -687,19 +635,18 @@ static int gn25l95_refused(struct gn25l95 *gn, int err)
  * @now: set to the mode the optics are at afterwards
  *
  * Sets @mode with the configuration table shown and its writes kept out of
- * the EEPROM as in the modulation hold; a failure puts mode 0 back. Nothing
- * is written before the first modulation hold has kept the module's own
- * settings, nor, without @measure, for a lower mode not measured since probe:
- * the optics then stay where they are.
+ * the EEPROM as at bring-up; a failure puts mode 0 back. Nothing is written
+ * before the first bring-up has kept the module's own set point, nor, without
+ * @measure, for a lower mode not measured since probe: the optics then stay
+ * where they are.
  *
  * Context: process context.  May sleep, with the driver's lock held, for up
  * to about six seconds with @measure: 20 ms or more for each step of the set
  * point, of which there are at most 256.
- * Return: 0; -EOPNOTSUPP before the first hold or for a mode above 2;
+ * Return: 0; -EOPNOTSUPP before the first bring-up or for a mode above 2;
  * -ENODATA without @measure for a mode not measured since probe; -EPERM when
- * table writes would reach the EEPROM or the bus refuses them; -ENODATA,
- * -ERANGE or -EIO when the level could not be set; or the error of a failed
- * transfer.
+ * table writes would reach the EEPROM or the bus refuses them; -ENODATA or
+ * -ERANGE when the level could not be set; or the error of a failed transfer.
  */
 static int gn25l95_set_power_level(struct pon_optics *optics, unsigned int mode,
 				   bool measure, unsigned int *now)
@@ -732,7 +679,7 @@ static int gn25l95_set_power_level(struct pon_optics *optics, unsigned int mode,
 				/*
 				 * Neither the mode nor mode 0: the optics are
 				 * at no known level, which the next request and
-				 * the next hold both try to leave.
+				 * the next bring-up both try to leave.
 				 */
 				dev_err(&gn->client->dev,
 					"transmit power level not restored to mode 0\n");
@@ -767,13 +714,14 @@ static int gn25l95_set_power_level(struct pon_optics *optics, unsigned int mode,
 }
 
 /*
- * The modulation hold, under the driver's lock; see gn25l95_start().
+ * The factory configuration, under the driver's lock; see gn25l95_start().
  */
-static int __gn25l95_hold(struct gn25l95 *gn)
+static int __gn25l95_factory(struct gn25l95 *gn)
 {
+	const u16 er_reg = GN25L95_A2 + GN25L95_TBL2_ER_CTRL;
+	const u16 apc_reg = GN25L95_A2 + GN25L95_TBL2_APCSET;
 	struct device *dev = &gn->client->dev;
-	u8 hi, lo, er, eectl, modmax, tabsel, rb_er;
-	unsigned int dac;
+	u8 tabsel, eectl, er, apc, apc0, rb_er, rb_apc;
 	int err;
 
 	err = gn25l95_read(gn, GN25L95_A2 + GN25L95_A2_PAGE, &tabsel);
@@ -783,8 +731,8 @@ static int __gn25l95_hold(struct gn25l95 *gn)
 	/* Show the table; from here every path puts the page select back. */
 	err = gn25l95_write_changed(gn, GN25L95_A2 + GN25L95_A2_PAGE, 0x02) ?:
 	      gn25l95_read(gn, GN25L95_A2 + GN25L95_TBL2_PERSIST, &eectl) ?:
-	      gn25l95_read(gn, GN25L95_A2 + GN25L95_TBL2_MOD_LIMIT, &modmax) ?:
-	      gn25l95_read(gn, GN25L95_A2 + GN25L95_TBL2_ER_CTRL, &er);
+	      gn25l95_read(gn, er_reg, &er) ?:
+	      gn25l95_read(gn, apc_reg, &apc);
 	if (err)
 		goto out;
 
@@ -793,81 +741,37 @@ static int __gn25l95_hold(struct gn25l95 *gn)
 	 * write into its EEPROM: nothing in the table is written then.
 	 */
 	if ((eectl & GN25L95_TBL2_PERSIST_OFF) != GN25L95_TBL2_PERSIST_OFF) {
-		dev_warn(dev, "EEPROM updates are enabled (C7h %02x); modulation left alone rather than written to the EEPROM\n",
+		dev_warn(dev, "EEPROM updates are enabled (C7h %02x); the configuration table is left alone rather than written to the EEPROM\n",
 			 eectl);
 		err = -EPERM;
 		goto out;
 	}
 
 	/*
-	 * A transmit power level set in an earlier session is undone first,
-	 * back to the module's own modulation and set point.
+	 * The set point of level mode 0 is the one found at the first bring-up
+	 * since probe, and writing it undoes a level set since.  The loop is
+	 * turned on whatever it is found at.  Both are written every time, so
+	 * that a bus that refuses writes shows here, and read back.
 	 */
-	if (gn->ref && gn->mode) {
-		err = gn25l95_level_set(gn, 0, false);
-		if (err)
-			goto out;
-		gn->mode = 0;
-		dev_info(dev, "transmit power back at level mode 0\n");
-	}
-
-	/*
-	 * Turn the loop off and read ER_CTRL back.  With the loop off, MOD_DAC
-	 * reads the value the module loaded at power-up, which the modulation
-	 * now runs from (measured).
-	 */
-	err = gn25l95_write(gn, GN25L95_A2 + GN25L95_TBL2_ER_CTRL,
-			    er & ~GN25L95_TBL2_ER_CTRL_AUTO) ?:
-	      gn25l95_read(gn, GN25L95_A2 + GN25L95_TBL2_ER_CTRL, &rb_er) ?:
-	      gn25l95_read(gn, GN25L95_A2 + GN25L95_TBL2_MOD_DAC, &hi) ?:
-	      gn25l95_read(gn, GN25L95_A2 + GN25L95_TBL2_MOD_DAC + 1, &lo);
+	apc0 = gn->ref ? gn->apcset0 : apc;
+	err = gn25l95_write(gn, apc_reg, apc0) ?:
+	      gn25l95_write(gn, er_reg, er | GN25L95_TBL2_ER_CTRL_AUTO) ?:
+	      gn25l95_read(gn, er_reg, &rb_er) ?:
+	      gn25l95_read(gn, apc_reg, &rb_apc);
 	if (err)
 		goto out;
-
-	/*
-	 * The loop did not turn off, or MOD_DAC holds nothing usable: write
-	 * ER_CTRL back as it was found, leaving the loop as it was.  That write
-	 * is not checked.
-	 */
-	if ((rb_er & GN25L95_TBL2_ER_CTRL_AUTO) || !(hi | lo) ||
-	    (modmax != 0xff && hi > modmax)) {
-		gn25l95_write(gn, GN25L95_A2 + GN25L95_TBL2_ER_CTRL, er);
-		dev_warn(dev, "modulation DAC seed %02x%02x is unusable (modulation max %02x, ER control %02x); modulation left to the module\n",
-			 hi, lo, modmax, rb_er);
-		err = -EINVAL;
+	if (!(rb_er & GN25L95_TBL2_ER_CTRL_AUTO) || rb_apc != apc0) {
+		dev_warn(dev, "the factory configuration did not take: ER control %02x, set point %02x\n",
+			 rb_er, rb_apc);
+		err = -EIO;
 		goto out;
 	}
 
-	/*
-	 * The first hold since probe keeps the modulation and the power
-	 * control's set point as the module has them, the settings of level
-	 * mode 0 that every lower level is made from and that every session
-	 * starts at.
-	 */
-	if (!gn->ref) {
-		u8 apc;
-
-		err = gn25l95_read(gn, GN25L95_A2 + GN25L95_TBL2_APCSET, &apc);
-		if (err)
-			goto out;
-		gn->apcset0 = apc;
-		gn->mod0 = (hi << 8) | lo;
-		gn->ref = true;
-	}
-
-	/*
-	 * With MOD_RANGE at 0, as on the ODI DFP-34X-2C3, the current is logged
-	 * as (DAC + 8) / 10 mA, DAC being bits 15:6 of MOD_DAC; otherwise the raw
-	 * register is logged.  The field and the conversion are not verified
-	 * and affect only this line.
-	 */
-	dac = ((hi << 8) | lo) >> 6;
-	if (!FIELD_GET(GN25L95_TBL2_ER_CTRL_MOD_RANGE, rb_er))
-		dev_info(dev, "modulation held at %u.%u mA (modulation DAC %02x%02x, the module's calibration); automatic ER %02x -> %02x\n",
-			 (dac + 8) / 10, (dac + 8) % 10, hi, lo, er, rb_er);
-	else
-		dev_info(dev, "modulation held at modulation DAC %02x%02x (the module's calibration); automatic ER %02x -> %02x\n",
-			 hi, lo, er, rb_er);
+	gn->apcset0 = apc0;
+	gn->ref = true;
+	gn->mode = 0;
+	dev_info(dev, "the module runs its factory configuration: automatic ER loop on (ER control %02x -> %02x), set point %02x -> %02x\n",
+		 er, rb_er, apc, rb_apc);
 out:
 	/* Leave the page select as it was found. */
 	gn25l95_t2_hide(gn, tabsel);
@@ -875,47 +779,49 @@ out:
 }
 
 /**
- * gn25l95_start() - turn the automatic extinction-ratio loop off
+ * gn25l95_start() - put the module's factory configuration back
  * @optics: &gn25l95.optics
  *
- * The part runs an automatic extinction-ratio loop.  In burst operation on
- * the ODI DFP-34X-2C3 the loop takes the modulation current about a quarter
- * below its power-up value while the power-control loop holds the
- * transmitted power, so the extinction ratio falls and the OLT needs a longer
- * preamble to lock onto the ONU's bursts.  The MAC calls this before an
- * activation, after its own reset and before the first O3, to turn the loop
- * off, so that the modulation runs from the value the module loaded at
- * power-up; the hold also puts transmit power level mode 0 back.  Whether
- * activation needs this is not verified.
+ * The part loads its configuration table from its EEPROM at power-up, the
+ * automatic extinction-ratio loop on among it, and runs from it.  The table's
+ * registers keep what is written to them across a warm reboot of the SoC, so
+ * a kernel can find the loop off, or a lower set point, left by an earlier
+ * one.  The MAC calls this before an activation, after its own reset and
+ * before the first O3: it turns the loop on, and writes the power control's
+ * set point of transmit power level mode 0, which is the one the first call
+ * since probe found.
  *
- * The table change stays in registers, kept out of the EEPROM by PERSIST:
- * the loop stays off until the module loses power, across a warm reboot of
- * the SoC too, and a power cycle gives the module its own configuration back.
- * PERSIST is in the table, which the part shows once the page select holds
- * 02h, and the table needs no password bytes written.  After the part's
- * reset, which loads the tables from the EEPROM as at power-up, the table read
- * and took these writes with nothing written to bytes 123-126 (measured).  So
- * a hold that gives up with -EPERM has written only the page select, when it
- * did not hold 02h, which the part keeps in its EEPROM; the table is written
- * only once PERSIST keeps register changes out of the EEPROM.  Once the page
- * select has been set, every path puts it back as found, without checking
- * that write.
+ * Whether that set point is the module's own cannot be told from the
+ * registers: after a reset that shut no device down while the ONU sent at a
+ * lower level, it is that level's.  The module's own is in its EEPROM, which
+ * the part's reset loads into the table again; but the reset writes its key
+ * to A2h bytes 123-127, a range whose writes the module keeps across a power
+ * cycle, so it is not used here.
  *
- * When the bus refuses the writes, the hold returns 0 having written nothing,
- * and the first refusal is logged.
+ * The table's writes stay in registers, kept out of the EEPROM by PERSIST: a
+ * power cycle gives the module its own configuration back.  PERSIST is in the
+ * table, which the part shows once the page select holds 02h, and the table
+ * needs no password bytes written (measured).  So a call that gives up with
+ * -EPERM has written only the page select, when it did not hold 02h, which
+ * the part keeps in its EEPROM; the table is written only once PERSIST keeps
+ * register changes out of the EEPROM.  Once the page select has been set,
+ * every path puts it back as found, without checking that write.
+ *
+ * When the bus refuses the writes, this returns 0 having written nothing, and
+ * the first refusal is logged.
  *
  * Context: process context.  May sleep.
- * Return: 0 when the modulation is held or the bus refuses writes; -EPERM
- * when table writes would reach the EEPROM; -EINVAL when the loop does not
- * turn off or MOD_DAC holds no usable value; otherwise the error of a failed
- * transfer.
+ * Return: 0 when the module runs its factory configuration or the bus refuses
+ * writes; -EPERM when table writes would reach the EEPROM; -EIO when the loop
+ * or the set point does not read back as written; otherwise the error of a
+ * failed transfer.
  */
 static int gn25l95_start(struct pon_optics *optics)
 {
 	struct gn25l95 *gn = container_of(optics, struct gn25l95, optics);
 
 	guard(gn25l95)(gn);
-	return gn25l95_refused(gn, __gn25l95_hold(gn));
+	return gn25l95_refused(gn, __gn25l95_factory(gn));
 }
 
 /**
