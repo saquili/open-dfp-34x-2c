@@ -159,7 +159,8 @@ were installed on a stick through the shipped firmware's page, by hand
    * - Update into the other bank, start on trial, keep it
      - 🟢 Tested
      - Into both banks over ssh, and back, on the image of 2026-10-12; from
-       the panel on 2026-10-07
+       the panel on 2026-10-07. The first release's ``update.bin`` on
+       2026-10-20, kept after its trial (by hand)
    * - Back to the old bank after a failed start
      - 🟡 Bench
      - Measured: a kernel panic, a damaged kernel, power lost during a write
@@ -239,8 +240,11 @@ were installed on a stick through the shipped firmware's page, by hand
    * - Releases built by the release workflow, twice and compared, with a
        pinned toolchain release
      - 🟡 Bench
-     - The first draft release, v2026.10.20-1522, built so and its files
-       installed on a stick by hand (`Releases`_)
+     - The first release, v2026.10.20-1522, built so and published on
+       2026-10-20 after its files were tried on two sticks by hand:
+       ``web-install.tar`` through the shipped firmware's page, and
+       ``update.bin`` on a stick that ran this system, which reached O5 in
+       about 10 s and kept the new bank after its trial (`Releases`_)
 
 ..
 
