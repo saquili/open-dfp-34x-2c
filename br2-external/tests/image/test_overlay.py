@@ -101,9 +101,17 @@ class BootScript(unittest.TestCase):
                  "onu-svc start trials -- /usr/lib/onu/onu-change watch",
                  "onu-svc start act -- /usr/lib/onu/onu-act",
                  "onu-svc start pond -- /usr/lib/onu/onu-run pond",
-                 "onu-svc start time -l -- /usr/lib/onu/onu-run time"]
+                 "onu-svc start time -l -- /usr/lib/onu/onu-run time",
+                 "onu-svc start pon -- /usr/sbin/pon keep"]
         places = [text.index(what) for what in order]
         self.assertEqual(places, sorted(places))
+
+    def test_the_olts_disable_is_kept_from_before_the_pon_comes_up(self):
+        # pon keep hears the PON's first state; onu-apply identity gives the
+        # driver the disable it kept, before it brings the PON up.
+        text = read(RCS)
+        self.assertLess(text.index("onu-svc start pon -- /usr/sbin/pon keep"),
+                        text.index("\nonu-apply identity "))
 
     def test_the_scripts_take_their_tc_priorities_from_the_registry(self):
         # omcid/target/tcprio.h is the one list of the priorities of the filters

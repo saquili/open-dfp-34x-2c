@@ -287,6 +287,15 @@ mkdir -p /run/timed && chown ntp:ntp /run/timed && chmod 755 /run/timed ||
 	warn "no directory for the time daemon's state"
 onu-svc start time -l -- /usr/lib/onu/onu-run time || warn "the clock is not set"
 
+# An ONU that the OLT disabled stays disabled, in O7 with its laser off, even
+# after a power-off, until the OLT enables it (ITU-T G.984.3 clause 10.2.4 and
+# clause 11.1.2). pon keep follows the state the kernel reports and keeps the
+# disable in the configuration store, from which onu-apply identity gives it
+# back to the PON driver before the PON comes up. It starts first, so that it
+# hears the PON from its start.
+onu-svc start pon -- /usr/sbin/pon keep ||
+	warn "a disable by the OLT is not kept across a restart"
+
 # The identity to the PON driver, which takes it before the PON comes up.
 onu-apply identity || warn "the PON stays down"
 
