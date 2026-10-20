@@ -61,7 +61,8 @@ const struct prov pond_provs[] = {
 	  prov_rule_write, 0 },
 	{ "fw", "Mode",
 	  "What the firewall does where no rule decides: to the internet and "
-	  "between the local networks", NULL, prov_fw_write, 0 },
+	  "between the local networks; and whether the stick answers a ping from "
+	  "the internet and from the local networks", NULL, prov_fw_write, 0 },
 	{ "settings", "Mode",
 	  "The data path: the sessions and where they hand their addresses down, "
 	  "kept in the configuration store",

@@ -2729,8 +2729,9 @@ static void test_rules(void)
 	rc |= prov_lan_set("CONN=pppoe:1\nVLAN=200\nADDRESS=192.168.2.1/24\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	check(rc == 0 && strstr(s, "\"rules\":[]") &&
-		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\"}"),
-	      "a stick without rules serves none, and the defaults: out allowed, between blocked");
+		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\","
+				"\"ping_in\":\"block\",\"ping_lans\":\"block\"}"),
+	      "a stick without rules serves none, and the defaults: out allowed, between blocked, no ping answered");
 
 	/* The printer of network 1, with an hour of its lease left. */
 	for (int i = 0; i < 8; i++)
@@ -2842,18 +2843,36 @@ static void test_rules(void)
 	rc = prov_fw_set("OUT=block\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	check(rc == 0 && file_has("/run/onu.conf", "FW_OUT=block") &&
-		      strstr(s, "\"fw\":{\"out\":\"block\",\"between\":\"block\"}"),
+		      strstr(s, "\"fw\":{\"out\":\"block\",\"between\":\"block\","
+				"\"ping_in\":\"block\",\"ping_lans\":\"block\"}"),
 	      "OUT=block blocks the networks' new connections to the internet where no rule decides");
 	rc = prov_fw_set("BETWEEN=allow\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
-	check(rc == 0 && strstr(s, "\"fw\":{\"out\":\"block\",\"between\":\"allow\"}"),
+	check(rc == 0 && strstr(s, "\"fw\":{\"out\":\"block\",\"between\":\"allow\","),
 	      "BETWEEN=allow lets them reach each other, and OUT stays");
 	check(prov_fw_set("OUT=maybe\n", err, sizeof(err)) == -EINVAL && strstr(err, "OUT"),
 	      "a default that is none is refused");
-	rc = prov_fw_set("OUT=allow\nBETWEEN=block\n", err, sizeof(err));
+	/* The pings, which the stick answers on the management VLAN whatever they say. */
+	rc = prov_fw_set("PING_IN=allow\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "FW_PING_IN=allow") &&
+		      strstr(s, "\"between\":\"allow\",\"ping_in\":\"allow\",\"ping_lans\":\"block\"}"),
+	      "PING_IN=allow answers a ping from the internet, and the others stay");
+	rc = prov_fw_set("PING_LANS=allow\nPING_IN=block\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "FW_PING_LANS=allow") &&
+		      !file_has("/run/onu.conf", "FW_PING_IN") &&
+		      strstr(s, "\"ping_in\":\"block\",\"ping_lans\":\"allow\"}"),
+	      "PING_LANS=allow answers one from the local networks, and PING_IN=block none from the internet");
+	check(prov_fw_set("PING_LANS=on\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "PING_LANS: allow or block"),
+	      "a ping setting that is neither allow nor block is refused");
+	rc = prov_fw_set("OUT=allow\nBETWEEN=block\nPING_IN=block\nPING_LANS=block\n", err,
+			 sizeof(err));
 	s = settled(buf, sizeof(buf));
 	check(rc == 0 && !file_has("/run/onu.conf", "FW_") &&
-		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\"}"),
+		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\","
+				"\"ping_in\":\"block\",\"ping_lans\":\"block\"}"),
 	      "the defaults again are not written");
 
 	/* A fixed address taken away takes the rules that go to its device. */

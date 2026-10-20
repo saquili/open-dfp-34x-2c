@@ -48,8 +48,9 @@
  * stand-in does it. A network removed takes its forwards and its DMZs with
  * it, and so does a fixed address taken away, those of its device.
  *
- * So are the firewall's rules, RULEn, n their place in the order, and what
- * it does where no rule decides, FW_OUT and FW_BETWEEN. A rule keeps its ID
+ * So are the firewall's rules, RULEn, n their place in the order, what it
+ * does where no rule decides, FW_OUT and FW_BETWEEN, and whether the stick
+ * answers a ping, FW_PING_IN and FW_PING_LANS. A rule keeps its ID
  * wherever it moves, and a write that adds, removes or moves one writes the
  * rules again in their order, from 1. A device a rule goes to keeps its
  * address as a forward's does, which the switch's ACL judges it by; a
@@ -885,7 +886,11 @@ static void pv_rules(struct prov_buf *out, const char *text)
 	pv_close(out, ']');
 }
 
-/* What the firewall does where no rule decides: its defaults, where the settings name none. */
+/*
+ * What the firewall does where no rule decides, and whether the stick answers
+ * a ping from the internet and from the local networks: their defaults, where
+ * the settings name none.
+ */
 static void pv_fw(struct prov_buf *out, const char *text)
 {
 	char v[VALUE_MAX];
@@ -896,6 +901,12 @@ static void pv_fw(struct prov_buf *out, const char *text)
 	pv_comma(out);
 	pv_key(out, "between");
 	pv_str(out, line_value(text, "FW_BETWEEN", v, sizeof(v)) ? v : "block");
+	pv_comma(out);
+	pv_key(out, "ping_in");
+	pv_str(out, line_value(text, "FW_PING_IN", v, sizeof(v)) ? v : "block");
+	pv_comma(out);
+	pv_key(out, "ping_lans");
+	pv_str(out, line_value(text, "FW_PING_LANS", v, sizeof(v)) ? v : "block");
 	pv_close(out, '}');
 }
 
@@ -2030,12 +2041,21 @@ int prov_rule_set(const char *val, char *err, size_t errcap)
 
 /*
  * What the firewall does where no rule decides: OUT, to the internet, and
- * BETWEEN the networks, allow or block; one not given stays as it is.
+ * BETWEEN the networks; and whether the stick answers a ping: PING_IN, from
+ * the internet, by the sessions and the IPoE connections, and PING_LANS, from
+ * the local networks and the router a session hands its address to; allow
+ * or block, one not given stays as it is. On the management VLAN the stick
+ * answers a ping whatever they say.
  */
 int prov_fw_write(const char *val, char *err, size_t errcap, prov_done done, void *ctx)
 {
-	static const char *const keys[][2] = { { "OUT", "FW_OUT" }, { "BETWEEN", "FW_BETWEEN" } };
-	char change[64], v[VALUE_MAX];
+	static const char *const keys[][2] = {
+		{ "OUT", "FW_OUT" },
+		{ "BETWEEN", "FW_BETWEEN" },
+		{ "PING_IN", "FW_PING_IN" },
+		{ "PING_LANS", "FW_PING_LANS" },
+	};
+	char change[128], v[VALUE_MAX];
 	size_t len = 0;
 
 	change[0] = '\0';

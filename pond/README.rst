@@ -314,8 +314,14 @@ one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
   takes the rules that name it or a device of it, and a fixed address taken
   away the rules that go to its device. ``fw``: what the firewall does where
   no rule decides, ``OUT`` to the internet and ``BETWEEN`` the networks,
-  ``allow`` or ``block``. A read gives them as ``rules``, in their order,
-  and ``fw``. The rules are the switch's ACL's, the defaults netfilter's;
+  and whether the stick answers a ping, ``PING_IN`` from the internet (by
+  the sessions and the IPoE connections) and ``PING_LANS`` from the local
+  networks and the router a session hands its address to, each ``allow``
+  or ``block``, the pings ``block`` by default; on the management VLAN the
+  stick answers a ping always, and its servers, this daemon among them,
+  answer there alone (``onu-utils/README.rst``, ``onu-fw``). A read gives
+  them as ``rules``, in their order, and ``fw``, with ``ping_in`` and
+  ``ping_lans``. The rules are the switch's ACL's, the defaults netfilter's;
   a rule that allows opens netfilter's default for IPv4 as well (ADR 0019).
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
