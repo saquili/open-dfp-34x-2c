@@ -279,8 +279,12 @@ departs from the generic R3000 code in three places:
 - A full TLB flush clears all 64 entries, not only entries 8 to 63.
 
 MIPS I also sets limits that the rest of the kernel has to respect: the
-exception vectors are fixed at ``0x80000000``, there is no ``sync`` instruction,
-and the core's ``ll`` and ``sc`` cannot be used.
+exception vectors are fixed at ``0x80000000``, and ``sync``, ``ll`` and ``sc``
+are MIPS II, so the kernel's use of them follows the CPU's options (see
+"Identification and CPU class" and the ``sync`` row below). The core runs
+those three all the same, in user and in kernel mode, and a few other
+instructions beyond MIPS I; it traps on others, and runs one of them wrongly
+(see "Instructions beyond MIPS I").
 
 Identification and CPU class
 ----------------------------
@@ -315,19 +319,31 @@ The kernel log of every boot names the core::
    * - The core is handled as an R3000: ``cputype = CPU_R3000``, name
        ``"Lexra LX5281"`` (the ``cpu model`` line of ``/proc/cpuinfo``),
        ``options = MIPS_CPU_TLB | MIPS_CPU_3K_CACHE | MIPS_CPU_NOFPUEX``,
-       ``tlbsize = 64`` (see "TLB").
+       and ``MIPS_CPU_LLSC`` (next row but one), ``tlbsize = 64`` (see
+       "TLB").
      - T
      - The board boots to a shell.
-   * - The probe sets none of ``MIPS_CPU_FPU``, ``MIPS_CPU_COUNTER`` or
-       ``MIPS_CPU_LLSC``, and a MIPS I core has none of the MIPS32 release 2
-       features. Consequences the kernel relies on: atomic operations are made
-       by disabling interrupts, never with ``ll`` and ``sc``; the CP0 counter is
-       not used, so the tick and the clock come from the SoC timers (see
-       "Timers and the tick"); the exception base is fixed.
+   * - The probe sets neither ``MIPS_CPU_FPU`` nor ``MIPS_CPU_COUNTER``, and a
+       MIPS I core has none of the MIPS32 release 2 features. Consequences the
+       kernel relies on: the CP0 counter is not used, so the tick and the clock
+       come from the SoC timers (see "Timers and the tick"); the exception base
+       is fixed.
      - T
      - The board boots to a shell; ``dmesg`` shows ``Switched to clocksource
        realtek_otto_timer`` and ``sched_clock: 28 bits at 3125kHz,
        resolution 320ns``.
+   * - The probe sets ``MIPS_CPU_LLSC``, as the core runs ``ll`` and ``sc`` in
+       kernel mode (see "Instructions beyond MIPS I"). ``kernel_uses_llsc`` is
+       then true: the kernel's atomic operations, ``cmpxchg()`` and the bit
+       operations are ``ll``/``sc`` sequences instead of sections with
+       interrupts disabled, and its emulation of the pair for user space is
+       not used. ``__SYNC()`` around them assembles to nothing (see "MIPS I
+       limits the kernel respects").
+     - M, I
+     - M: the core's ``ll`` and ``sc`` in kernel mode, with interrupts enabled
+       and disabled (see "Instructions beyond MIPS I"). I: that a kernel built
+       so runs correctly is not yet shown; the board booting it to a shell and
+       the stress run would show it.
    * - ``MIPS_CPU_3K_CACHE`` selects the R3000 cache code in
        ``cpu_cache_init()``, where the ``CPU_LEXRA_CACHE`` branch comes first
        (see "Caches"), so it selects nothing there on this platform.
@@ -357,13 +373,6 @@ The kernel log of every boot names the core::
 MIPS I limits the kernel respects
 ---------------------------------
 
-.. warning::
-
-   ``ll`` executes and returns the loaded value, but ``sc`` executes, never
-   stores and always reports failure, and it never traps. Code built on ``ll``
-   and ``sc`` does not crash on this core: it loops forever. The kernel emits
-   neither, and user space must not either.
-
 .. list-table::
    :header-rows: 1
    :widths: 58 6 36
@@ -371,13 +380,6 @@ MIPS I limits the kernel respects
    * - Fact
      - Tag
      - Checked by
-   * - ``ll`` executes and returns the loaded value; ``sc`` executes, never
-       stores and always reports failure, and never traps. Code built on ``ll``
-       and ``sc`` loops forever. The kernel emits neither (see "Identification
-       and CPU class"); user space must not either.
-     - M
-     - A freestanding user-space probe runs ``ll``, ``addiu``, ``sc`` on a
-       counter: ``sc`` returns 0 and the value is unchanged, repeatably.
    * - ``lwl``, ``lwr``, ``swl`` and ``swr`` execute and give the correct result
        at all four byte offsets, for loads and stores. A MIPS I kernel uses them
        for unaligned accesses.
@@ -389,7 +391,8 @@ MIPS I limits the kernel respects
        ``-march=mips1`` (``opcode not supported on this processor: mips1``).
        ``CPU_HAS_SYNC`` depends on ``!CPU_R3000``, so ``__SYNC()`` from
        ``asm/sync.h`` assembles to nothing on this platform and to ``sync``
-       where the CPU has it.
+       where the CPU has it. The core runs ``sync`` all the same (see
+       "Instructions beyond MIPS I").
      - T
      - A kernel with ``CONFIG_KEXEC`` builds for this platform only with
        ``__SYNC()`` in ``relocate_kernel.S``.
@@ -417,6 +420,162 @@ MIPS I limits the kernel respects
        the R3000-class convention and is not measured. A store to a device
        register followed by an uncached read of a register that reflects it
        would show.
+
+Instructions beyond MIPS I
+--------------------------
+
+The core runs ``ll``, ``sc`` and ``sync`` of MIPS II, in user and in kernel
+mode, as the architecture defines them: an ``sc`` stores only while the
+reservation that its ``ll`` took holds, and the reservation ends with the
+``sc`` and with any exception between the two, an interrupt or a page fault
+among them. An atomic sequence therefore has to start again when its ``sc``
+fails, as the compiler's sequences do; one that tries once fails on the first
+store to a page that has not been written. Of the other instructions beyond
+MIPS I that were tried, the core runs ``movz``, ``movn`` and ``madd``, traps on
+``mul``, ``clz``, ``teq``, ``beql`` and ``bnel``, and runs ``bltzl`` wrongly.
+
+.. warning::
+
+   ``bltzl`` neither traps nor works, and ``rdhwr $3, $29`` faults as an access
+   to memory instead of trapping, so the kernel cannot emulate it. Code built
+   for MIPS II or later can go wrong on this core without a signal.
+
+The facts tagged M below were measured on the DFP-34X-2C3, mostly with two
+programs; the rows name the two small ones that settled the rest. The first
+is a static user-space program. It runs each instruction under test, written
+into its code as a data word, on chosen values, with handlers for ``SIGILL``,
+``SIGSEGV`` and ``SIGTRAP``, and compares what it sees with the instruction's
+definition. It checks itself first: ``break`` gives ``SIGTRAP``, a load from
+address ``0x10`` gives ``SIGSEGV`` at ``0x10``, and ``ext``, an instruction of
+MIPS32 release 2, gives ``SIGILL``. A system call costs it about 770 ns, the
+price of one exception and its return. It ran four times, three on the
+board's image and once on a kernel built with modules. The second is an
+out-of-tree module for that kernel, which runs the same sequences in kernel
+mode, with interrupts enabled and with them disabled, and reports through
+debugfs; it ran five times. In both, a try is ``ll``, ``addiu``, ``sc`` on one
+word, a test makes 1,000,000 tries unless its row says otherwise, and the
+word's final value was always its first value plus the number of tries whose
+``sc`` succeeded.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - In user space, ``ll`` and ``sc`` work on a word in the data segment, on
+       the stack and on the heap, once the word's page has been written: every
+       ``ll`` returns the word's value, a successful ``sc`` stores its value and
+       a failed one stores nothing. A try takes about 140 ns, against 18 ns for
+       a plain load and add.
+     - M
+     - The user-space program: 2 to 9 of each 1,000,000 tries failed, the rest
+       succeeded. A loop that tries again after a failed ``sc`` made 1,000,000
+       increments of 1,000,000, none of them needing more than one retry.
+   * - ``ll`` and ``sc`` are run by the core, not trapped and emulated by the
+       kernel: ``ll`` faults as ``lw`` does, and a try costs a fifth of an
+       exception. The kernel's emulation of the pair for a CPU without
+       ``MIPS_CPU_LLSC`` (``simulate_ll()`` and ``simulate_sc()`` in
+       ``arch/mips/kernel/traps.c``) is not reached on this core.
+     - M
+     - The user-space program: ``ll`` and ``lw`` of a word in a page mapped
+       ``PROT_NONE`` both give ``SIGSEGV`` with ``SEGV_ACCERR`` at the word's
+       address; 140 ns per try against 770 ns per system call.
+   * - In kernel mode, with interrupts disabled, every ``sc`` succeeds, on a
+       word in KSEG0, in KSEG2 and through the uncached KSEG1 alias. With
+       interrupts enabled, 3 to 5 in 1,000,000 fail (34 through KSEG1, where a
+       try takes 304 ns instead of 84).
+     - M
+     - The module, on a page from the page allocator (KSEG0), on a word of its
+       own data (KSEG2) and, in one run, on the KSEG1 alias of the KSEG0 page:
+       1,000,000 of 1,000,000 with interrupts disabled, in every run.
+   * - The reservation ends with the ``sc``: a second ``sc`` after the first,
+       with no ``ll`` between, fails.
+     - M
+     - The user-space program: of 1,000,000 pairs per run, the second ``sc``
+       stored in none.
+   * - An exception between ``ll`` and ``sc`` ends the reservation, and the
+       ``sc`` fails: a system call, a page fault, and an interrupt with its
+       return. A task is therefore never switched out between the two and left
+       to store later over another task's write. The few failures among the
+       tries above are the interrupts that came between ``ll`` and ``sc``.
+     - M
+     - The user-space program: a system call between the two made 10,000 of
+       10,000 ``sc`` fail. The module, with a delay loop between ``ll`` and
+       ``sc`` that makes a try last about 13.6 microseconds: 65 to 73 of
+       20,000 tries failed with interrupts enabled, against 67 to 70 timer
+       ticks during the run, and none with them disabled.
+   * - The first ``sc`` to a page that has not been written fails, as the
+       store takes a page fault, and the second succeeds. One try on such a
+       page looks like an ``sc`` that never stores.
+     - M
+     - The user-space program, on the data segment, on 200 anonymous pages and
+       on 200 pages of a private file mapping per run: the first try failed on
+       every one and the second succeeded. On an anonymous page written
+       before, both succeeded.
+   * - The core does not report the linked address: CP0 register 17, LLAddr on
+       MIPS32, reads 0 after an ``ll``. Nothing in the kernel reads it.
+     - M
+     - The module reads the register after an ``ll`` of a KSEG0 word.
+   * - ``sync`` executes, in about 36 ns, so it is run by the core and not
+       trapped: the kernel would complete a trapped ``sync`` as a no-op, at the
+       cost of an exception.
+     - M
+     - The user-space program: 1,000,000 ``sync`` per run, 36 ns each,
+       against 770 ns per system call.
+   * - ``movz`` and ``movn`` (MIPS IV) and ``madd`` (MIPS32) execute and give
+       the defined result.
+     - M
+     - The user-space program: both conditions of ``movz`` and of ``movn``,
+       four cases of ``madd``.
+   * - ``mul`` and ``clz`` (MIPS32) and ``teq``, ``beql`` and ``bnel``
+       (MIPS II) raise a reserved-instruction exception, which the kernel
+       delivers as ``SIGILL``; ``teq`` raises it whether its operands are equal
+       or not.
+     - M
+     - The user-space program: ``SIGILL`` for each, and for ``teq`` with equal
+       and with unequal operands.
+   * - ``bltzl`` (MIPS II) neither traps nor works: the core runs its delay
+       slot and then the instruction after it, whether the condition holds or
+       not. A taken ``bltzl`` runs the slot and branches; one not taken skips
+       the slot.
+     - M
+     - The user-space program: ``bltzl`` with a negative and with a
+       non-negative operand; in both cases the slot and the fall-through ran.
+   * - The instruction right after a load that uses the loaded register sees
+       the loaded value, after ``lw`` and after ``ll`` alike: the core holds
+       the next instruction until the load completes, which MIPS I does not
+       require. gcc for MIPS I with ``-mllsc`` uses the result of ``ll`` in
+       the next instruction, with no ``nop`` between them.
+     - M
+     - The user-space program: 20,000 ``lw``, each followed at once by a use
+       that saw the new value. A small static program, two runs on the
+       board's image: 1,000,000 ``ll`` followed at once by an ``addiu`` on
+       the result, and 1,000,000 by a ``beq`` on it, with a sentinel in the
+       register before each ``ll``: the sentinel never showed, every value
+       was right and the branch was always taken. ``__sync_fetch_and_add()``
+       and ``__sync_val_compare_and_swap()`` as gcc compiles them made
+       1,000,000 increments each, to exactly 1,000,000.
+   * - ``mflo`` and ``mfhi`` after ``mult``, ``multu``, ``div`` or ``divu``
+       give the right result with one or two loads, or a ``nop``, between
+       them, whether a load hits the data cache or misses it.
+     - M
+     - The user-space program: ten sequences, each 1,000,000 times with the
+       load hitting and 1,000,000 times with it missing, per run; no wrong
+       result and no wrong loaded value.
+   * - ``rdhwr $3, $29``, the read of the thread pointer that the MIPS ABI
+       uses for thread-local storage, raises no reserved-instruction
+       exception: with ``$3`` holding 0 it gives ``SIGSEGV`` with
+       ``SEGV_MAPERR`` at address 0. The kernel emulates ``rdhwr`` on that
+       exception only (``handle_ri_rdhwr`` in ``arch/mips/kernel/genex.S``),
+       so user space on this core has no thread pointer, and with it neither
+       the ABI's thread-local storage nor NPTL threads. That the core runs the
+       word as an access to memory at the address in ``$3`` is inferred.
+     - M, I
+     - M: a small static program of the same kind, which runs the word with
+       ``$3`` set to 0, three runs on the board's image. I: the same with
+       another value in ``$3`` would show where the access goes.
 
 Caches
 ------
@@ -2355,6 +2514,10 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
+   * - A kernel whose atomic operations are ``ll``/``sc`` sequences
+       (``MIPS_CPU_LLSC``) runs correctly on the board ("Identification and
+       CPU class").
+     - The board booting such a kernel to a shell, and the stress run.
    * - An uncached load drains the write buffer, so ``mb()`` and ``iob()`` order
        device writes ("MIPS I limits the kernel respects").
      - A store to a device register, then a read back through an uncached load
@@ -2414,6 +2577,9 @@ About the CPU core
      - Sampling CP0 Random repeatedly.
    * - What duplicate EntryHi values do.
      - Writing two entries with one EntryHi and probing.
+   * - Whether ``rdhwr $3, $29`` is an access to memory at the address in
+       ``$3`` (taken to be).
+     - Running it with another value in ``$3``.
 
 About the platform code
 ~~~~~~~~~~~~~~~~~~~~~~~
