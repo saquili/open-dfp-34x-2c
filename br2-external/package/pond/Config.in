@@ -4,7 +4,7 @@
 config BR2_PACKAGE_POND
 	bool "pond"
 	depends on !BR2_STATIC_LIBS # libubox, ubus
-	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # json-c, ubus
+	depends on BR2_TOOLCHAIN_HAS_SYNC_4 # json-c, ubus
 	select BR2_PACKAGE_JSON_C
 	select BR2_PACKAGE_LIBMNL
 	select BR2_PACKAGE_LIBUBOX
