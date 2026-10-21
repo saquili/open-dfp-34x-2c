@@ -16,7 +16,7 @@
 			"token_new", "token_off",
 			"restart"
 		] },
-		"omcid": { "methods": [ "status", "mib", "frames", "rules", "login", "iptv", "tv_test" ] },
+		"omcid": { "methods": [ "status", "mib", "frames", "rules", "login", "phone", "phone_secrets", "iptv", "tv_test" ] },
 		"network.interface.*": { "methods": [ "status" ] },
 		"dhcp6d.*": { "methods": [ "status" ] }
 	}

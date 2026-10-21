@@ -118,6 +118,10 @@ const struct prov pond_provs[] = {
 	{ "service_rule", "Mode",
 	  "A rule of a service the OLT set up: moved, off, one output alone, or "
 	  "the stick's own way", NULL, prov_service_rule_write, 0 },
+	{ "phone", "GPON",
+	  "The phone the OLT set up on the phone sockets: the lines and their SIP "
+	  "accounts, the servers, the codecs and the voice's VLAN; never a password",
+	  prov_phone, NULL, PROV_VOLATILE },
 	{ "iptv", "GPON",
 	  "Television: the OLT's policy, the channels watched, the joins refused "
 	  "and the streams lost, the events, and who gives IGMP its priority; "

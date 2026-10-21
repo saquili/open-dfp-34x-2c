@@ -124,6 +124,26 @@ int prov_omci_frames(struct prov_buf *out)
 }
 
 /*
+ * The phone the OLT set up on the stick's phone sockets, as omcid gives it
+ * (its method "phone", sys/publish.h): how it is set up, the lines and their
+ * SIP accounts without their passwords, the SIP servers, the codecs, DTMF
+ * and the voice's VLAN. Two lines and their strings, a few kilobytes.
+ */
+#define PHONE_TEXT 4096u
+
+int prov_phone(struct prov_buf *out)
+{
+	int n;
+
+	pv_reserve(out, PHONE_TEXT);
+	n = bus_call("omcid", "phone", NULL, 0, out->buf + out->len, pv_room(out));
+	if (n < 0)
+		return n;
+	out->len += (size_t)n;
+	return 0;
+}
+
+/*
  * Television, as omcid's multicast agent holds it (its method "iptv",
  * mcast/agent.h): the OLT's policy, the groups the bridge forwards, the
  * joins refused, the events, the counts and who gives IGMP its priority. 64

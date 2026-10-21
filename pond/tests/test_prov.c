@@ -2659,6 +2659,35 @@ static void test_iptv(void)
 	check(rc < 0, "without omcid the value is an error");
 }
 
+/* The phone omcid gives, in short. */
+#define OMCID_PHONE                                                            \
+	"{\"method\":\"none\",\"lines\":[],\"server\":null,\"codecs\":[],"   \
+	"\"dtmf\":null,\"vlan\":null}"
+
+static void test_phone(void)
+{
+	static char buf[4096];
+	char path[512];
+	const char *s;
+	FILE *f;
+	int rc;
+
+	puts("the phone");
+	mkdir(prov_path("/run", path, sizeof(path)), 0755);
+	mkdir(prov_path("/run/ubus", path, sizeof(path)), 0755);
+	f = fopen(prov_path("/run/ubus/omcid.phone", path, sizeof(path)), "w");
+	check(f != NULL, "omcid's answer is in place");
+	if (!f)
+		return;
+	fputs(OMCID_PHONE "\n", f);
+	fclose(f);
+	s = render(prov_phone, buf, sizeof(buf), &rc);
+	check(rc == 0 && !strcmp(s, OMCID_PHONE), "omcid's phone is the value as it is");
+	unlink(path);
+	s = render(prov_phone, buf, sizeof(buf), &rc);
+	check(rc < 0, "without omcid the value is an error");
+}
+
 static void test_forwards(void)
 {
 	static char buf[16384];
@@ -3707,6 +3736,7 @@ int main(void)
 	test_forwards();
 	test_service_rules();
 	test_iptv();
+	test_phone();
 	test_rules();
 	test_omci();
 	test_omci_frames();

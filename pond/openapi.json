@@ -1535,6 +1535,16 @@
                           "$ref": "#/components/schemas/Error"
                         }
                       ]
+                    },
+                    "phone": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Phone"
+                        },
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      ]
                     }
                   }
                 }
@@ -3145,6 +3155,52 @@
         }
       }
     },
+    "/api/get/phone": {
+      "get": {
+        "tags": [
+          "values"
+        ],
+        "summary": "The value phone",
+        "description": "The phone the OLT set up on the phone sockets: the lines and their SIP accounts, the servers, the codecs and the voice's VLAN; never a password",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "phone"
+                    },
+                    "value": {
+                      "$ref": "#/components/schemas/Phone"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "value"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "500": {
+            "description": "The value cannot be read, or is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/set/hostname": {
       "post": {
         "tags": [
@@ -4666,6 +4722,64 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorised"
+          }
+        }
+      }
+    },
+    "/api/phone/secrets": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The SIP passwords of the phone's lines",
+        "description": "The phone value gives the lines and their SIP users, never a password.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XPond"
+          },
+          {
+            "$ref": "#/components/parameters/XPondPassword"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneSecrets"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/WrongPassword"
+          },
+          "405": {
+            "description": "Not a POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooMany"
+          },
+          "503": {
+            "description": "omcid does not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -7462,6 +7576,176 @@
           }
         ]
       },
+      "Phone": {
+        "description": "pond's value \"phone\": the phone service the OLT set up on the stick's phone sockets, which have no wire: the SIP accounts and server through OMCI (G.988 9.9), for a VoIP device of the person's own to use. Never a password, only whether there is one.",
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "omci",
+              "tr069",
+              "none"
+            ],
+            "description": "How the OLT sets the phone up: through OMCI, through TR-069, or not at all."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PhoneLine"
+            },
+            "description": "The sockets the stick tells the OLT of, each with its SIP account."
+          },
+          "server": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "proxy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outbound_proxy": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "registrar": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "domain": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "transport": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "udp",
+                  "tcp",
+                  "tls",
+                  null
+                ]
+              }
+            },
+            "required": [
+              "proxy",
+              "outbound_proxy",
+              "registrar",
+              "domain",
+              "port",
+              "transport"
+            ]
+          },
+          "codecs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The codecs, in the order the OLT prefers them."
+          },
+          "dtmf": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "rfc2833",
+              "inband",
+              "info",
+              null
+            ]
+          },
+          "vlan": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "fibre": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "host": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "fibre",
+              "host"
+            ],
+            "description": "The VLAN of the voice: on the fibre, and to the host."
+          }
+        },
+        "required": [
+          "method",
+          "lines",
+          "server",
+          "codecs",
+          "dtmf",
+          "vlan"
+        ]
+      },
+      "PhoneLine": {
+        "type": "object",
+        "properties": {
+          "port": {
+            "type": "number",
+            "description": "The socket, 1 or 2."
+          },
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The phone number, the user part of the address of record."
+          },
+          "display": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password_set": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "port",
+          "number",
+          "display",
+          "user",
+          "password_set"
+        ]
+      },
       "ServiceRule": {
         "description": "What the stick does with a service the OLT set up, on its one SFP lane: moves it to another VLAN towards the host, keeps it off the host, or keeps it to the Ethernet UNI or to the VEIP alone. The stick makes such a rule by itself when two services would reach the host in one VLAN (auto), and a person's own rule takes its place. A rule is kept by the service's VLAN on the fibre, across the OLT's setting the services up again.",
         "type": "object",
@@ -7951,6 +8235,33 @@
           "bytes",
           "rate_bps",
           "first_ms"
+        ]
+      },
+      "PhoneSecrets": {
+        "description": "The SIP passwords of the phone's lines, which root's password shows.",
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "port": {
+                  "type": "number"
+                },
+                "secret": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "port",
+                "secret"
+              ]
+            }
+          }
+        },
+        "required": [
+          "lines"
         ]
       },
       "OltLogin": {

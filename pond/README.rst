@@ -229,7 +229,10 @@ a token of scripts is in force, ``{"set": true}``, never the token.
 ``/api/schema``,
 ``/api/get/ID``, ``/api/getm?ids=A,B`` (slow values left out) and ``POST
 /api/set/ID`` read and change values; ``POST /api/system/restart`` restarts the
-stick a second after it answers. ``POST /api/iptv/test`` (``src/iptv.h``)
+stick a second after it answers. ``POST /api/phone/secrets``, with root's
+password in ``X-Pond-Password``, gives the SIP passwords of the phone's
+lines, omcid's ``{"lines": [{"port", "secret"}]}`` (its method
+``phone_secrets``). ``POST /api/iptv/test`` (``src/iptv.h``)
 tests a group of television: of the lines ``GROUP``, an IPv4 multicast group,
 ``VLAN``, none for untagged, and ``SECONDS``, 1 to 30, omcid joins the group
 from the stick and counts its bytes (its method ``tv_test``), pond reads the
@@ -442,6 +445,11 @@ more than 32 KiB, 423 and 429 as the updates do.
   services). The settings value leaves the ``SVCn`` out: the rules in force,
   a person's and the moves omcid made for clashes, are the value
   ``service_rules``, omcid's answer on ubus (method ``rules``).
+* ``phone``: the phone the OLT set up on the stick's phone sockets, omcid's
+  answer on ubus (method ``phone``, its README, the phone sockets): how it is
+  set up, each line's number, display name and SIP user and whether it has a
+  password, the SIP servers, the codecs, DTMF and the voice's VLAN on the
+  fibre and towards the host; never a password.
 * ``iptv``: television, omcid's answer on ubus (method ``iptv``, its README):
   the OLT's policy, the groups watched with their rate, the joins refused,
   the streams lost, the events and the counts, and who gives IGMP its
@@ -592,9 +600,11 @@ onu-act's table, which it builds from ``../onu-utils``, each program from
 settings start stand-ins for onu-config, onu-apply, onu-lane, onu-mgmt and
 hostname (``POND_ONU_CONFIG``, ``POND_ONU_APPLY``, ``POND_ONU_LANE``,
 ``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those of ``omci``,
-``omci_frames``, ``service_rules`` and ``iptv`` read omcid's answers from
-``run/ubus/omcid.mib``, ``run/ubus/omcid.frames``, ``run/ubus/omcid.rules``
-and ``run/ubus/omcid.iptv``, and a test of a group from
+``omci_frames``, ``service_rules``, ``phone`` and ``iptv`` read omcid's
+answers from ``run/ubus/omcid.mib``, ``run/ubus/omcid.frames``,
+``run/ubus/omcid.rules``, ``run/ubus/omcid.phone`` and
+``run/ubus/omcid.iptv``, the SIP passwords from
+``run/ubus/omcid.phone_secrets``, and a test of a group from
 ``run/ubus/omcid.tv_test``.
 The tests of the sign-in run onu-config, behind a stand-in that keeps a new
 password, and check the default password, the stop after wrong passwords,

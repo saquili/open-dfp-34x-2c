@@ -21,6 +21,8 @@
  *                      (changes.c)
  *   /api/identity/olt-login a POST, with root's password: the PPPoE login
  *                      the OLT sent, its password with it
+ *   /api/phone/secrets a POST, with root's password: the SIP passwords of
+ *                      the phone's lines
  *   /api/iptv/test     a POST: a group of television joined from the stick
  *                      for a few seconds, and what came of it (iptv.h)
  *   /api/system/restart a POST: restart the stick
@@ -585,6 +587,27 @@ static void api_olt_login(struct mg_connection *c, struct mg_http_message *hm)
 	explicit_bzero(text, sizeof(text));
 }
 
+/*
+ * The SIP passwords of the phone's lines, which root's password shows, as
+ * omcid gives them: {"lines":[{"port","secret"}]}.
+ */
+static void api_phone_secrets(struct mg_connection *c,
+			      struct mg_http_message *hm)
+{
+	char pw[AUTH_SECRET_MAX + 1], text[512];
+	int n;
+
+	if (!firmware_confirmed(c, hm, pw, sizeof(pw)))
+		return;
+	explicit_bzero(pw, sizeof(pw));
+	n = bus_call("omcid", "phone_secrets", NULL, 0, text, sizeof(text));
+	if (n < 0)
+		reply_err(c, 503, "no omcid", "omcid does not answer");
+	else
+		reply_json(c, 200, text);
+	explicit_bzero(text, sizeof(text));
+}
+
 /* Whether a token of scripts is in force; never the token. */
 static void api_token(struct mg_connection *c)
 {
@@ -799,6 +822,11 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 			api_olt_login(c, hm);
 		else
 			reply_err(c, 405, "use POST", "ask for the OLT's login with a POST");
+	} else if (mg_match(hm->uri, mg_str("/api/phone/secrets"), NULL)) {
+		if (post)
+			api_phone_secrets(c, hm);
+		else
+			reply_err(c, 405, "use POST", "ask for the SIP passwords with a POST");
 	} else if (mg_match(hm->uri, mg_str("/api/iptv/test"), NULL)) {
 		if (post)
 			iptv_test(c, hm);

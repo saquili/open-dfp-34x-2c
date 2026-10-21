@@ -671,6 +671,20 @@ def sessions_and_token(pond, workdir):
         check(status == 405, "it is a POST")
         os.unlink(login)
 
+        print("  the SIP passwords of the phone")
+        secrets = os.path.join(ubus, "omcid.phone_secrets")
+        status, _, body = ask("POST", "/api/phone/secrets", mine, "")
+        check(status == 403, "they need root's password")
+        status, _, body = ask("POST", "/api/phone/secrets", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 503 and body.get("error") == "no omcid", "without omcid, it says so")
+        write(secrets, '{"lines":[{"port":1,"secret":"example-sip-secret"}]}\n')
+        status, _, body = ask("POST", "/api/phone/secrets", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 200 and body == {"lines": [{"port": 1, "secret": "example-sip-secret"}]},
+              "with it, each line's password, as omcid gives them")
+        status, _, _ = ask("GET", "/api/phone/secrets", first)
+        check(status == 405, "it is a POST")
+        os.unlink(secrets)
+
         print("  a test of a group of television")
         tv = os.path.join(ubus, "omcid.tv_test")
         status, _, body = ask("POST", "/api/iptv/test", mine,
