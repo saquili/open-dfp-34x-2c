@@ -10,7 +10,7 @@
  * as the OLT sees it. The attribute layouts are those of ITU-T G.988.
  */
 
-import type { OmciValue } from "../api/types";
+import type { OmciValue, ServiceRule } from "../api/types";
 
 export interface Me {
   cls: number;
@@ -185,6 +185,8 @@ export interface BridgePort {
   side: "host" | "fibre" | "other";
   /** What it is, by the termination point type of G.988 9.3.4. */
   kind: "uni" | "veip" | "iphost" | "mapper" | "gem" | "multicast" | "other";
+  /** The instance of what it stands for: of a UNI, slot and port, 0x0101 for port 1. */
+  tp: number;
   channels: Channel[];
   /** The VLANs the OLT lets through it; null when it filters none. */
   vlans: number[] | null;
@@ -241,6 +243,7 @@ export function bridgePorts(mib: Mib): BridgePort[] {
             ? "other"
             : "fibre",
       kind,
+      tp,
       channels: channels.sort((a, z) => a.portId - z.portId),
       vlans: f ? vlans : null,
       forward: num(f, 2),
@@ -381,6 +384,13 @@ export function multicast(mib: Mib): Multicast[] {
 
 /* --- Services. --- */
 
+/**
+ * Where a service leaves the stick, as the OLT set it up: an Ethernet UNI by
+ * its port (PPTP, G.988 9.5.1), or the virtual Ethernet interface point
+ * (VEIP, 9.5.5). Each of them is the one SFP lane to the host.
+ */
+export type Output = { kind: "uni"; port: number } | { kind: "veip" };
+
 /** A service: a VLAN on the fibre, and how it gets to the host. */
 export interface Service {
   /** The VLAN on the fibre; null for the ports that filter none. */
@@ -389,11 +399,85 @@ export interface Service {
   hostVlans: (number | null)[];
   /** The channels that carry it, by bridge port. */
   ports: BridgePort[];
+  /** Where it leaves the stick: the UNIs and the VEIP of its bridges. */
+  outputs: Output[];
   multicast: Multicast | null;
+  /** The stick's rule for it, once the rules are applied (withRules). */
+  rule?: ServiceRule;
+  /** The VLANs towards the host the OLT gave it, of a service the rule moved. */
+  oltHostVlans?: (number | null)[];
+  /** Kept off the host by its rule. */
+  off?: boolean;
+}
+
+/**
+ * The services as they reach the host, the stick's rules applied: a moved
+ * one in its new VLAN, one kept to an output with that output alone, one
+ * kept off marked so.
+ */
+export function withRules(list: Service[], rules: ServiceRule[]): Service[] {
+  return list.map((s) => {
+    const rule = rules.find((r) => r.fibre === s.vlan);
+    if (!rule) return s;
+    switch (rule.action) {
+      case "move":
+        return { ...s, rule, oltHostVlans: s.hostVlans, hostVlans: [rule.host] };
+      case "off":
+        return { ...s, rule, off: true };
+      case "only_uni":
+        return { ...s, rule, outputs: s.outputs.filter((o) => o.kind === "uni") };
+      case "only_veip":
+        return { ...s, rule, outputs: s.outputs.filter((o) => o.kind === "veip") };
+      default:
+        return s;
+    }
+  });
+}
+
+/**
+ * Why a service does not stand apart on the SFP lane, which is one for all:
+ * it leaves by the UNI and by the VEIP at once, so that the two are one
+ * network there; or another service reaches the host with a VLAN of its own.
+ */
+export type Clash = { kind: "both" } | { kind: "vlan"; vid: number | null; with: number | null };
+
+/** The VLANs by which service @s reaches the host: those the rules make, or its own. */
+export const hostSide = (s: Service): (number | null)[] =>
+  s.hostVlans.length ? s.hostVlans : [s.vlan];
+
+/** The clashes of each service of @list, by its fibre VLAN. */
+export function clashes(all: Service[]): Map<number | null, Clash[]> {
+  const out = new Map<number | null, Clash[]>();
+  const add = (s: Service, c: Clash) => out.set(s.vlan, [...(out.get(s.vlan) ?? []), c]);
+  /* A service kept off the host clashes with none. */
+  const list = all.filter((s) => !s.off);
+  for (const s of list) {
+    if (s.outputs.some((o) => o.kind === "uni") && s.outputs.some((o) => o.kind === "veip"))
+      add(s, { kind: "both" });
+    for (const vid of hostSide(s))
+      for (const o of list)
+        if (o !== s && hostSide(o).includes(vid)) add(s, { kind: "vlan", vid, with: o.vlan });
+  }
+  return out;
 }
 
 export function services(mib: Mib): Service[] {
-  const ports = bridgePorts(mib).filter((p) => p.side === "fibre");
+  const all = bridgePorts(mib);
+  const ports = all.filter((p) => p.side === "fibre");
+  const outputsOf = (list: BridgePort[]): Output[] => {
+    const bridges = new Set(list.map((p) => p.bridge));
+    const out: Output[] = [];
+    for (const p of all)
+      if (
+        bridges.has(p.bridge) &&
+        p.kind === "uni" &&
+        !out.some((o) => o.kind === "uni" && o.port === (p.tp & 0xff))
+      )
+        out.push({ kind: "uni", port: p.tp & 0xff });
+      else if (bridges.has(p.bridge) && p.kind === "veip" && !out.some((o) => o.kind === "veip"))
+        out.push({ kind: "veip" });
+    return out.sort((a, z) => (a.kind === "uni" ? a.port : 99) - (z.kind === "uni" ? z.port : 99));
+  };
   const rules = vlanRules(mib).flatMap((r) => r.rules);
   const mc = multicast(mib);
   const byVlan = new Map<number | null, BridgePort[]>();
@@ -427,6 +511,7 @@ export function services(mib: Mib): Service[] {
         hostVlans: [...host],
         /* Ports that carry several services come last in each. */
         ports: list.sort((a, z) => (a.vlans?.length ?? 0) - (z.vlans?.length ?? 0) || a.id - z.id),
+        outputs: outputsOf(list),
         multicast:
           mc.find((m) => m.acl.some((a) => a.vlan === vlan) || m.downstreamVid === vlan) ?? null,
       };

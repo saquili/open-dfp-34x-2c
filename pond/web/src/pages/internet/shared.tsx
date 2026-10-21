@@ -9,10 +9,10 @@
 
 import { type ReactNode, useMemo } from "react";
 import type { UseFormRegisterReturn } from "react-hook-form";
-import { useOmci } from "../../api/config";
+import { useOmci, useServiceRules } from "../../api/config";
 import type { Family } from "../../api/types";
 import { type Key, useI18n } from "../../i18n";
-import { Mib, type Service, services } from "../../lib/omci";
+import { Mib, type Service, services, withRules } from "../../lib/omci";
 import type { Conn } from "./conns";
 
 export const FAMILY: Record<Family, Key> = {
@@ -23,17 +23,31 @@ export const FAMILY: Record<Family, Key> = {
 
 export type T = (k: Key, v?: Record<string, string | number>) => string;
 
-/** The operator's services that can carry a connection: not multicast alone. */
-export function useServices() {
+/**
+ * The operator's services as they reach the host, the stick's rules applied
+ * (lib/omci.ts, withRules): a moved one in its new VLAN, one kept off
+ * marked; and the services as the OLT set them up, for what a rule changed.
+ */
+export function useStickServices() {
   const omci = useOmci();
-  const list = useMemo(
-    () =>
-      services(new Mib(omci.data)).filter((s) =>
+  const rules = useServiceRules();
+  return useMemo(() => {
+    const olt = services(new Mib(omci.data));
+    return { list: withRules(olt, rules.data?.rules ?? []), olt, ready: omci.isSuccess };
+  }, [omci.data, omci.isSuccess, rules.data]);
+}
+
+/** The operator's services that can carry a connection: not multicast alone, nor kept off. */
+export function useServices() {
+  const { list, ready } = useStickServices();
+  return {
+    list: list.filter(
+      (s) =>
+        !s.off &&
         s.ports.some((p) => p.channels.some((c) => !c.multicast && c.direction !== "down")),
-      ),
-    [omci.data],
-  );
-  return { list, ready: omci.isSuccess };
+    ),
+    ready,
+  };
 }
 
 /*

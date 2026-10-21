@@ -14,25 +14,37 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Link } from "@tanstack/react-router";
-import { Check, CircleAlert, Minus, X } from "lucide-react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { Check, CircleAlert, Eye, Minus, Network, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { type Resolver, useForm } from "react-hook-form";
-import { useIdentity, useIdentityChange, useOmci } from "../api/config";
+import { Controller, type Resolver, useForm } from "react-hook-form";
+import {
+  useIdentity,
+  useIdentityChange,
+  useOltLogin,
+  useOmci,
+  useServiceRuleChange,
+} from "../api/config";
 import { useLive, useTraffic } from "../api/live";
-import type { Identity } from "../api/types";
+import type { Identity, OltLogin, PotsPorts, ServiceRule, UniPorts, UniReport } from "../api/types";
 import { Caret, opens } from "../components/CardTable";
+import { Combobox } from "../components/Combobox";
+import { useConfirm } from "../components/Confirm";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
 import { QueryNote, QueryState, Reading } from "../components/Read";
+import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Detail, Facts, Figure, GroupRow, Stat, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { bitrate, dbmText, decimal, duration, integer } from "../lib/format";
+import { handOltLogin } from "../lib/handoff";
 import {
   type Channel,
+  type Clash,
+  clashes as clashesOf,
   isDefault,
   isDefaultEntry,
   Mib,
@@ -65,6 +77,8 @@ import {
   registration,
   sessions,
 } from "../lib/state";
+import { useStickServices } from "./internet/shared";
+import { Columns, Stack } from "./system/shared";
 
 /**
  * Where the received light sits: the receiver's working range, its weak end
@@ -483,6 +497,29 @@ const NARROW_ROW =
 const NARROW_CELL =
   "@max-4xl:col-start-2 @max-4xl:border-0 @max-4xl:px-0 @max-4xl:py-1 @max-4xl:before:block @max-4xl:before:text-xs @max-4xl:before:font-normal @max-4xl:before:text-base-content/70 @max-4xl:before:content-[attr(data-h)]";
 
+/* The same, from a narrower table on: the services' beside the form of a rule. */
+const NARROW_ROW_SM =
+  "@max-xl:grid @max-xl:grid-cols-[2.5rem_minmax(0,1fr)] @max-xl:border-t @max-xl:border-base-300 @max-xl:py-2 @max-xl:first:border-t-0";
+const NARROW_CELL_SM =
+  "@max-xl:col-start-2 @max-xl:border-0 @max-xl:px-0 @max-xl:py-1 @max-xl:before:block @max-xl:before:text-xs @max-xl:before:font-normal @max-xl:before:text-base-content/70 @max-xl:before:content-[attr(data-h)]";
+/* The rest of a table's narrow layout, at each width. */
+const NARROW_4XL = {
+  block: "@max-4xl:block",
+  hidden: "@max-4xl:hidden",
+  caret: "@max-4xl:col-start-1 @max-4xl:row-start-1 @max-4xl:p-0",
+  left: "@max-4xl:text-left",
+  pb: "@max-4xl:pb-2",
+  more: "@max-4xl:block @max-4xl:p-0 @max-4xl:pl-10",
+};
+const NARROW_SM = {
+  block: "@max-xl:block",
+  hidden: "@max-xl:hidden",
+  caret: "@max-xl:col-start-1 @max-xl:row-start-1 @max-xl:p-0",
+  left: "@max-xl:text-left",
+  pb: "@max-xl:pb-2",
+  more: "@max-xl:block @max-xl:p-0 @max-xl:pl-10",
+};
+
 function useChannelText() {
   const { t, lang } = useI18n();
   const dir = (c: Channel) =>
@@ -677,7 +714,204 @@ function ServiceDetails({ s }: { s: Service }) {
   );
 }
 
-function ServicesTable({ list, q }: { list: Service[]; q: string }) {
+/*
+ * Where a service leaves the stick, as the OLT set it up: Ethernet 1 to 4,
+ * the PPTP, or the VEIP; and, when it does not stand apart on the one SFP
+ * lane, why, with a warning.
+ */
+function Outputs({ s, clashes, onFix }: { s: Service; clashes: Clash[]; onFix: () => void }) {
+  const { t } = useI18n();
+  const said = (c: Clash) =>
+    c.kind === "both"
+      ? t("fibre.clashBoth")
+      : t("fibre.clashVlan", { vid: c.vid ?? t("fibre.untagged"), with: c.with ?? "–" });
+  const r = s.rule;
+  const olt = s.oltHostVlans?.map((v) => v ?? t("fibre.untagged")).join(", ");
+  return (
+    <span className="grid justify-items-start gap-1">
+      <span className="flex flex-wrap gap-1">
+        {s.outputs.length === 0 && "–"}
+        {s.outputs.map((o) => (
+          <Badge key={o.kind === "uni" ? o.port : "veip"} tone="neutral">
+            {o.kind === "uni" ? t("fibre.outEthernet", { n: o.port }) : "VEIP"}
+          </Badge>
+        ))}
+      </span>
+      {clashes.length > 0 ? (
+        <>
+          <Badge tone="warn">{t("fibre.clash")}</Badge>
+          {[...new Set(clashes.map(said))].map((line) => (
+            <Detail key={line}>{line}</Detail>
+          ))}
+        </>
+      ) : (
+        r && (
+          <>
+            <Badge tone={r.auto ? "good" : "neutral"}>
+              {t(r.auto ? "fibre.ruleAuto" : "fibre.ruleOwn")}
+            </Badge>
+            <Detail>
+              {r.action === "move"
+                ? t("fibre.ruleMoved", { host: r.host ?? "–", olt: olt ?? "–" })
+                : t(`fibre.rule_${r.action}`)}
+            </Detail>
+          </>
+        )
+      )}
+      <button
+        type="button"
+        className="link link-primary link-hover text-xs"
+        onClick={(e) => {
+          e.stopPropagation();
+          onFix();
+        }}
+      >
+        {t(clashes.length > 0 ? "fibre.ruleFix" : "fibre.ruleChange")}
+      </button>
+    </span>
+  );
+}
+
+/*
+ * What the stick does with one service on its one SFP lane, as a person
+ * chooses: the stick's own way (a move to a free VLAN when the service
+ * clashes), a move to a VLAN towards the host, off, or one output alone of
+ * a service the OLT gave both. A VLAN that another service reaches the host
+ * in is refused, as it would clash again.
+ */
+function RuleForm({
+  s,
+  olt,
+  all,
+  onClose,
+}: {
+  s: Service;
+  olt: Service | undefined;
+  all: Service[];
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const change = useServiceRuleChange();
+  const state = useChangeState(change);
+  const both =
+    (olt ?? s).outputs.some((o) => o.kind === "uni") &&
+    (olt ?? s).outputs.some((o) => o.kind === "veip");
+  const r = s.rule;
+  const taken = new Set(
+    all
+      .filter((o) => o !== s && !o.off)
+      .flatMap((o) => (o.hostVlans.length ? o.hostVlans : [o.vlan])),
+  );
+  const suggest = () => {
+    for (let v = s.vlan ?? 1; v <= 4094; v++) if (v >= 1 && !taken.has(v)) return v;
+    return 1;
+  };
+  const [action, setAction] = useState<"auto" | ServiceRule["action"]>(
+    r && !r.auto ? r.action : "auto",
+  );
+  const [host, setHost] = useState(String(r?.action === "move" && r.host ? r.host : suggest()));
+  const vid = Number(host);
+  const error =
+    action !== "move"
+      ? null
+      : !/^\d+$/.test(host) || vid < 1 || vid > 4094
+        ? t("fibre.ruleHostRange")
+        : taken.has(vid)
+          ? t("fibre.ruleHostTaken", { vid })
+          : null;
+  const OPTIONS: { v: typeof action; label: Key; hint: Key; show: boolean }[] = [
+    { v: "auto", label: "fibre.ruleOptAuto", hint: "fibre.ruleOptAutoHint", show: true },
+    { v: "move", label: "fibre.ruleOptMove", hint: "fibre.ruleOptMoveHint", show: true },
+    { v: "off", label: "fibre.ruleOptOff", hint: "fibre.ruleOptOffHint", show: true },
+    { v: "only_uni", label: "fibre.ruleOptUni", hint: "fibre.ruleOptUniHint", show: both },
+    { v: "only_veip", label: "fibre.ruleOptVeip", hint: "fibre.ruleOptVeipHint", show: both },
+  ];
+  return (
+    <PanelCard
+      id="service-rule"
+      title={t("fibre.ruleTitle", { vlan: s.vlan ?? t("fibre.untagged") })}
+      line={t("fibre.ruleLine")}
+      onClose={onClose}
+    >
+      <form
+        noValidate
+        className="grid gap-3 p-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (error) return;
+          change.mutate(
+            {
+              FIBRE: s.vlan == null ? "" : String(s.vlan),
+              ACTION: action,
+              HOST: action === "move" ? host : undefined,
+            },
+            { onSuccess: onClose },
+          );
+        }}
+      >
+        <fieldset className="grid gap-2">
+          <legend className="sr-only">{t("fibre.ruleLine")}</legend>
+          {OPTIONS.filter((o) => o.show).map((o) => (
+            <label key={o.v} className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="radio"
+                name="service-rule"
+                className="radio radio-sm mt-0.5"
+                checked={action === o.v}
+                onChange={() => setAction(o.v)}
+              />
+              <span className="grid gap-0.5">
+                <span className="text-sm font-medium">{t(o.label)}</span>
+                <Detail>{t(o.hint)}</Detail>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        {action === "move" && (
+          <Field
+            label={t("fibre.ruleHost")}
+            inputMode="numeric"
+            mono
+            value={host}
+            error={error ?? undefined}
+            hint={t("fibre.ruleHostHint")}
+            onInput={(e) => setHost(e.currentTarget.value.replace(/\D/g, "").slice(0, 4))}
+          />
+        )}
+        <div className="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3">
+          <button
+            type="submit"
+            className="btn btn-primary btn-sm"
+            disabled={change.isPending || !!error}
+          >
+            {t("internet.save")}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
+            {t("common.cancel")}
+          </button>
+          <SaveState {...state} />
+        </div>
+      </form>
+    </PanelCard>
+  );
+}
+
+function ServicesTable({
+  list,
+  q,
+  onFix,
+  compact = false,
+}: {
+  list: Service[];
+  q: string;
+  onFix: (s: Service) => void;
+  /** Beside the form of a rule: no channels nor traffic, and rows of cells only when very narrow. */
+  compact?: boolean;
+}) {
+  const n = compact ? NARROW_SM : NARROW_4XL;
+  const row = compact ? NARROW_ROW_SM : NARROW_ROW;
+  const cell = compact ? NARROW_CELL_SM : NARROW_CELL;
+  const cols = compact ? 3 : 5;
   const { t, lang } = useI18n();
   const { data: live } = useLive();
   const rates = useTraffic().at(-1)?.gems;
@@ -693,6 +927,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
       s.ports.some((p) => p.channels.some((c) => String(c.portId).includes(needle))),
   );
   const pager = usePages(shown);
+  const clash = clashesOf(list);
   const key = (s: Service) => String(s.vlan ?? "none");
   const toggle = (k: string) =>
     setOpen((o) => {
@@ -705,17 +940,18 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
   return (
     <>
       <div className="@container min-h-0 flex-1 overflow-auto">
-        <table className={`${TABLE} table-pin-rows @max-4xl:block`}>
-          <thead className="@max-4xl:hidden">
+        <table className={`${TABLE} table-pin-rows ${n.block}`}>
+          <thead className={n.hidden}>
             <tr>
               <th className="w-px" />
               <th>VLAN</th>
+              <th>{t("fibre.colOutput")}</th>
               <th>{t("fibre.colStick")}</th>
-              <th>{t("fibre.colChannels")}</th>
-              <th className="text-right">{t("fibre.now")}</th>
+              {!compact && <th>{t("fibre.colChannels")}</th>}
+              {!compact && <th className="text-right">{t("fibre.now")}</th>}
             </tr>
           </thead>
-          <tbody className="@max-4xl:block">
+          <tbody className={n.block}>
             {pager.shown.map((s) => {
               const k = key(s);
               const ids = [...new Set(s.ports.flatMap((p) => p.channels))];
@@ -737,10 +973,10 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
               return (
                 <Fragment key={k}>
                   <tr
-                    className={`cursor-pointer hover:bg-base-200/40 ${isOpen ? "[&>td]:border-b-0" : ""} ${NARROW_ROW}`}
+                    className={`cursor-pointer hover:bg-base-200/40 ${isOpen ? "[&>td]:border-b-0" : ""} ${row}`}
                     onClick={opens(() => toggle(k))}
                   >
-                    <td className="w-px @max-4xl:col-start-1 @max-4xl:row-start-1 @max-4xl:p-0">
+                    <td className={`w-px ${n.caret}`}>
                       <Caret
                         open={isOpen}
                         controls={more}
@@ -748,7 +984,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                         onToggle={() => toggle(k)}
                       />
                     </td>
-                    <td data-h="VLAN" className={NARROW_CELL}>
+                    <td data-h="VLAN" className={cell}>
                       <span className="grid gap-0.5">
                         <span className="tabular font-semibold">{name.main}</span>
                         {name.fibre != null && (
@@ -756,7 +992,10 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                         )}
                       </span>
                     </td>
-                    <td data-h={t("fibre.colStick")} className={NARROW_CELL}>
+                    <td data-h={t("fibre.colOutput")} className={cell}>
+                      <Outputs s={s} clashes={clash.get(s.vlan) ?? []} onFix={() => onFix(s)} />
+                    </td>
+                    <td data-h={t("fibre.colStick")} className={cell}>
                       <span className="grid gap-0.5">
                         {u.to ? (
                           <Link to={u.to} className="link link-hover link-primary">
@@ -768,29 +1007,33 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                         {u.more.length > 0 && <Detail>{u.more.join(" · ")}</Detail>}
                       </span>
                     </td>
-                    <td data-h={t("fibre.colChannels")} className={NARROW_CELL}>
-                      {channels.length ? (
-                        <Link
-                          to="/operator/channels"
-                          className="link link-hover link-primary tabular"
+                    {!compact && (
+                      <>
+                        <td data-h={t("fibre.colChannels")} className={cell}>
+                          {channels.length ? (
+                            <Link
+                              to="/operator/channels"
+                              className="link link-hover link-primary tabular"
+                            >
+                              GEM {channels.join(", ")}
+                            </Link>
+                          ) : (
+                            "–"
+                          )}
+                        </td>
+                        <td
+                          data-h={t("fibre.now")}
+                          className={`tabular text-right whitespace-nowrap ${n.left} ${cell}`}
                         >
-                          GEM {channels.join(", ")}
-                        </Link>
-                      ) : (
-                        "–"
-                      )}
-                    </td>
-                    <td
-                      data-h={t("fibre.now")}
-                      className={`tabular text-right whitespace-nowrap @max-4xl:text-left ${NARROW_CELL}`}
-                    >
-                      {known ? `↓ ${bitrate(down, lang)} ↑ ${bitrate(up, lang)}` : "–"}
-                    </td>
+                          {known ? `↓ ${bitrate(down, lang)} ↑ ${bitrate(up, lang)}` : "–"}
+                        </td>
+                      </>
+                    )}
                   </tr>
                   {isOpen && (
-                    <tr id={more} data-more className="@max-4xl:block @max-4xl:pb-2">
-                      <td className="@max-4xl:hidden" />
-                      <td colSpan={4} className="pt-0 @max-4xl:block @max-4xl:p-0 @max-4xl:pl-10">
+                    <tr id={more} data-more className={`${n.block} ${n.pb}`}>
+                      <td className={n.hidden} />
+                      <td colSpan={cols} className={`pt-0 ${n.more}`}>
                         <ServiceDetails s={s} />
                       </td>
                     </tr>
@@ -799,8 +1042,8 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
               );
             })}
             {!pager.shown.length && (
-              <tr className="@max-4xl:block">
-                <td colSpan={5} className="text-base-content/70 @max-4xl:block">
+              <tr className={n.block}>
+                <td colSpan={cols} className={`text-base-content/70 ${n.block}`}>
                   {t("fibre.noMatch")}
                 </td>
               </tr>
@@ -931,27 +1174,53 @@ export function OmciState({ children }: { children: ReactNode }) {
 function ServiceList({ view }: { view: ServiceTab }) {
   const { t } = useI18n();
   const { omci, mib } = useMib();
+  const stick = useStickServices();
   const [q, setQ] = useState("");
+  /* The service whose rule is being chosen, by its VLAN on the fibre. */
+  const [fixing, setFixing] = useState<{ vlan: number | null } | null>(null);
+  const fixed =
+    fixing && view === "services" ? stick.list.find((x) => x.vlan === fixing.vlan) : undefined;
   return (
     <OmciState>
-      <section className="card min-h-0 border border-base-300 bg-base-100">
-        <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
-          <div className="flex justify-end">
-            <Filter value={q} onChange={setQ} placeholder={t("fibre.filterVlan")} />
-          </div>
-          {omci.data?.truncated && (
-            <div role="alert" className="alert alert-warning alert-soft text-sm text-base-content">
-              <CircleAlert className="size-4 shrink-0 text-warning" aria-hidden />
-              {t("fibre.truncated")}
+      <div className={withPanel(fixed != null)}>
+        <section className="card min-h-0 border border-base-300 bg-base-100">
+          <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
+            <div className="flex justify-end">
+              <Filter value={q} onChange={setQ} placeholder={t("fibre.filterVlan")} />
             </div>
-          )}
-          {view === "services" ? (
-            <ServicesTable list={servicesOf(mib)} q={q} />
-          ) : (
-            <RulesTable mib={mib} q={q} />
-          )}
-        </div>
-      </section>
+            {omci.data?.truncated && (
+              <div
+                role="alert"
+                className="alert alert-warning alert-soft text-sm text-base-content"
+              >
+                <CircleAlert className="size-4 shrink-0 text-warning" aria-hidden />
+                {t("fibre.truncated")}
+              </div>
+            )}
+            {view === "services" ? (
+              <ServicesTable
+                list={stick.list}
+                q={q}
+                compact={fixed != null}
+                onFix={(x) => setFixing({ vlan: x.vlan })}
+              />
+            ) : (
+              <RulesTable mib={mib} q={q} />
+            )}
+          </div>
+        </section>
+        {fixed && (
+          <SidePanel onClose={() => setFixing(null)}>
+            <RuleForm
+              key={String(fixed.vlan)}
+              s={fixed}
+              olt={stick.olt.find((x) => x.vlan === fixed.vlan)}
+              all={stick.list}
+              onClose={() => setFixing(null)}
+            />
+          </SidePanel>
+        )}
+      </div>
     </OmciState>
   );
 }
@@ -1487,6 +1756,13 @@ function IdentityForm({ identity }: { identity: Identity }) {
     change.mutate(out, { onSuccess: () => form.reset(v) });
   });
 
+  /* The OMCC versions of G.988 for the field's list, with their message sets. */
+  const omccOptions = OMCC_VERSIONS.map((o) => ({
+    value: `0x${o.v.toString(16)}`,
+    label: o.std,
+    hint: o.set ? t(o.set === "base" ? "fibre.omccBase" : "fibre.omccExt") : undefined,
+  }));
+
   /* The OMCC version a field's value names, in words; nothing for an empty one. */
   const omcc = (value: string) => {
     if (!value.trim()) return null;
@@ -1534,24 +1810,47 @@ function IdentityForm({ identity }: { identity: Identity }) {
           )}
         </div>
       );
-    const named = f.field === "omcc_version" ? omcc(values[f.field] ?? "") : null;
+    if (f.field === "omcc_version")
+      return (
+        <Controller
+          key={f.field}
+          control={form.control}
+          name={f.field}
+          render={({ field: c, fieldState }) => {
+            const named = omcc(c.value ?? "");
+            return (
+              <Combobox
+                label={t(f.label)}
+                value={c.value ?? ""}
+                onChange={c.onChange}
+                onBlur={c.onBlur}
+                mono
+                options={omccOptions}
+                error={fieldState.error?.message}
+                listLabel={t("fibre.omccList")}
+                none={t("fibre.omccNoMatch")}
+                hint={
+                  named ? (
+                    <span className="grid gap-0.5">
+                      <span>{named}</span>
+                      <span>{line(f)}</span>
+                    </span>
+                  ) : (
+                    line(f)
+                  )
+                }
+              />
+            );
+          }}
+        />
+      );
     return (
       <Field
         key={f.field}
         label={t(f.label)}
-        mono={f.mono || f.field === "omcc_version"}
-        list={f.field === "omcc_version" ? "omcc-versions" : undefined}
+        mono={f.mono}
         error={errors[f.field]?.message}
-        hint={
-          named ? (
-            <span className="grid gap-0.5">
-              <span>{named}</span>
-              <span>{line(f)}</span>
-            </span>
-          ) : (
-            line(f)
-          )
-        }
+        hint={line(f)}
         {...form.register(f.field)}
       />
     );
@@ -1580,17 +1879,6 @@ function IdentityForm({ identity }: { identity: Identity }) {
         {soft.map(field)}
         {fill(rows - 1 - soft.length, "s")}
       </div>
-      <datalist id="omcc-versions">
-        {OMCC_VERSIONS.map((o) => (
-          <option
-            key={o.v}
-            value={`0x${o.v.toString(16)}`}
-            label={[o.std, o.set && t(o.set === "base" ? "fibre.omccBase" : "fibre.omccExt")]
-              .filter(Boolean)
-              .join(" · ")}
-          />
-        ))}
-      </datalist>
       <ReregisterFoot
         asking={asking}
         dirty={isDirty}
@@ -1846,15 +2134,254 @@ export function ChannelsPage() {
   );
 }
 
+/*
+ * The ports the stick tells the OLT of: its Ethernet UNIs, the PPTP, its
+ * VEIP, or both, and how many Ethernet UNIs. Each of them is the one SFP
+ * lane to the host; an OLT sets services up on the ones it expects, and one
+ * that wants nothing more than its profile has refuses a stick that tells of
+ * more. A change makes the stick register again, as one of its identity
+ * does, so it asks the same way. Under the choice, the ports the OLT gave
+ * services to now.
+ */
+function UniCard() {
+  const { t } = useI18n();
+  const identity = useIdentity();
+  const change = useIdentityChange();
+  const state = useChangeState(change);
+  const now = identity.data;
+  const [report, setReport] = useState<UniReport>(now?.uni_report ?? "both");
+  const [ports, setPorts] = useState<UniPorts>(now?.uni_ports ?? 1);
+  const [pots, setPots] = useState<PotsPorts>(now?.pots_ports ?? 0);
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (now?.uni_report) setReport(now.uni_report);
+    if (now?.uni_ports) setPorts(now.uni_ports);
+    if (now?.pots_ports !== undefined) setPots(now.pots_ports);
+  }, [now?.uni_report, now?.uni_ports, now?.pots_ports]);
+  const dirty =
+    now != null &&
+    (report !== (now.uni_report ?? "both") ||
+      ports !== (now.uni_ports ?? 1) ||
+      pots !== (now.pots_ports ?? 0));
+  const used = useStickServices()
+    .list.filter((s) => !s.off)
+    .flatMap((s) => s.outputs);
+  const names = [
+    ...new Set(
+      used.map((o) => (o.kind === "uni" ? t("fibre.outEthernet", { n: o.port }) : "VEIP")),
+    ),
+  ];
+  const OPTIONS: { v: UniReport; label: Key; hint: Key }[] = [
+    { v: "both", label: "fibre.uniBoth", hint: "fibre.uniBothHint" },
+    { v: "pptp", label: "fibre.uniPptp", hint: "fibre.uniPptpHint" },
+    { v: "veip", label: "fibre.uniVeip", hint: "fibre.uniVeipHint" },
+  ];
+  return (
+    <Card title={t("fibre.uniTitle")}>
+      <p className="text-sm text-base-content/70">{t("fibre.uniHint")}</p>
+      {now && now.uni_report === undefined ? (
+        <p className="text-sm">{t("fibre.uniOld")}</p>
+      ) : (
+        <form
+          noValidate
+          className="grid gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setAsking(dirty);
+          }}
+        >
+          <fieldset className="grid gap-2">
+            <legend className="sr-only">{t("fibre.uniTitle")}</legend>
+            {OPTIONS.map((o) => (
+              <label key={o.v} className="flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="radio"
+                  name="uni-report"
+                  className="radio radio-sm mt-0.5"
+                  checked={report === o.v}
+                  onChange={() => setReport(o.v)}
+                />
+                <span className="grid gap-0.5">
+                  <span className="text-sm font-medium">{t(o.label)}</span>
+                  <Detail>{t(o.hint)}</Detail>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <div className="grid gap-1">
+            <span className="text-sm font-medium">{t("fibre.uniPorts")}</span>
+            <div className="join">
+              {([1, 2, 3, 4, 5, 6, 7, 8] as const).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  disabled={report === "veip"}
+                  aria-pressed={ports === n}
+                  className={`btn join-item btn-sm ${ports === n ? "btn-active" : ""}`}
+                  onClick={() => setPorts(n)}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <Detail>{t(report === "veip" ? "fibre.uniPortsVeip" : "fibre.uniPortsHint")}</Detail>
+          </div>
+          <div className="grid gap-1">
+            <span className="text-sm font-medium">{t("fibre.potsPorts")}</span>
+            <div className="join">
+              {([0, 1, 2] as const).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  aria-pressed={pots === n}
+                  className={`btn join-item btn-sm ${pots === n ? "btn-active" : ""}`}
+                  onClick={() => setPots(n)}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <Detail>{t("fibre.potsPortsHint")}</Detail>
+          </div>
+          <p className="text-sm">
+            <span className="text-base-content/70">{t("fibre.uniNow")} </span>
+            <span className="font-medium">
+              {names.length ? names.join(", ") : t("fibre.uniNone")}
+            </span>
+          </p>
+          <ReregisterFoot
+            asking={asking}
+            dirty={dirty}
+            pending={change.isPending}
+            state={state}
+            onConfirm={() => {
+              setAsking(false);
+              if (!now) return;
+              change.mutate({
+                SERIAL: now.serial,
+                UNI_REPORT: report,
+                UNI_PORTS: String(report === "veip" ? (now.uni_ports ?? 1) : ports),
+                POTS_PORTS: String(pots),
+              });
+            }}
+            onCancel={() => setAsking(false)}
+            onDiscard={() => {
+              setReport(now?.uni_report ?? "both");
+              setPorts(now?.uni_ports ?? 1);
+              setPots(now?.pots_ports ?? 0);
+            }}
+          />
+        </form>
+      )}
+    </Card>
+  );
+}
+
+/*
+ * The PPPoE login an OLT may send through OMCI (Authentication security
+ * method, G.988 9.12.4), so that an ONT dials by itself: its user, and its
+ * password, which root's password shows. One button hands both to the form
+ * of a new PPPoE connection of the stick's own.
+ */
+function OltLoginCard() {
+  const { t } = useI18n();
+  const identity = useIdentity();
+  const reveal = useOltLogin();
+  const navigate = useNavigate();
+  const confirm = useConfirm();
+  const [shown, setShown] = useState<OltLogin | null>(null);
+  const login = identity.data?.olt_login;
+  return (
+    <Card title={t("fibre.oltLoginTitle")}>
+      <p className="text-sm text-base-content/70">{t("fibre.oltLoginHint")}</p>
+      {!login ? (
+        <p className="text-sm">
+          {t(login === undefined ? "fibre.oltLoginOld" : "fibre.oltLoginNone")}
+        </p>
+      ) : (
+        <>
+          <Facts
+            rows={[
+              [
+                t("fibre.oltLoginUser"),
+                <span key="user" className="font-mono">
+                  {login.user}
+                </span>,
+              ],
+              [
+                t("fibre.oltLoginPassword"),
+                shown ? (
+                  <span key="password" className="font-mono">
+                    {shown.secret}
+                  </span>
+                ) : (
+                  t(login.password_set ? "fibre.oltLoginHidden" : "fibre.oltLoginNoPassword")
+                ),
+              ],
+            ]}
+          />
+          <div className="flex flex-wrap gap-2">
+            {login.password_set && !shown && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() =>
+                  confirm.open({
+                    title: t("fibre.oltLoginShow"),
+                    body: t("fibre.oltLoginShowConfirm"),
+                    action: t("fibre.oltLoginShow"),
+                    run: async (secret) => setShown(await reveal.mutateAsync({ secret })),
+                  })
+                }
+              >
+                <Eye className="size-4" />
+                {t("fibre.oltLoginShow")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                const go = (l: OltLogin) => {
+                  handOltLogin(l);
+                  void navigate({ to: "/internet/wan" });
+                };
+                if (shown || !login.password_set) go(shown ?? { user: login.user, secret: "" });
+                else
+                  confirm.open({
+                    title: t("fibre.oltLoginUse"),
+                    body: t("fibre.oltLoginUseConfirm"),
+                    action: t("fibre.oltLoginUse"),
+                    run: async (secret) => go(await reveal.mutateAsync({ secret })),
+                  });
+              }}
+            >
+              <Network className="size-4" />
+              {t("fibre.oltLoginUse")}
+            </button>
+          </div>
+        </>
+      )}
+      {confirm.dialog}
+    </Card>
+  );
+}
+
 export function IdentityPage() {
   const { t } = useI18n();
   return (
     <Page title={t("nav.identity")} actions={<FibreState />}>
-      <IdentityCard
-        title="fibre.identity"
-        hint="fibre.identityHint"
-        form={(i) => <IdentityForm identity={i} />}
-      />
+      <Columns wide="left">
+        <IdentityCard
+          title="fibre.identity"
+          hint="fibre.identityHint"
+          form={(i) => <IdentityForm identity={i} />}
+        />
+        <Stack>
+          <UniCard />
+          <OltLoginCard />
+        </Stack>
+      </Columns>
     </Page>
   );
 }

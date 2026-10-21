@@ -26,6 +26,7 @@ import { QueryNote } from "../components/Read";
 import { SidePanel, withPanel } from "../components/SidePanel";
 import { Dot } from "../components/ui";
 import { useI18n } from "../i18n";
+import { takeOltLogin } from "../lib/handoff";
 import { type FibreView, fibre, served } from "../lib/state";
 import { FirewallSection, useFwCount } from "./Firewall";
 import { ConnForm } from "./internet/ConnForm";
@@ -75,8 +76,10 @@ function Conns() {
   const [kind, setKind] = useState<Kind>("pppoe");
   const [editKey, setEditKey] = useState<string | null>(null);
   const editing = list.find((c) => c.key === editKey) ?? null;
+  /* The PPPoE login the identity page handed over: a new session's form opens with it. */
+  const [login] = useState(takeOltLogin);
   /* The form, shut until asked for while there are connections to look at. */
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(login != null);
   const form = useRef<HTMLDivElement>(null);
   const show = (key: string | null) => {
     setEditKey(key);
@@ -113,6 +116,7 @@ function Conns() {
               editing={editing}
               onEditDone={close}
               onClose={list.length ? close : undefined}
+              login={login}
             />
           </SidePanel>
         )}

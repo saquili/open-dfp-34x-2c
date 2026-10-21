@@ -33,8 +33,10 @@ import {
   NatPage,
   WanPage,
 } from "./pages/Internet";
+import { IptvPage } from "./pages/Iptv";
 import { OmciPage } from "./pages/Omci";
 import { Overview } from "./pages/Overview";
+import { PhonePage } from "./pages/Phone";
 import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";
 import { Stats } from "./pages/Stats";
@@ -161,6 +163,8 @@ const pages = [
   page("/operator/services", ServicesPage),
   page("/operator/channels", ChannelsPage),
   page("/operator/identity", IdentityPage),
+  page("/operator/phone", PhonePage),
+  page("/operator/tv", IptvPage),
   page("/operator/omci", OmciPage),
   page("/system/resources", ResourcesPage),
   page("/system/software", SoftwarePage),

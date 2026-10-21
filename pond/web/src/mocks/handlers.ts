@@ -10,14 +10,20 @@
 import type {
   Identity,
   IpoeInfo,
+  Iptv,
   LaneMode,
   LeaseInfo,
   Mgmt,
+  Phone,
+  PotsPorts,
+  ServiceRule,
   Session,
   SessionInfo,
   Sessions,
   Settings,
   SfpLane,
+  UniPorts,
+  UniReport,
 } from "../api/types";
 import { checkKey, checkPem, fingerprint, type KeyProblem, type PemProblem } from "../lib/keys";
 import { MAX_MOVED, moved } from "../lib/ports";
@@ -26,7 +32,7 @@ import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
 import { conversation } from "./conversation";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, SSH, TC_RULES, TLS } from "./fixture";
 import { delay, type Handler, HttpResponse, http } from "./http";
-import { OMCI, withServices } from "./omci";
+import { OMCI, withServices, withVeip } from "./omci";
 
 let rootSecret = "admin";
 const firmware = structuredClone(FIRMWARE);
@@ -445,6 +451,8 @@ if (SCENARIO === "sessions" || SCENARIO === "demo") {
   settings.fw = { out: "allow", between: "block" };
   rootSecret = SCENARIO === "demo" ? "admin" : "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
+  /* An OLT that set up a service on the VEIP too, which the stick moved to its own VLAN. */
+  omci = withVeip();
   elsewhere();
 }
 const ticks = structuredClone(
@@ -489,7 +497,133 @@ const identity: Identity = {
   sw_version1: "",
   pack_version: "",
   source: "store",
+  uni_report: "both",
+  uni_ports: 1,
+  pots_ports: 0,
+  olt_login: null,
 };
+/*
+ * The rules of the services: the stick's own, which settle a clash of the
+ * OLT's services, and a person's, which take their place, by the VLAN on
+ * the fibre.
+ */
+let autoRules: ServiceRule[] = [];
+const ownRules = new Map<number | null, ServiceRule>();
+const serviceRules = () => [
+  ...autoRules.filter((r) => !ownRules.has(r.fibre)),
+  ...ownRules.values(),
+];
+/*
+ * Television, as omcid's multicast agent holds it: the OLT's policy of the
+ * line (mocks/omci.ts: IGMPv2, snooping, groups 224.0.0.0 to
+ * 239.255.255.255 in VLAN 300 on the multicast channel), two channels
+ * watched, a join refused, and the latest events; times by the stick's clock.
+ */
+const iptvAt = () => Math.floor(upNow());
+const iptvBase = iptvAt();
+const iptv: Omit<Iptv, "now_s"> = {
+  policy: {
+    igmp_version: 2,
+    mode: "snoop",
+    fast_leave: true,
+    max_groups: 4,
+    max_bandwidth_bps: 40_000_000,
+    robustness: 2,
+    query_interval_s: 125,
+    query_response_s: 10,
+    last_member_s: 1,
+    host_vlan: 421,
+    allowed: [
+      { from: "224.0.0.0", to: "239.255.255.255", vlan: 300, bandwidth_bps: null, preview: false },
+    ],
+    static: [],
+  },
+  groups: [
+    {
+      group: "239.10.0.1",
+      source: null,
+      vlan: 421,
+      client: "192.168.1.60",
+      since_s: iptvBase - 1830,
+      rate_bps: 8_100_000,
+    },
+    {
+      group: "239.10.0.17",
+      source: null,
+      vlan: 421,
+      client: "192.168.1.61",
+      since_s: iptvBase - 240,
+      rate_bps: 9_700_000,
+    },
+  ],
+  rejected: [
+    {
+      at_s: iptvBase - 610,
+      group: "239.200.0.5",
+      vlan: 421,
+      client: "192.168.1.61",
+      reason: "max_groups",
+    },
+  ],
+  lost: [],
+  counters: { joins: 214, leaves: 212, rejected: 1, queries: 96, reports: 188 },
+  querier: { last_s: iptvBase - 37, version: 2 },
+  priority: { control: 0, by: "stick", pcp: 4, auto: true, dropped: 0 },
+  log: [
+    { at_s: iptvBase - 37, event: "query", group: null, vlan: 300 },
+    { at_s: iptvBase - 240, event: "join", group: "239.10.0.17", vlan: 421 },
+    { at_s: iptvBase - 241, event: "leave", group: "239.10.0.9", vlan: 421 },
+    { at_s: iptvBase - 610, event: "reject", group: "239.200.0.5", vlan: 421 },
+    { at_s: iptvBase - 1200, event: "lost", group: "239.10.0.9", vlan: 421 },
+    { at_s: iptvBase - 1188, event: "back", group: "239.10.0.9", vlan: 421 },
+    { at_s: iptvBase - 1830, event: "join", group: "239.10.0.1", vlan: 421 },
+  ],
+};
+/* The phone the OLT set up, and the SIP passwords, which root's password shows. */
+const phone: Phone = {
+  method: "none",
+  lines: [],
+  server: null,
+  codecs: [],
+  dtmf: null,
+  vlan: null,
+};
+let phonePasswords: Record<number, string> = {};
+/* The PPPoE password the OLT sent with olt_login, which root's password shows. */
+let oltPassword = "";
+/* The scenarios' OLT sent a PPPoE login. */
+if (SCENARIO === "sessions" || SCENARIO === "demo") {
+  identity.olt_login = { user: "abc12345@operator.example", password_set: true };
+  oltPassword = "example-secret";
+  /* The service the OLT set up on the VEIP clashes with internet: the stick moved it. */
+  autoRules = [{ fibre: 500, action: "move", host: 500, auto: true }];
+  /* An ONT of one phone socket stood in for, the phone set up through OMCI. */
+  identity.pots_ports = 1;
+  Object.assign(phone, {
+    method: "omci",
+    lines: [
+      {
+        port: 1,
+        number: "+48221234567",
+        display: "Example",
+        user: "48221234567",
+        password_set: true,
+      },
+    ],
+    server: {
+      proxy: "sip.operator.example",
+      outbound_proxy: "192.0.2.10",
+      registrar: "sip.operator.example",
+      domain: "operator.example",
+      port: 5060,
+      transport: "udp",
+    },
+    codecs: ["G.711 A-law", "G.711 µ-law", "G.729"],
+    dtmf: "rfc2833",
+    vlan: { fibre: 600, host: 600 },
+  } satisfies Phone);
+  phonePasswords = { 1: "example-sip-secret" };
+}
 
 function kv(text: string): Record<string, string> {
   return Object.fromEntries(
@@ -1558,8 +1692,153 @@ const stick = [
       if (b[k] !== undefined) (identity as unknown as Record<string, string>)[field] = b[k];
     if (b.PLOAM) identity.ploam_set = true;
     if (b.LOID_PASSWORD) identity.loid_password_set = true;
+    if (b.UNI_REPORT !== undefined) {
+      if (!["both", "pptp", "veip"].includes(b.UNI_REPORT))
+        return HttpResponse.json(
+          { error: "identity", detail: "UNI_REPORT: both, pptp or veip" },
+          { status: 400 },
+        );
+      identity.uni_report = b.UNI_REPORT as UniReport;
+    }
+    if (b.POTS_PORTS !== undefined) {
+      if (!["0", "1", "2"].includes(b.POTS_PORTS))
+        return HttpResponse.json(
+          { error: "identity", detail: "POTS_PORTS: 0 to 2" },
+          { status: 400 },
+        );
+      identity.pots_ports = Number(b.POTS_PORTS) as PotsPorts;
+      /* The OLT sets up as many lines as there are sockets. */
+      phone.lines = phone.lines.filter((l) => l.port <= (identity.pots_ports ?? 0));
+    }
+    if (b.UNI_PORTS !== undefined) {
+      if (!/^[1-8]$/.test(b.UNI_PORTS))
+        return HttpResponse.json(
+          { error: "identity", detail: "UNI_PORTS: 1 to 8" },
+          { status: 400 },
+        );
+      identity.uni_ports = Number(b.UNI_PORTS) as UniPorts;
+    }
     settings.store = "saved";
     return HttpResponse.json({ id: "identity", ok: true });
+  }),
+
+  http.get("*/api/get/service_rules", async () => {
+    await delay(150);
+    return (
+      away() ??
+      (signedIn
+        ? HttpResponse.json({ id: "service_rules", value: { rules: serviceRules() } })
+        : unauthorized())
+    );
+  }),
+
+  http.post("*/api/set/service_rule", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const fibre = b.FIBRE === "" || b.FIBRE === undefined ? null : Number(b.FIBRE);
+    const refuse = (detail: string) =>
+      HttpResponse.json({ error: "service_rule", detail }, { status: 400 });
+    if (fibre !== null && !(fibre >= 0 && fibre <= 4095)) return refuse("FIBRE: a VID");
+    if (b.ACTION === "auto") ownRules.delete(fibre);
+    else if (b.ACTION === "move") {
+      const host = Number(b.HOST);
+      if (!(host >= 1 && host <= 4094)) return refuse("HOST: 1 to 4094");
+      ownRules.set(fibre, { fibre, action: "move", host, auto: false });
+    } else if (b.ACTION === "off" || b.ACTION === "only_uni" || b.ACTION === "only_veip")
+      ownRules.set(fibre, { fibre, action: b.ACTION, host: null, auto: false });
+    else return refuse("ACTION: move, off, only_uni, only_veip or auto");
+    return HttpResponse.json({ id: "service_rule", ok: true });
+  }),
+
+  http.get("*/api/get/iptv", async () => {
+    await delay(150);
+    /* The streams' rates move a little from one read to the next. */
+    for (const g of iptv.groups)
+      if (g.rate_bps != null) g.rate_bps = Math.round(g.rate_bps * (0.97 + Math.random() * 0.06));
+    return (
+      away() ??
+      (signedIn
+        ? HttpResponse.json({ id: "iptv", value: { ...iptv, now_s: iptvAt() } })
+        : unauthorized())
+    );
+  }),
+
+  /* Who gives upstream IGMP its priority: the stick, or the host (whose 0 no rule takes here). */
+  http.post("*/api/set/iptv", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    if (b.IGMP_PRIORITY !== "auto" && b.IGMP_PRIORITY !== "host")
+      return HttpResponse.json(
+        { error: "iptv", detail: "IGMP_PRIORITY: auto or host" },
+        { status: 400 },
+      );
+    const auto = b.IGMP_PRIORITY === "auto";
+    if (iptv.priority)
+      iptv.priority = {
+        ...iptv.priority,
+        auto,
+        by: auto ? "stick" : "host",
+        pcp: auto ? 4 : null,
+        dropped: auto ? 0 : 3,
+      };
+    return HttpResponse.json({ id: "iptv", ok: true });
+  }),
+
+  /* A test of a group: joined, counted for the seconds asked, left. */
+  http.post("*/api/iptv/test", async ({ request }) => {
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const seconds = Math.min(30, Math.max(1, Number(b.SECONDS) || 10));
+    const group = b.GROUP ?? "";
+    if (!/^2(2[4-9]|3\d)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(group))
+      return HttpResponse.json(
+        { error: "iptv", detail: "GROUP: a multicast address, 224.0.0.0 to 239.255.255.255" },
+        { status: 400 },
+      );
+    await delay(seconds * 1000);
+    const known = group.startsWith("239.10.");
+    const rate = known ? 8_000_000 + Math.round(Math.random() * 2_000_000) : 0;
+    return HttpResponse.json({
+      group,
+      vlan: b.VLAN ? Number(b.VLAN) : null,
+      seconds,
+      packets: Math.round((rate * seconds) / 8 / 1316),
+      bytes: Math.round((rate * seconds) / 8),
+      rate_bps: rate,
+      first_ms: known ? 180 + Math.round(Math.random() * 120) : null,
+    });
+  }),
+
+  http.get("*/api/get/phone", async () => {
+    await delay(150);
+    return away() ?? (signedIn ? HttpResponse.json({ id: "phone", value: phone }) : unauthorized());
+  }),
+
+  /* The SIP passwords of the phone's lines: root's password shows them. */
+  http.post("*/api/phone/secrets", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const no = passwordRefused(request);
+    if (no) return no;
+    return HttpResponse.json({
+      lines: phone.lines.map((l) => ({ port: l.port, secret: phonePasswords[l.port] ?? "" })),
+    });
+  }),
+
+  /* The PPPoE login the OLT sent, its password with it: root's password shows it. */
+  http.post("*/api/identity/olt-login", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const no = passwordRefused(request);
+    if (no) return no;
+    if (!identity.olt_login)
+      return HttpResponse.json(
+        { error: "no login", detail: "the OLT sent no PPPoE login" },
+        { status: 404 },
+      );
+    return HttpResponse.json({ user: identity.olt_login.user, secret: oltPassword });
   }),
 
   http.get("*/api/get/firmware", async () => {

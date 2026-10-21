@@ -77,6 +77,8 @@ const OPERATOR: Section = {
     { to: "/operator/services", key: "nav.services" },
     { to: "/operator/channels", key: "nav.channels" },
     { to: "/operator/identity", key: "nav.identity" },
+    { to: "/operator/phone", key: "nav.phone" },
+    { to: "/operator/tv", key: "nav.tv" },
     { to: "/operator/omci", key: "nav.omci" },
   ],
 };
@@ -235,9 +237,10 @@ function ThemeMenu() {
 }
 
 /*
- * A section's pages in the menu, open from the start, each with how many
- * things it holds where @counts says; a click on the section's name folds
- * them.
+ * A section's pages in the menu, each with how many things it holds where
+ * @counts says. The section of the page open stands unfolded and the others
+ * folded, so that the menu fits a laptop's screen whole; a click on a
+ * section's name folds or unfolds it, until another page is opened.
  */
 function MenuSection({
   section,
@@ -251,14 +254,17 @@ function MenuSection({
   onGo: () => void;
 }) {
   const { t } = useI18n();
+  const here = section.pages.some((p) => path === p.to);
+  const [open, setOpen] = useState(here);
+  useEffect(() => setOpen(here), [here]);
   return (
     <li>
-      <details open>
+      <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
         <summary>
           {section.icon}
           {t(section.key)}
         </summary>
-        <ul className="mt-1 flex flex-col gap-0.5">
+        <ul className="mt-0.5 flex flex-col">
           {section.pages.map((p) => (
             <li key={p.to}>
               <Link

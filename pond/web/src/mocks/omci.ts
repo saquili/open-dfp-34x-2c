@@ -286,3 +286,37 @@ export function withServices(n: number): OmciValue {
     mes: [...OMCI.mes.map((m) => (m.class === 171 && rules ? rules : m)), ...added],
   };
 }
+
+/*
+ * The same line with a service the OLT set up on the VEIP as well, as an
+ * operator does for the router of an ONT of its own: VLAN 500 on the fibre,
+ * on a bridge of its own, which the VEIP's rule gives the host as VLAN 410,
+ * the VLAN by which internet reaches it through the Ethernet UNI. On the one
+ * SFP lane the two clash, which the services page says.
+ */
+export function withVeip(): OmciValue {
+  mes.length = 0;
+  me(329, 0x0601, { 1: u8(0), 2: u8(0), 5: u16(0xffff) });
+  me(45, 2, { 1: u8(0), 2: u8(0), 3: u8(0), 4: u16(0x8000), 8: u8(0), 9: u8(0), 10: u32(300) });
+  me(47, 0x0201, { 1: u16(2), 2: u8(1), 3: u8(11), 4: u16(0x0601), 13: u8(0) });
+  me(47, 0x1105, { 1: u16(2), 2: u8(2), 3: u8(3), 4: u16(0x1105), 13: u8(0) });
+  mapper(0x1105, Object.fromEntries([0, 1, 2, 3, 4, 5, 6, 7].map((p) => [p, 0x011a])));
+  vlanFilter(0x1105, [500]);
+  ctp(0x011a, 282, 0x8002, 3, 0x8012, 1);
+  iw(0x011a, 5, 0x1105);
+  me(
+    171,
+    0x0601,
+    {
+      1: u8(10),
+      2: u16(32),
+      3: u16(0x8100),
+      4: u16(0x8100),
+      5: u8(0),
+      6: rule({ op: NO, ov: VANY, ip: 8, iv: 410 }, 1, { op: NO, ov: 0, ip: 8, iv: 500 }),
+      7: u16(0x0601),
+    },
+    [6],
+  );
+  return { ...OMCI, mes: [...OMCI.mes, ...mes] };
+}

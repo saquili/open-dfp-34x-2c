@@ -634,6 +634,202 @@ export interface Identity {
   sw_version1?: string;
   pack_version?: string;
   source: "store" | "factory" | null;
+  /**
+   * The ports the stick tells the OLT of (G.988): its Ethernet UNIs, the
+   * PPTP, its VEIP, or both; and how many Ethernet UNIs, 1 to 8, as many as
+   * the ONT it stands in for has. Each is the one SFP lane. Absent from a
+   * stick whose pond predates them.
+   */
+  uni_report?: UniReport;
+  uni_ports?: UniPorts;
+  /** How many phone sockets (POTS UNIs) the stick tells the OLT of: 0, 1 or 2. */
+  pots_ports?: PotsPorts;
+  /**
+   * The PPPoE login the OLT sent (Authentication security method, G.988
+   * 9.12.4), never its password, only whether there is one; null when the
+   * OLT sent none.
+   */
+  olt_login?: { user: string; password_set: boolean } | null;
+}
+
+/** Which ports the stick tells the OLT of: the Ethernet UNIs (PPTP), the VEIP, or both. */
+export type UniReport = "both" | "pptp" | "veip";
+
+/** How many Ethernet UNIs the stick tells the OLT of. */
+export type UniPorts = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+
+/** How many phone sockets the stick tells the OLT of. */
+export type PotsPorts = 0 | 1 | 2;
+
+/**
+ * pond's value "phone": the phone service the OLT set up on the stick's
+ * phone sockets, which have no wire: the SIP accounts and server through
+ * OMCI (G.988 9.9), for a VoIP device of the person's own to use. Never a
+ * password, only whether there is one.
+ */
+export interface Phone {
+  /** How the OLT sets the phone up: through OMCI, through TR-069, or not at all. */
+  method: "omci" | "tr069" | "none";
+  /** The sockets the stick tells the OLT of, each with its SIP account. */
+  lines: PhoneLine[];
+  server: {
+    proxy: string | null;
+    outbound_proxy: string | null;
+    registrar: string | null;
+    domain: string | null;
+    port: number | null;
+    transport: "udp" | "tcp" | "tls" | null;
+  } | null;
+  /** The codecs, in the order the OLT prefers them. */
+  codecs: string[];
+  dtmf: "rfc2833" | "inband" | "info" | null;
+  /** The VLAN of the voice: on the fibre, and to the host. */
+  vlan: { fibre: number | null; host: number | null } | null;
+}
+
+export interface PhoneLine {
+  /** The socket, 1 or 2. */
+  port: number;
+  /** The phone number, the user part of the address of record. */
+  number: string | null;
+  display: string | null;
+  user: string | null;
+  password_set: boolean;
+}
+
+/**
+ * What the stick does with a service the OLT set up, on its one SFP lane:
+ * moves it to another VLAN towards the host, keeps it off the host, or
+ * keeps it to the Ethernet UNI or to the VEIP alone. The stick makes such a
+ * rule by itself when two services would reach the host in one VLAN (auto),
+ * and a person's own rule takes its place. A rule is kept by the service's
+ * VLAN on the fibre, across the OLT's setting the services up again.
+ */
+export interface ServiceRule {
+  /** The service, by its VLAN on the fibre; null for the one that filters none. */
+  fibre: number | null;
+  action: "move" | "off" | "only_uni" | "only_veip";
+  /** The VLAN towards the host, of a move. */
+  host: number | null;
+  /** Made by the stick, for a clash; a person's own when false. */
+  auto: boolean;
+}
+
+/** pond's value "service_rules": the rules in force, the stick's and the person's. */
+export interface ServiceRules {
+  rules: ServiceRule[];
+}
+
+/**
+ * pond's value "iptv": television on the stick, as omcid's multicast agent
+ * holds it (omcid/README.rst, the multicast proxy): the OLT's policy, the
+ * groups the bridge forwards now, the joins it refused and the streams that
+ * stopped, the counts, the OLT's queries and the latest events. Times are
+ * the stick's clock in seconds, now_s among them.
+ */
+export interface Iptv {
+  now_s: number;
+  /** What the OLT set in the multicast operations profile; null before it set one. */
+  policy: {
+    igmp_version: number;
+    /** Snooping alone, snooping with proxy reporting, or a proxy (G.988 9.3.27, IGMP function). */
+    mode: "snoop" | "snoop_proxy" | "proxy";
+    fast_leave: boolean;
+    /** The most groups at once; null for no limit. */
+    max_groups: number | null;
+    max_bandwidth_bps: number | null;
+    robustness: number;
+    query_interval_s: number;
+    query_response_s: number;
+    last_member_s: number;
+    /** The VLAN the groups reach the host in; null when the OLT keeps the stream's tag. */
+    host_vlan: number | null;
+    /** The groups the OLT allows, as ranges, in full or for preview. */
+    allowed: {
+      from: string;
+      to: string;
+      vlan: number | null;
+      bandwidth_bps: number | null;
+      preview: boolean;
+    }[];
+    static: { group: string; vlan: number | null }[];
+  } | null;
+  /** The groups the bridge forwards now. */
+  groups: {
+    group: string;
+    source: string | null;
+    vlan: number | null;
+    /** The host address that joined it. */
+    client: string | null;
+    since_s: number;
+    rate_bps: number | null;
+  }[];
+  /** The joins the policy refused, the latest first. */
+  rejected: {
+    at_s: number;
+    group: string;
+    vlan: number | null;
+    client: string | null;
+    reason: "not_allowed" | "max_groups" | "max_bandwidth" | "preview_over";
+  }[];
+  /** The groups whose stream stopped while they were joined. */
+  lost: { group: string; since_s: number }[];
+  counters: {
+    joins: number;
+    leaves: number;
+    rejected: number;
+    queries: number;
+    reports: number;
+  };
+  /** The OLT's latest query, and its IGMP version; null before one came. */
+  querier: { last_s: number; version: number } | null;
+  /**
+   * The priority the subscriber's IGMP goes up with. The profile's upstream
+   * IGMP tag control (G.988 9.3.27): 0 the VLAN rules, 1 a tag added, 2 the
+   * tag replaced, 3 its VID replaced. At 1 and 2 the OLT's tag gives it; at
+   * 0 and 3 the host's would, and the stick gives the one the operator's
+   * rules take in the VLAN instead, unless a person turned that off.
+   */
+  priority: {
+    control: 0 | 1 | 2 | 3;
+    by: "olt" | "stick" | "host";
+    /** The priority given; null when the host's goes. */
+    pcp: number | null;
+    /** The stick gives the rules' priority where the OLT leaves it to the host. */
+    auto: boolean;
+    /** The joins no rule took for their priority, while the host's went. */
+    dropped: number;
+  } | null;
+  /** The latest events, the newest first. */
+  log: {
+    at_s: number;
+    event: "join" | "leave" | "reject" | "query" | "lost" | "back";
+    group: string | null;
+    vlan: number | null;
+  }[];
+}
+
+/** What a test of a group measured: the stick joins it, counts its stream, and leaves. */
+export interface IptvTest {
+  group: string;
+  vlan: number | null;
+  seconds: number;
+  packets: number;
+  bytes: number;
+  rate_bps: number;
+  /** The milliseconds until the first frame; null when none came. */
+  first_ms: number | null;
+}
+
+/** The SIP passwords of the phone's lines, which root's password shows. */
+export interface PhoneSecrets {
+  lines: { port: number; secret: string }[];
+}
+
+/** The PPPoE login the OLT sent, with its password (secret), which root's password shows. */
+export interface OltLogin {
+  user: string;
+  secret: string;
 }
 
 /** The modes of the SFP lane, the driver's: its own search, or one of four it keeps to. */

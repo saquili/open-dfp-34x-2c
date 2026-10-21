@@ -23,10 +23,16 @@ import type {
   Clock,
   Firmware,
   Identity,
+  Iptv,
+  IptvTest,
   LeaseInfo,
   Mgmt,
   Network,
+  OltLogin,
   OmciValue,
+  Phone,
+  PhoneSecrets,
+  ServiceRules,
   Sessions,
   SfpLane,
   Ssh,
@@ -163,6 +169,50 @@ export function useIdentity() {
   return useQuery(identityQuery);
 }
 
+/* The phone the OLT set up: it changes only when the OLT says so. */
+export const phoneQuery = queryOptions({
+  queryKey: ["phone"],
+  queryFn: async () => (await request<Value<Phone>>("/api/get/phone")).value,
+  staleTime: 30_000,
+});
+
+export function usePhone() {
+  return useQuery(phoneQuery);
+}
+
+/* The stick's rules for the services: they change with the OLT's services and a person's choice. */
+export const serviceRulesQuery = queryOptions({
+  queryKey: ["service_rules"],
+  queryFn: async () => (await request<Value<ServiceRules>>("/api/get/service_rules")).value,
+  staleTime: 10_000,
+});
+
+export function useServiceRules() {
+  return useQuery(serviceRulesQuery);
+}
+
+/* Television: the groups change as people switch channels, so it is read every few seconds while shown. */
+export const iptvQuery = queryOptions({
+  queryKey: ["iptv"],
+  queryFn: async () => (await request<Value<Iptv>>("/api/get/iptv")).value,
+  refetchInterval: 3_000,
+});
+
+export function useIptv() {
+  return useQuery(iptvQuery);
+}
+
+/** A test of group @group in @vlan: the stick joins it for @seconds and says what came. */
+export const useIptvTest = () =>
+  useMutation({
+    mutationKey: ["iptv", "test"],
+    mutationFn: (v: { group: string; vlan: string; seconds: number }) =>
+      request<IptvTest>(
+        "/api/iptv/test",
+        lines({ GROUP: v.group, VLAN: v.vlan || undefined, SECONDS: String(v.seconds) }),
+      ),
+  });
+
 /*
  * What each change makes stale: the reads the panel does again once pond has
  * taken it, and no others. The data path's settings are part of the live
@@ -210,6 +260,10 @@ export const REFRESH = {
   sessions_end: [["sessions"]],
   /* A new token of scripts, or none. */
   token: [["token"]],
+  /* A service moved, kept off or kept to an output: the rules, and the clashes they settle. */
+  service_rule: [["service_rules"]],
+  /* Who gives upstream IGMP its priority. */
+  iptv: [["iptv"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type Change = keyof typeof REFRESH;
@@ -248,6 +302,10 @@ export const useForwardChange = () => useChange("forward");
 export const useDmzChange = () => useChange("dmz");
 export const useRuleChange = () => useChange("rule");
 export const useFwChange = () => useChange("fw");
+/** IGMP_PRIORITY=auto: the stick gives the rules' priority; host: the host's goes. */
+export const useIptvChange = () => useChange("iptv");
+/** FIBRE=VID with ACTION=move HOST=VID, off, only_uni, only_veip, or auto for the stick's own. */
+export const useServiceRuleChange = () => useChange("service_rule");
 
 /* The SFP lane and the management address: read often while a change waits. */
 const waiting = (q: { state: { data?: { trial?: unknown; pending?: unknown } } }) =>
@@ -460,6 +518,22 @@ export function tokenOffOptions(qc: QueryClient) {
 export const useEndOthers = () => useMutation(endOthersOptions(useQueryClient()));
 export const useTokenNew = () => useMutation(tokenNewOptions(useQueryClient()));
 export const useTokenOff = () => useMutation(tokenOffOptions(useQueryClient()));
+
+/** The SIP passwords of the phone's lines, which root's password shows. */
+export const usePhoneSecrets = () =>
+  useMutation({
+    mutationKey: ["phone", "secrets"],
+    mutationFn: ({ secret }: Keyed<object>) =>
+      request<PhoneSecrets>("/api/phone/secrets", "", passwordHeader(secret)),
+  });
+
+/** The PPPoE login the OLT sent, with its password, which root's password shows. */
+export const useOltLogin = () =>
+  useMutation({
+    mutationKey: ["identity", "olt-login"],
+    mutationFn: ({ secret }: Keyed<object>) =>
+      request<OltLogin>("/api/identity/olt-login", "", passwordHeader(secret)),
+  });
 export const useSshHostKey = () => useMutation(sshHostKeyOptions(useQueryClient()));
 export const useSshKeyAdd = () => useMutation(sshKeyAddOptions(useQueryClient()));
 export const useSshKeyRemove = () => useMutation(sshKeyRemoveOptions(useQueryClient()));

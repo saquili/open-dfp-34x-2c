@@ -20,7 +20,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { Controller, type FieldValues, type UseFormReturn, useForm } from "react-hook-form";
 import { useIpoeChange, useSessionChange } from "../../api/config";
 import { useLive } from "../../api/live";
-import type { Family } from "../../api/types";
+import type { Family, OltLogin } from "../../api/types";
 import { Field, SaveState, useChangeState } from "../../components/Field";
 import { NotYet } from "../../components/ui";
 import { type Key, useI18n } from "../../i18n";
@@ -73,6 +73,8 @@ interface Common {
   onDraft: (d: Draft) => void;
   onDone: () => void;
   onCancel?: () => void;
+  /** The PPPoE login the OLT sent, for a new session to start from. */
+  login?: OltLogin | null;
 }
 
 /* Reports what a new connection's form holds, so that another tab starts from it. */
@@ -187,8 +189,8 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
     resolver: zodResolver(schema),
     defaultValues: {
       vlan: first,
-      user: x?.user ?? "",
-      secret: "",
+      user: x?.user ?? c.login?.user ?? "",
+      secret: x ? "" : (c.login?.secret ?? ""),
       pass: (x ? x.pass : free(first)) ? "on" : "off",
       hostVlan: x ? downVlan(x) : first,
       mac: x?.mac ?? c.draft.mac,
@@ -604,6 +606,7 @@ export function ConnForm({
   editing,
   onEditDone,
   onClose,
+  login,
 }: {
   list: Conn[];
   kind: Kind;
@@ -612,6 +615,8 @@ export function ConnForm({
   onEditDone: () => void;
   /** Shuts the form; none while it is the page's only content, with no connection yet. */
   onClose: (() => void) | undefined;
+  /** The PPPoE login the OLT sent, which a new session starts from. */
+  login?: OltLogin | null;
 }) {
   const { t } = useI18n();
   const { data: live } = useLive();
@@ -628,6 +633,7 @@ export function ConnForm({
     known: !ready || options.length > 0,
     draft,
     onDraft: setDraft,
+    login: editing || round > 0 ? null : login,
     onDone: editing
       ? onEditDone
       : () => {
