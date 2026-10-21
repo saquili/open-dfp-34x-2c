@@ -24,9 +24,11 @@
 struct omci_svc_rule;
 
 /**
- * struct omci_hw_port - One slot of the device.
- * @pptp_instance: the instance of its Ethernet UNI; 0 for the PON side
- * @cardholder: the instance of its cardholder and circuit pack
+ * struct omci_hw_port - One port of the device.
+ * @pptp_instance: the instance of its UNI, an Ethernet UNI or, of a port of
+ *	%OMCI_HW_PLUGIN_POTS, a POTS UNI; 0 for the PON side
+ * @cardholder: the instance of its cardholder and circuit pack, which the
+ *	ports of one slot share
  * @plugin_type: the plug-in unit type its equipment reports
  */
 struct omci_hw_port {
@@ -37,6 +39,15 @@ struct omci_hw_port {
 
 /* The most Ethernet UNIs a device tells the OLT of, as many as an ONT it stands in for has. */
 #define OMCI_HW_UNI_MAX 8u
+
+/*
+ * The most phone sockets (POTS UNIs) a device tells the OLT of, and their
+ * plug-in unit type (G.988 Table 9.1.5-1). The stick has no socket that
+ * takes a wire: a person's VoIP device behind it uses the accounts the OLT
+ * sets up for them.
+ */
+#define OMCI_HW_POTS_MAX 2u
+#define OMCI_HW_PLUGIN_POTS 32u
 
 /**
  * enum omci_hw_uni_report - The subscriber ports a device tells the OLT of.
@@ -52,7 +63,7 @@ enum omci_hw_uni_report {
 
 /**
  * struct omci_hw_caps - What the device has and how it identifies itself.
- * @ports: its slots
+ * @ports: its ports: the Ethernet UNIs, the PON side and the POTS UNIs
  * @port_count: how many there are
  * @ani_instance: the instance of the ANI-G
  * @ip_host_count: the IP hosts
@@ -73,7 +84,7 @@ enum omci_hw_uni_report {
  *	omci_hw_uni_report): the Ethernet UNIs of @ports, its VEIP, or both
  */
 struct omci_hw_caps {
-	struct omci_hw_port ports[OMCI_HW_UNI_MAX + 2];
+	struct omci_hw_port ports[OMCI_HW_UNI_MAX + OMCI_HW_POTS_MAX + 2];
 	uint8_t port_count;
 
 	uint16_t ani_instance;

@@ -5,7 +5,10 @@
  * omcid on ubus (ADR 0011): the object "omcid", whose method "status" gives
  * the number of instances and the counts of the frames, "rules" the rules
  * of the services in force (me/svcrule.h), "login" the PPPoE login the OLT
- * sent (class 148), "iptv" what the multicast agent holds of television
+ * sent (class 148), "phone" the phone the OLT set up on the phone sockets
+ * (omci_publish_phone()), "phone_secrets" their SIP passwords, which pond
+ * shows with root's password, "iptv" what the multicast agent holds of
+ * television
  * (omci_mcast_publish()), "tv_test" a test of a group from the stick
  * (omci_mcast_test_start()), "mib" the MIB
  * (src/sys/publish.h), of the classes of its argument "classes", an array of
@@ -149,6 +152,38 @@ static int login(struct ubus_context *ctx, struct ubus_object *obj,
 	(void)msg;
 	blob_buf_init(&g_buf, 0);
 	omci_publish_login(g_mib, &g_ops, &w);
+	ubus_send_reply(ctx, req, g_buf.head);
+	return 0;
+}
+
+/* The phone the OLT set up on the phone sockets (omci_publish_phone()). */
+static int phone(struct ubus_context *ctx, struct ubus_object *obj,
+		 struct ubus_request_data *req, const char *method,
+		 struct blob_attr *msg)
+{
+	struct writer w = { .b = &g_buf };
+
+	(void)obj;
+	(void)method;
+	(void)msg;
+	blob_buf_init(&g_buf, 0);
+	omci_publish_phone(g_mib, &g_ops, &w);
+	ubus_send_reply(ctx, req, g_buf.head);
+	return 0;
+}
+
+/* The SIP passwords of the phone's lines (omci_publish_phone_secrets()). */
+static int phone_secrets(struct ubus_context *ctx, struct ubus_object *obj,
+			 struct ubus_request_data *req, const char *method,
+			 struct blob_attr *msg)
+{
+	struct writer w = { .b = &g_buf };
+
+	(void)obj;
+	(void)method;
+	(void)msg;
+	blob_buf_init(&g_buf, 0);
+	omci_publish_phone_secrets(g_mib, &g_ops, &w);
 	ubus_send_reply(ctx, req, g_buf.head);
 	return 0;
 }
@@ -330,6 +365,8 @@ static const struct ubus_method g_methods[] = {
 	UBUS_METHOD_NOARG("status", status),
 	UBUS_METHOD_NOARG("rules", rules),
 	UBUS_METHOD_NOARG("login", login),
+	UBUS_METHOD_NOARG("phone", phone),
+	UBUS_METHOD_NOARG("phone_secrets", phone_secrets),
 	UBUS_METHOD_NOARG("iptv", iptv),
 	UBUS_METHOD("tv_test", tv_test, g_test_policy),
 	UBUS_METHOD("mib", mib, g_mib_policy),

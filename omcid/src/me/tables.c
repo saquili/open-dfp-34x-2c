@@ -18,6 +18,9 @@
 enum {
 	ME_BRIDGE_PORT_FILTER = 49,
 	ME_BRIDGE_PORT_TABLE = 50,
+	ME_VOICE_SERVICE_PROFILE = 58,
+	ME_DIAL_PLAN = 145,
+	ME_SIP_AGENT = 150,
 	ME_EXT_VLAN_TAG_OPER = 171,
 	ME_MCAST_GEM_IW_TP = 281,
 	ME_OMCI = 287,
@@ -31,6 +34,13 @@ enum {
 	{ .key_len = (size),            \
 	  .order = OMCI_MIB_TABLE_LAST, \
 	  .max_entries = (rows) }
+
+/* A table whose rows start with their key of @len bytes, zeros clearing it. */
+#define INDEX_ROWS(len, rows)           \
+	{ .key_len = (len),             \
+	  .order = OMCI_MIB_TABLE_LAST, \
+	  .max_entries = (rows),        \
+	  .ctrl = OMCI_ME_TABLE_CTRL_INDEX }
 
 /*
  * A table whose rows start with a table control field, kept in arrival
@@ -54,8 +64,13 @@ enum {
  * groups of the multicast subscriber config info (class 310) rows of two;
  * its service packages have one; a table control field leads each part. The
  * MAC filter table of a bridge port (class 49) is known by its entry number,
- * and holds as many addresses as the port is given rules for. The others
- * keep whole rows.
+ * and holds as many addresses as the port is given rules for. The tone and
+ * ringing tables of the voice service profile (class 58) are known by their
+ * first byte, an index or an event, and the SIP response table of the SIP
+ * agent (class 150) by its first two, a response code; a row of a zero key
+ * clears its table. A dial plan (class 145) is known by its number, the
+ * first byte, and removed by a row whose action, the second, is 0. The
+ * others keep whole rows.
  */
 static const struct {
 	uint16_t class_id;
@@ -105,6 +120,20 @@ static const struct {
 	    .order = OMCI_MIB_TABLE_LAST,
 	    .max_entries = OMCI_ME_MAC_FILTER_ROWS,
 	    .ctrl = OMCI_ME_TABLE_CTRL_ENTRY } },
+
+	{ ME_VOICE_SERVICE_PROFILE, 10, INDEX_ROWS(1, 32) },
+	{ ME_VOICE_SERVICE_PROFILE, 11, INDEX_ROWS(1, 40) },
+	{ ME_VOICE_SERVICE_PROFILE, 12, INDEX_ROWS(1, 32) },
+	{ ME_VOICE_SERVICE_PROFILE, 13, INDEX_ROWS(1, 40) },
+	{ ME_DIAL_PLAN,
+	  6,
+	  { .key_len = 1,
+	    .del_offset = 1,
+	    .del_len = 1,
+	    .del_value = 0x00u,
+	    .order = OMCI_MIB_TABLE_LAST,
+	    .max_entries = 32 } },
+	{ ME_SIP_AGENT, 12, INDEX_ROWS(2, 32) },
 };
 
 bool omci_me_table_policy(uint16_t class_id, uint8_t attr_no,
@@ -270,6 +299,29 @@ static enum omci_status entry_set(struct omci_mib *mib, uint16_t class_id,
 				  1u, policy->order);
 }
 
+/*
+ * A Set of a row known by its leading key (OMCI_ME_TABLE_CTRL_INDEX): it is
+ * added, or replaces the row of its key; a key of zeros clears the table.
+ */
+static enum omci_status index_set(struct omci_mib *mib, uint16_t class_id,
+				  uint16_t instance, uint8_t attr_no,
+				  const struct omci_me_table_policy *policy,
+				  const uint8_t *row, size_t len)
+{
+	bool zero = true;
+
+	for (uint8_t i = 0; i < policy->key_len; i++)
+		zero = zero && row[i] == 0u;
+	if (zero)
+		return clear_rows(mib, class_id, instance, attr_no);
+	if (omci_mib_table_count(mib, class_id, instance, attr_no) >=
+		    policy->max_entries &&
+	    !holds_key(mib, class_id, instance, attr_no, row, policy->key_len))
+		return OMCI_ERR_NOMEM;
+	return omci_mib_table_put(mib, class_id, instance, attr_no, row, len,
+				  policy->key_len, policy->order);
+}
+
 enum omci_status
 omci_me_table_ctrl_set(struct omci_mib *mib, uint16_t class_id,
 		       uint16_t instance, uint8_t attr_no,
@@ -285,6 +337,9 @@ omci_me_table_ctrl_set(struct omci_mib *mib, uint16_t class_id,
 
 	if (policy->ctrl == OMCI_ME_TABLE_CTRL_ENTRY)
 		return entry_set(mib, class_id, instance, attr_no, policy, row,
+				 len);
+	if (policy->ctrl == OMCI_ME_TABLE_CTRL_INDEX)
+		return index_set(mib, class_id, instance, attr_no, policy, row,
 				 len);
 
 	omci_me_table_row_id(policy, row, &id);

@@ -142,12 +142,21 @@ static void t_flag(void *ctx, const char *name, bool value)
 	t_put(t, value ? "true" : "false");
 }
 
+static void t_none(void *ctx, const char *name)
+{
+	struct text *t = ctx;
+
+	t_name(t, name);
+	t_put(t, "null");
+}
+
 static const struct omci_publish_ops g_text_ops = {
 	.open = t_open,
 	.close = t_close,
 	.str = t_str,
 	.num = t_num,
 	.flag = t_flag,
+	.none = t_none,
 };
 
 static char g_out[8192];
@@ -342,6 +351,278 @@ static void test_the_login(struct omci_mib *mib)
 	CHECK(strstr(g_out, "\"realm\":\"isp.example\"") != NULL);
 }
 
+/* A value of @n bytes, big-endian, into an attribute. */
+static void set_num(struct omci_mib *mib, uint16_t cls, uint16_t inst,
+		    uint8_t attr, uint32_t v, size_t n)
+{
+	uint8_t b[4];
+
+	for (size_t i = 0; i < n; i++)
+		b[i] = (uint8_t)(v >> (8u * (n - 1u - i)));
+	CHECK_EQ(omci_mib_attr_set(mib, cls, inst, attr, b, n), OMCI_OK);
+}
+
+/* A string attribute of 25 bytes. */
+static void set_text(struct omci_mib *mib, uint16_t cls, uint16_t inst,
+		     uint8_t attr, const char *text)
+{
+	uint8_t b[25] = { 0 };
+
+	memcpy(b, text, strlen(text));
+	CHECK_EQ(omci_mib_attr_set(mib, cls, inst, attr, b, sizeof(b)),
+		 OMCI_OK);
+}
+
+/* A large string (class 157) of @text, in parts of 25 bytes. */
+static void large(struct omci_mib *mib, uint16_t inst, const char *text)
+{
+	const size_t len = strlen(text);
+	const unsigned int parts = (unsigned int)((len + 24u) / 25u);
+
+	CHECK_EQ(omci_mib_create(mib, 157u, inst), OMCI_OK);
+	set_num(mib, 157u, inst, 1u, parts, 1u);
+	for (unsigned int p = 0; p < parts; p++) {
+		uint8_t b[25] = { 0 };
+		const size_t n = len - 25u * p < 25u ? len - 25u * p : 25u;
+
+		memcpy(b, text + 25u * p, n);
+		CHECK_EQ(omci_mib_attr_set(mib, 157u, inst, (uint8_t)(2u + p),
+					   b, sizeof(b)),
+			 OMCI_OK);
+	}
+}
+
+/* An instance with its pointers and numbers: @n pairs of attribute and value. */
+static void make(struct omci_mib *mib, uint16_t cls, uint16_t inst,
+		 const unsigned int (*v)[3], size_t n)
+{
+	CHECK_EQ(omci_mib_create(mib, cls, inst), OMCI_OK);
+	for (size_t i = 0; i < n; i++)
+		set_num(mib, cls, inst, (uint8_t)v[i][0], v[i][1], v[i][2]);
+}
+
+/* What a publisher writes, as JSON text in g_out. */
+static const char *written(void (*pub)(const struct omci_mib *,
+				       const struct omci_publish_ops *, void *),
+			   struct omci_mib *mib)
+{
+	struct text t = { .p = g_out, .cap = sizeof(g_out) };
+
+	t.first[0] = true;
+	g_out[0] = '\0';
+	t_put(&t, "{");
+	pub(mib, &g_text_ops, &t);
+	t_put(&t, "}");
+	return g_out;
+}
+
+/* Whether @what is in g_out; says what g_out holds when it is not. */
+static bool holds(const char *what)
+{
+	const bool found = strstr(g_out, what) != NULL;
+
+	if (!found)
+		printf("  wanted %s\n  in %s\n", what, g_out);
+	return found;
+}
+
+/* The @n strings of @parts one after another, in @out. */
+static const char *joined(char *out, const char *const *parts, size_t n)
+{
+	out[0] = '\0';
+	for (size_t i = 0; i < n; i++)
+		strcat(out, parts[i]);
+	return out;
+}
+
+/* Whether g_out holds the strings given, one after another. */
+static bool holds_parts(const char *const *parts, size_t n)
+{
+	char want[1024];
+
+	return holds(joined(want, parts, n));
+}
+
+/* Whether g_out is the strings given, one after another. */
+static bool is_parts(const char *const *parts, size_t n)
+{
+	char want[1024];
+
+	return strcmp(g_out, joined(want, parts, n)) == 0;
+}
+
+#define PARTS(...) ((const char *const[]){ __VA_ARGS__ })
+#define NPARTS(...) (sizeof(PARTS(__VA_ARGS__)) / sizeof(const char *))
+#define HOLDS(...) holds_parts(PARTS(__VA_ARGS__), NPARTS(__VA_ARGS__))
+#define IS(...) is_parts(PARTS(__VA_ARGS__), NPARTS(__VA_ARGS__))
+
+/* A rule of class 171 of four words. */
+static void put_rule(uint8_t row[16], uint32_t w0, uint32_t w1, uint32_t w2,
+		     uint32_t w3)
+{
+	const uint32_t w[4] = { w0, w1, w2, w3 };
+
+	for (int i = 0; i < 16; i++)
+		row[i] = (uint8_t)(w[i / 4] >> (24 - 8 * (i % 4)));
+}
+
+/*
+ * A line of SIP user data found by its POTS UNI, a second by its VoIP
+ * voice CTP alone and of no account; the SIP agent's servers through large
+ * strings, a network address and TCP/UDP config data; the codecs of the
+ * media profile, each once; DTMF as RTP events; the VLAN of an IP host's
+ * bridge port. The PPPoE login is no SIP account.
+ */
+static void test_the_phone(struct omci_mib *mib)
+{
+	static const unsigned int agent[][3] = {
+		{ 1, 0x8002, 2 }, { 2, 0x8003, 2 }, { 5, 1, 2 },
+		{ 8, 0x8004, 2 }, { 10, 1, 2 },
+	};
+	static const unsigned int user1[][3] = {
+		{ 1, 1, 2 },
+		{ 2, 0x8001, 2 },
+		{ 4, 0x10, 2 },
+		{ 10, 0x0201, 2 },
+	};
+	static const unsigned int user3[][3] = {
+		{ 1, 1, 2 },
+		{ 2, 0xffff, 2 },
+		{ 4, 0xffff, 2 },
+		{ 10, 0xffff, 2 },
+	};
+	static const unsigned int ctp1[][3] = { { 1, 1, 2 },
+						{ 2, 0x0201, 2 },
+						{ 3, 1, 2 } };
+	static const unsigned int ctp2[][3] = { { 1, 3, 2 },
+						{ 2, 0x0202, 2 },
+						{ 3, 1, 2 } };
+	static const unsigned int media[][3] = {
+		{ 3, 8, 1 },  { 6, 0, 1 },  { 9, 18, 1 },
+		{ 12, 8, 1 }, { 15, 1, 1 }, { 16, 1, 2 },
+	};
+	static const unsigned int udp[][3] = { { 1, 5060, 2 }, { 2, 17, 1 } };
+	uint8_t vids[24] = { 0x02, 0x58 };
+	uint8_t row[16];
+
+	written(omci_publish_phone, mib);
+	CHECK(IS("{\"method\":\"none\",\"lines\":[],\"server\":null,",
+		 "\"codecs\":[],\"dtmf\":null,\"vlan\":null}"));
+	written(omci_publish_phone_secrets, mib);
+	CHECK(IS("{\"lines\":[]}"));
+
+	CHECK_EQ(omci_mib_create(mib, 53u, 0x0201u), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, 53u, 0x0202u), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, 138u, 0u), OMCI_OK);
+	set_num(mib, 138u, 0u, 4u, 1u, 1u);
+	CHECK_EQ(omci_mib_create(mib, 148u, 0x10u), OMCI_OK);
+	set_text(mib, 148u, 0x10u, 2u, "48221234567");
+	set_text(mib, 148u, 0x10u, 3u, "example-sip-secret");
+	CHECK_EQ(omci_mib_create(mib, 148u, 0x20u), OMCI_OK);
+	set_text(mib, 148u, 0x20u, 2u, "abc@isp.example");
+	large(mib, 0x8001u, "48221234567");
+	large(mib, 0x8002u, "sip.operator.example");
+	large(mib, 0x8003u, "192.0.2.10");
+	large(mib, 0x8004u, "operator.example");
+	CHECK_EQ(omci_mib_create(mib, 137u, 1u), OMCI_OK);
+	set_num(mib, 137u, 1u, 2u, 0x8002u, 2u);
+	make(mib, 136u, 1u, udp, 2);
+	make(mib, 150u, 1u, agent, 5);
+	make(mib, 153u, 1u, user1, 4);
+	set_text(mib, 153u, 1u, 3u, "Example");
+	make(mib, 153u, 3u, user3, 4);
+	make(mib, 139u, 1u, ctp1, 3);
+	make(mib, 139u, 2u, ctp2, 3);
+	make(mib, 142u, 1u, media, 6);
+	CHECK_EQ(omci_mib_create(mib, 143u, 1u), OMCI_OK);
+	set_num(mib, 143u, 1u, 6u, 1u, 1u);
+	CHECK_EQ(omci_mib_create(mib, 47u, 0x0301u), OMCI_OK);
+	set_num(mib, 47u, 0x0301u, 3u, 4u, 1u);
+	CHECK_EQ(omci_mib_create(mib, 84u, 0x0301u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 84u, 0x0301u, 1u, vids, sizeof(vids)),
+		 OMCI_OK);
+
+	written(omci_publish_phone, mib);
+	CHECK(HOLDS("{\"method\":\"omci\",\"lines\":[{\"port\":1,",
+		    "\"number\":\"48221234567\",\"display\":\"Example\",",
+		    "\"user\":\"48221234567\",\"password_set\":true},",
+		    "{\"port\":2,\"number\":null,\"display\":null,",
+		    "\"user\":null,\"password_set\":false}],"));
+	CHECK(HOLDS("\"server\":{\"proxy\":\"sip.operator.example\",",
+		    "\"outbound_proxy\":\"192.0.2.10\",",
+		    "\"registrar\":\"sip.operator.example\",",
+		    "\"domain\":\"operator.example\",\"port\":5060,",
+		    "\"transport\":\"udp\"},"));
+	CHECK(HOLDS("\"codecs\":[\"G.711 A-law\",\"G.711 \xc2\xb5-law\",",
+		    "\"G.729\"],\"dtmf\":\"rfc2833\",",
+		    "\"vlan\":{\"fibre\":600,\"host\":600}}"));
+	CHECK(strstr(g_out, "example-sip-secret") == NULL);
+	written(omci_publish_phone_secrets, mib);
+	CHECK(HOLDS(
+		"{\"lines\":[{\"port\":1,\"secret\":\"example-sip-secret\"},",
+		"{\"port\":2,\"secret\":\"\"}]}"));
+	written(omci_publish_login, mib);
+	CHECK(HOLDS("\"user\":\"abc@isp.example\""));
+
+	/* TR-069; DTMF in the voice, or by SIP; TCP, and another protocol; no port. */
+	set_num(mib, 138u, 0u, 4u, 3u, 1u);
+	set_num(mib, 142u, 1u, 15u, 0u, 1u);
+	set_num(mib, 142u, 1u, 3u, 99u, 1u);
+	set_num(mib, 136u, 1u, 2u, 6u, 1u);
+	set_num(mib, 157u, 0x8004u, 1u, 20u, 1u);
+	written(omci_publish_phone, mib);
+	CHECK(HOLDS("{\"method\":\"tr069\","));
+	CHECK(HOLDS("\"dtmf\":\"inband\""));
+	CHECK(HOLDS("\"codecs\":[\"payload type 99\","));
+	CHECK(HOLDS("\"transport\":\"tcp\""));
+	CHECK(HOLDS("\"domain\":\"operator.example\""));
+	set_num(mib, 142u, 1u, 15u, 1u, 1u);
+	set_num(mib, 143u, 1u, 6u, 0u, 1u);
+	set_num(mib, 136u, 1u, 2u, 132u, 1u);
+	written(omci_publish_phone, mib);
+	CHECK(HOLDS("\"dtmf\":\"info\""));
+	CHECK(HOLDS("\"transport\":null"));
+	CHECK_EQ(omci_mib_delete(mib, 136u, 1u), OMCI_OK);
+	written(omci_publish_phone, mib);
+	CHECK(HOLDS("\"port\":null,"));
+
+	/* No method chosen, but SIP accounts sent; a socket of none. */
+	set_num(mib, 138u, 0u, 4u, 0u, 1u);
+	CHECK_EQ(omci_mib_create(mib, 53u, 0x0203u), OMCI_OK);
+	written(omci_publish_phone, mib);
+	CHECK(HOLDS("{\"method\":\"omci\","));
+	CHECK(HOLDS("{\"port\":3,\"number\":null,\"display\":null,",
+		    "\"user\":null,\"password_set\":false}]"));
+
+	/*
+	 * The VLAN of an IP host's rules, voice tagged at 610 on the fibre;
+	 * of one that tags it twice, no VLAN of its own towards the host.
+	 */
+	CHECK_EQ(omci_mib_create(mib, 171u, 0x0901u), OMCI_OK);
+	set_num(mib, 171u, 0x0901u, 1u, 3u, 1u);
+	put_rule(row, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+		 (5u << 16) | (610u << 3));
+	CHECK_EQ(omci_mib_table_put(mib, 171u, 0x0901u, 6u, row, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	written(omci_publish_phone, mib);
+	CHECK(HOLDS("\"vlan\":{\"fibre\":610,\"host\":610}"));
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x0901u), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, 171u, 0x0902u), OMCI_OK);
+	set_num(mib, 171u, 0x0902u, 1u, 3u, 1u);
+	put_rule(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (200u << 3),
+		 (5u << 16) | (410u << 3));
+	CHECK_EQ(omci_mib_table_put(mib, 171u, 0x0902u, 6u, row, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	written(omci_publish_phone, mib);
+	CHECK(HOLDS("\"host\":null}"));
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x0902u), OMCI_OK);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+}
+
 int main(void)
 {
 	RUN_MIB(test_the_classes_asked_for_in_their_order);
@@ -350,5 +631,6 @@ int main(void)
 	RUN_MIB(test_the_status);
 	RUN_MIB(test_the_services);
 	RUN_MIB(test_the_login);
+	RUN_MIB(test_the_phone);
 	return OMCI_T_REPORT("test_publish");
 }

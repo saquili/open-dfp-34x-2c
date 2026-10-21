@@ -241,8 +241,13 @@ static size_t gather(const struct omci_mib *mib,
 
 		nvlan = vlans_of(mib, cur.instance, vlan);
 
+		/*
+		 * An Ethernet UNI, the VEIP, and an IP host, whose services
+		 * a device behind the stick takes, are the one SFP lane.
+		 */
 		if (tp_type == OMCI_BRIDGE_TP_PPTP_ETH ||
-		    tp_type == OMCI_BRIDGE_TP_VEIP) {
+		    tp_type == OMCI_BRIDGE_TP_VEIP ||
+		    tp_type == OMCI_BRIDGE_TP_IP_HOST) {
 			if (n >= cap) {
 				bad++;
 				continue;

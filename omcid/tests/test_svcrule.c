@@ -5,7 +5,8 @@
  * Tests of the rules of the services (me/svcrule.h): read from a text, and
  * what they make of the VLAN rules that reach the hardware. Two instances of
  * class 171 stand for the Ethernet UNI (association 2) and the VEIP (10);
- * others reach their output through a bridge port (association 0).
+ * others reach their output through a bridge port (association 0), and an
+ * IP host's are of association 3.
  */
 
 #include <stdint.h>
@@ -38,6 +39,18 @@ static void xlate(struct omci_mib *mib, uint16_t instance, unsigned int host,
 
 	pack(row, 0xf8000000u, (8u << 28) | (host << 15), 0x400f0000u,
 	     (8u << 16) | (fibre << 3));
+	CHECK_EQ(omci_mib_table_put(mib, 171u, instance, 6u, row, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+}
+
+/* Untagged frames tagged with fibre VID @fibre at priority 5. */
+static void push(struct omci_mib *mib, uint16_t instance, unsigned int fibre)
+{
+	uint8_t row[16];
+
+	pack(row, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+	     (5u << 16) | (fibre << 3));
 	CHECK_EQ(omci_mib_table_put(mib, 171u, instance, 6u, row, 16, 8,
 				    OMCI_MIB_TABLE_LAST),
 		 OMCI_OK);
@@ -278,11 +291,75 @@ static void test_bridge_ports(void)
 	omci_mib_fini(mib);
 }
 
+static void test_ip_host(void)
+{
+	struct omci_mib *mib = NULL;
+	const struct omci_svc_rule *person = NULL, *made = NULL;
+	size_t made_n = 0;
+	struct omci_svc_rule rules[1];
+	uint16_t fibre = 0, host = 0;
+
+	/*
+	 * The UNI's internet tags untagged frames, and so does an IP host's
+	 * voice, which reaches a device behind the stick: the voice goes to the
+	 * host in a VLAN of its own, its fibre VID, and the move is the stick's.
+	 */
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	me171(mib, 0x101u, 2u, 0x101u);
+	me171(mib, 0x901u, 3u, 0x0000u);
+	push(mib, 0x101u, 35u);
+	push(mib, 0x901u, 600u);
+	omci_hw_service_rules_set(rules, 0u);
+	CHECK(!omci_vlan_phone(&fibre, &host));
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(host_of(600u), 600u);
+	CHECK(omci_vlan_phone(&fibre, &host));
+	CHECK(fibre == 600u && host == 600u);
+	(void)omci_vlan_services(&person, &made, &made_n);
+	CHECK(made_n == 1u && made[0].fibre == 600u && made[0].host == 600u &&
+	      made[0].made);
+
+	/* Its fibre VID the host VID of another rule: the first free one. */
+	xlate(mib, 0x101u, 600u, 101u);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(host_of(600u), 2u);
+	CHECK(omci_vlan_phone(&fibre, &host) && host == 2u);
+
+	/* A person's move, which is no move of the stick's. */
+	rules[0] = (struct omci_svc_rule){ .fibre = 600u,
+					   .host = 700u,
+					   .action = OMCI_SVC_MOVE };
+	omci_hw_service_rules_set(rules, 1u);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(host_of(600u), 700u);
+	(void)omci_vlan_services(&person, &made, &made_n);
+	CHECK_EQ(made_n, 0u);
+
+	/* The UNI's alone: no voice. */
+	rules[0] = (struct omci_svc_rule){ .fibre = 600u,
+					   .action = OMCI_SVC_ONLY_UNI };
+	omci_hw_service_rules_set(rules, 1u);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(host_of(600u), 0u);
+	CHECK(!omci_vlan_phone(&fibre, &host));
+
+	/* An IP host's bridge port (association 0, type 4) is the same. */
+	omci_hw_service_rules_set(rules, 0u);
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x901u), OMCI_OK);
+	port(mib, 0x204u, 4u);
+	me171(mib, 0x902u, 0u, 0x204u);
+	push(mib, 0x902u, 610u);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(host_of(610u), 610u);
+	omci_mib_fini(mib);
+}
+
 int main(void)
 {
 	test_parse();
 	test_program();
 	test_free_vid();
 	test_bridge_ports();
+	test_ip_host();
 	return OMCI_T_REPORT("test_svcrule");
 }

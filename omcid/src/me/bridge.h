@@ -50,6 +50,9 @@ enum {
  * enum omci_bridge_tp_type - What a bridge port leads to (attribute 3 of class 47).
  * @OMCI_BRIDGE_TP_PPTP_ETH: an Ethernet UNI
  * @OMCI_BRIDGE_TP_MAPPER: an IEEE 802.1p mapper, which leads to GEM ports
+ * @OMCI_BRIDGE_TP_IP_HOST: an IP host of the ONU, whose voice and other
+ *	services the OLT sets up for the ONU's own IP stack; on the stick a
+ *	device behind it, as the stick runs no SIP agent of its own
  * @OMCI_BRIDGE_TP_GEM_IW: a GEM interworking termination point
  * @OMCI_BRIDGE_TP_MCAST_GEM: a multicast GEM interworking termination point
  * @OMCI_BRIDGE_TP_VEIP: a virtual Ethernet interface point
@@ -57,6 +60,7 @@ enum {
 enum omci_bridge_tp_type {
 	OMCI_BRIDGE_TP_PPTP_ETH = 1,
 	OMCI_BRIDGE_TP_MAPPER = 3,
+	OMCI_BRIDGE_TP_IP_HOST = 4,
 	OMCI_BRIDGE_TP_GEM_IW = 5,
 	OMCI_BRIDGE_TP_MCAST_GEM = 6,
 	OMCI_BRIDGE_TP_VEIP = 11,

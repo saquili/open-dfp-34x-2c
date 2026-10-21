@@ -23,9 +23,12 @@ enum {
 	ME_CIRCUIT_PACK = 6,
 	ME_SOFTWARE_IMAGE = 7,
 	ME_PPTP_ETH_UNI = 11,
+	ME_PPTP_POTS_UNI = 53,
 	ME_PPTP_LCT_UNI = 83,
 	ME_OLT_G = 131,
 	ME_IP_HOST = 134,
+	ME_VOIP_CONFIG = 138,
+	ME_VOIP_LINE_STATUS = 141,
 	ME_ONU_G = 256,
 	ME_ONU2_G = 257,
 	ME_TCONT = 262,
@@ -230,14 +233,28 @@ static const char *pack_version(const struct omci_hw_caps *caps)
 						caps->identity.version;
 }
 
+/* The phone sockets of a slot. */
+static uint8_t ports_of(const struct omci_hw_caps *caps, uint16_t cardholder)
+{
+	uint8_t n = 0;
+
+	for (unsigned int i = 0; i < caps->port_count; i++)
+		n += caps->ports[i].cardholder == cardholder ? 1u : 0u;
+	return n;
+}
+
 static void make_circuit_pack(struct build *b, const struct omci_hw_caps *caps,
 			      const struct omci_hw_port *p)
 {
 	const bool pon = p->pptp_instance == 0;
+	const bool pots = p->plugin_type == OMCI_HW_PLUGIN_POTS;
 
 	begin(b, ME_CIRCUIT_PACK, p->cardholder);
 	put_u8(b, 1, p->plugin_type);
-	put_u8(b, 2, pon ? 1u : caps->uni_port_count);
+	put_u8(b, 2,
+	       pon  ? 1u :
+	       pots ? ports_of(caps, p->cardholder) :
+		      caps->uni_port_count);
 	put(b, 3, caps->identity.serial, sizeof(caps->identity.serial));
 	put_text(b, 4, pack_version(caps), 0);
 	put_text(b, 5, caps->identity.vendor_id, 0);
@@ -245,8 +262,9 @@ static void make_circuit_pack(struct build *b, const struct omci_hw_caps *caps,
 	put_blank(b, 9);
 	put_u8(b, 11, pon ? caps->num_tcont : 0u);
 	put_u8(b, 12,
-	       pon ? (uint8_t)(caps->num_tcont * caps->num_priq_per_tcont) :
-		     caps->num_priq_per_port);
+	       pon  ? (uint8_t)(caps->num_tcont * caps->num_priq_per_tcont) :
+	       pots ? 0u :
+		      caps->num_priq_per_port);
 	put_u8(b, 13, pon ? caps->num_tcont : 0u);
 	finish(b);
 }
@@ -276,18 +294,36 @@ static void make_uni_g(struct build *b, const struct omci_hw_port *p)
 }
 
 /*
+ * A phone socket: its POTS UNI, unlocked, of 600 ohm, full-time on-hook
+ * transmission, no gain, enabled and on hook, with every value G.988 9.9.1
+ * gives at its instantiation; and its VoIP line status, of no session yet
+ * (9.9.11), which nothing on the stick changes, as no SIP agent runs here.
+ */
+static void make_pots(struct build *b, const struct omci_hw_port *p)
+{
+	begin(b, ME_PPTP_POTS_UNI, p->pptp_instance);
+	finish(b);
+	make_uni_g(b, p);
+	begin(b, ME_VOIP_LINE_STATUS, p->pptp_instance);
+	finish(b);
+}
+
+/*
  * The equipment of port @i: its cardholder and circuit pack, which the
- * Ethernet UNIs of one slot share, the first of them making them; a
- * subscriber port also gets its UNI. A device that tells the OLT of its
- * VEIP alone tells it of no Ethernet UNI, nor of their slot.
+ * ports of one slot share, the first of them making them; a subscriber port
+ * also gets its UNI. A device that tells the OLT of its VEIP alone tells it
+ * of no Ethernet UNI, nor of their slot; its phone sockets it tells all the
+ * same.
  */
 static void make_slot(struct build *b, const struct omci_hw_caps *caps,
 		      unsigned int i)
 {
 	const struct omci_hw_port *p = &caps->ports[i];
+	const bool pots = p->plugin_type == OMCI_HW_PLUGIN_POTS;
 	bool made = false;
 
-	if (p->pptp_instance != 0 && caps->uni_report == OMCI_HW_UNI_VEIP)
+	if (p->pptp_instance != 0 && !pots &&
+	    caps->uni_report == OMCI_HW_UNI_VEIP)
 		return;
 	for (unsigned int k = 0; k < i; k++)
 		made = made || caps->ports[k].cardholder == p->cardholder;
@@ -295,10 +331,39 @@ static void make_slot(struct build *b, const struct omci_hw_caps *caps,
 		make_cardholder(b, p);
 		make_circuit_pack(b, caps, p);
 	}
-	if (p->pptp_instance != 0) {
+	if (pots) {
+		make_pots(b, p);
+	} else if (p->pptp_instance != 0) {
 		make_pptp(b, p);
 		make_uni_g(b, p);
 	}
+}
+
+/*
+ * VoIP config data (G.988 9.9.18), of a device with phone sockets: SIP the
+ * one signalling protocol it has, and OMCI the one way to set it up, neither
+ * chosen yet; no configuration address; inactive, and no profile retrieved.
+ */
+static void make_voip_config(struct build *b)
+{
+	static const uint8_t by_omci[4] = { 0, 0, 0, 1 };
+
+	begin(b, ME_VOIP_CONFIG, 0);
+	put_u8(b, 1, 1u);
+	put(b, 3, by_omci, sizeof(by_omci));
+	put_u16(b, 5, 0xffffu);
+	finish(b);
+}
+
+/* Whether the device has a phone socket. */
+static bool has_pots(const struct omci_hw_caps *caps)
+{
+	bool pots = false;
+
+	for (unsigned int i = 0; i < caps->port_count; i++)
+		pots = pots ||
+		       caps->ports[i].plugin_type == OMCI_HW_PLUGIN_POTS;
+	return pots;
 }
 
 /*
@@ -406,6 +471,7 @@ static void make_downstream_queues(struct build *b,
 		const struct omci_hw_port *p = &caps->ports[i];
 
 		if (p->pptp_instance == 0 ||
+		    p->plugin_type == OMCI_HW_PLUGIN_POTS ||
 		    caps->uni_report == OMCI_HW_UNI_VEIP)
 			continue;
 		for (unsigned int q = 0; q < caps->num_priq_per_port;
@@ -505,6 +571,8 @@ enum omci_status omci_me_defaults_apply(struct omci_mib *mib,
 	make_olt_g(&b);
 	for (unsigned int i = 0; i < caps->port_count; i++)
 		make_slot(&b, caps, i);
+	if (has_pots(caps))
+		make_voip_config(&b);
 	make_ani_g(&b, caps);
 	for (unsigned int n = 0; n < caps->num_tcont; n++)
 		make_tcont(&b, n);

@@ -29,12 +29,15 @@
  * @OMCI_ME_TABLE_CTRL_ENTRY: the first byte is the row's entry number, its
  *	key, and the two high bits of the second add the row (01), remove it
  *	(00) or clear the table (10) (G.988 9.3.6)
+ * @OMCI_ME_TABLE_CTRL_INDEX: the policy's key leads the row, and a key of
+ *	zeros clears the table (G.988 9.9.3, 9.9.6)
  */
 enum omci_me_table_ctrl {
 	OMCI_ME_TABLE_CTRL_NONE = 0,
 	OMCI_ME_TABLE_CTRL_KEY,
 	OMCI_ME_TABLE_CTRL_PARTS,
 	OMCI_ME_TABLE_CTRL_ENTRY,
+	OMCI_ME_TABLE_CTRL_INDEX,
 };
 
 /**

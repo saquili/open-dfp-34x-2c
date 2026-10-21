@@ -7,8 +7,8 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * 4956f3d61d5ab614c255d3ec6390ce59a4013e7fdb730fbb33871dab010a8220
- * 51 classes, 443 attributes.
+ * c8be1de266eeea602177155a42576ec18a8024b3c941f5ddff1da636d9394397
+ * 63 classes, 570 attributes.
  */
 
 #include "me/table.h"
@@ -256,6 +256,71 @@ static const struct omci_me_attr attrs_class_52[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
 };
 
+/* Class 53: Physical path termination point POTS UNI */
+static const struct omci_me_attr attrs_class_53[] = {
+	{ "Administrative state", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 1 */
+	{ "Deprecated", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 2 */
+	{ "ARC", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_AVC }, /* 3 */
+	{ "ARC interval", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 4 */
+	{ "Impedance", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 5 */
+	{ "Transmission path", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 6 */
+	{ "Rx gain", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 7 */
+	{ "Tx gain", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 8 */
+	{ "Operational state", 1, OMCI_ME_ACC_READ, OMCI_ME_ATTR_AVC }, /* 9 */
+	{ "Hook state", 1, OMCI_ME_ACC_READ, 0 }, /* 10 */
+	{ "POTS holdover time", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 11 */
+	{ "Nominal feed voltage", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 12 */
+	{ "Loss of softswitch", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 13 */
+};
+
+/* Class 58: Voice service profile */
+static const struct omci_me_attr attrs_class_58[] = {
+	{ "Announcement type", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Jitter target", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 2 */
+	{ "Jitter buffer max", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 3 */
+	{ "Echo cancel ind", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "PSTN protocol variant", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 5 */
+	{ "DTMF digit levels", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 6 */
+	{ "DTMF digit duration", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 7 */
+	{ "Hook flash minimum time", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 8 */
+	{ "Hook flash maximum time", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 9 */
+	{ "Tone pattern table", 20, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_TABLE }, /* 10 */
+	{ "Tone event table", 7, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_TABLE }, /* 11 */
+	{ "Ringing pattern table", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_TABLE }, /* 12 */
+	{ "Ringing event table", 7, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_TABLE }, /* 13 */
+	{ "Network specific extensions pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 14 */
+};
+
 /* Class 78: VLAN tagging operation configuration data */
 static const struct omci_me_attr attrs_class_78[] = {
 	{ "Upstream VLAN tagging operation mode", 1,
@@ -443,6 +508,222 @@ static const struct omci_me_attr attrs_class_137[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
 };
 
+/* Class 138: VoIP config data */
+static const struct omci_me_attr attrs_class_138[] = {
+	{ "Available signalling protocols", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Signalling protocol used", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Available VoIP configuration methods", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "VoIP configuration method used", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "VoIP configuration address pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "VoIP configuration state", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Retrieve profile", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Profile version", 25, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 8 */
+};
+
+/* Class 139: VoIP voice CTP */
+static const struct omci_me_attr attrs_class_139[] = {
+	{ "User protocol pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "PPTP pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "VoIP media profile pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Signalling code", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+};
+
+/* Class 141: VoIP line status */
+static const struct omci_me_attr attrs_class_141[] = {
+	{ "Voip codec used", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Voip voice server status", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Voip port session type", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Voip call 1 packet period", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Voip call 2 packet period", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Voip call 1 dest addr", 25, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Voip call 2 dest addr", 25, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Voip line state", 1, OMCI_ME_ACC_READ, 0 }, /* 8 */
+	{ "Emergency call status", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_AVC }, /* 9 */
+};
+
+/* Class 142: VoIP media profile */
+static const struct omci_me_attr attrs_class_142[] = {
+	{ "Fax mode", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Voice service profile pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Codec selection (1st order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Packet period selection (1st order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Silence suppression (1st order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Codec selection (2nd order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Packet period selection (2nd order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Silence suppression (2nd order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "Codec selection (3rd order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 9 */
+	{ "Packet period selection (3rd order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 10 */
+	{ "Silence suppression (3rd order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 11 */
+	{ "Codec selection (4th order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 12 */
+	{ "Packet period selection (4th order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 13 */
+	{ "Silence suppression (4th order)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 14 */
+	{ "OOB DTMF", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 15 */
+	{ "RTP profile pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 16 */
+};
+
+/* Class 143: RTP profile data */
+static const struct omci_me_attr attrs_class_143[] = {
+	{ "Local port min", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Local port max", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 2 */
+	{ "DSCP mark", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Piggyback events", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Tone events", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "DTMF events", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "CAS events", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "IP host config pointer", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 8 */
+};
+
+/* Class 145: Network dial plan table */
+static const struct omci_me_attr attrs_class_145[] = {
+	{ "Dial plan number", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Dial plan table max size", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Critical dial timeout", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Partial dial timeout", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Dial plan format", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Dial plan table", 30, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE }, /* 6 */
+};
+
+/* Class 146: VoIP application service profile */
+static const struct omci_me_attr attrs_class_146[] = {
+	{ "CID features", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Call waiting features", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Call progress or transfer features", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Call presentation features", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Direct connect feature", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Direct connect URI pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Bridged line agent URI pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Conference factory URI pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "Dial tone feature delay/warmline timer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 9 */
+	{ "IP host pointer", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 10 */
+};
+
+/* Class 147: VoIP feature access codes */
+static const struct omci_me_attr attrs_class_147[] = {
+	{ "Cancel call waiting", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 1 */
+	{ "Call hold", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 2 */
+	{ "Call park", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 3 */
+	{ "Caller ID activate", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 4 */
+	{ "Caller ID deactivate", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 5 */
+	{ "Do not disturb activation", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 6 */
+	{ "Do not disturb deactivation", 5,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 7 */
+	{ "Do not disturb PIN change", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 8 */
+	{ "Emergency service number", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 9 */
+	{ "Intercom service", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 10 */
+	{ "Unattended/blind call transfer", 5,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 11 */
+	{ "Attended call transfer", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 12 */
+};
+
 /* Class 148: Authentication security method */
 static const struct omci_me_attr attrs_class_148[] = {
 	{ "Validation scheme", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
@@ -454,6 +735,87 @@ static const struct omci_me_attr attrs_class_148[] = {
 	{ "Realm", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
 	{ "Username 2", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 5 */
+};
+
+/* Class 150: SIP agent config data */
+static const struct omci_me_attr attrs_class_150[] = {
+	{ "Proxy server address pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Outbound proxy address pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Primary SIP DNS", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Secondary SIP DNS", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "TCP/UDP pointer", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "SIP reg exp time", 4, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "SIP rereg head start time", 4, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Host part URI", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "SIP status", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 9 */
+	{ "SIP registrar", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 10 */
+	{ "Softswitch", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 11 */
+	{ "SIP response table", 5, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_TABLE }, /* 12 */
+	{ "SIP option transmit control", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 13 */
+	{ "SIP URI format", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 14 */
+	{ "Redundant SIP agent pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 15 */
+};
+
+/* Class 153: SIP user data */
+static const struct omci_me_attr attrs_class_153[] = {
+	{ "SIP agent pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "User part AOR", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "SIP display name", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Username and password", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Voicemail server SIP URI", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Voicemail subscription expiration time", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Network dial plan pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Application services profile pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "Feature code pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 9 */
+	{ "PPTP pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 10 */
+	{ "Release timer", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 11 */
+	{ "Receiver off hook (ROH) timer", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 12 */
 };
 
 /* Class 157: Large string */
@@ -1268,6 +1630,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_52,
 	},
 	{
+		.class_id = 53,
+		.name = "Physical path termination point POTS UNI",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get */
+		.actions = 0x00000300u,
+		.alarms = 0x00000000u,
+		.attr_count = 13,
+		.attrs = attrs_class_53,
+	},
+	{
+		.class_id = 58,
+		.name = "Voice service profile",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Next */
+		.actions = 0x04000350u,
+		.alarms = 0x00000002u,
+		.attr_count = 14,
+		.attrs = attrs_class_58,
+	},
+	{
 		.class_id = 78,
 		.name = "VLAN tagging operation configuration data",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -1368,6 +1750,86 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_137,
 	},
 	{
+		.class_id = 138,
+		.name = "VoIP config data",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get */
+		.actions = 0x00000300u,
+		.alarms = 0x0007ffffu,
+		.attr_count = 8,
+		.attrs = attrs_class_138,
+	},
+	{
+		.class_id = 139,
+		.name = "VoIP voice CTP",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 4,
+		.attrs = attrs_class_139,
+	},
+	{
+		.class_id = 141,
+		.name = "VoIP line status",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Get */
+		.actions = 0x00000200u,
+		.alarms = 0x00000000u,
+		.attr_count = 9,
+		.attrs = attrs_class_141,
+	},
+	{
+		.class_id = 142,
+		.name = "VoIP media profile",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 16,
+		.attrs = attrs_class_142,
+	},
+	{
+		.class_id = 143,
+		.name = "RTP profile data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 8,
+		.attrs = attrs_class_143,
+	},
+	{
+		.class_id = 145,
+		.name = "Network dial plan table",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Next */
+		.actions = 0x04000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 6,
+		.attrs = attrs_class_145,
+	},
+	{
+		.class_id = 146,
+		.name = "VoIP application service profile",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 10,
+		.attrs = attrs_class_146,
+	},
+	{
+		.class_id = 147,
+		.name = "VoIP feature access codes",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 12,
+		.attrs = attrs_class_147,
+	},
+	{
 		.class_id = 148,
 		.name = "Authentication security method",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -1376,6 +1838,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000000u,
 		.attr_count = 5,
 		.attrs = attrs_class_148,
+	},
+	{
+		.class_id = 150,
+		.name = "SIP agent config data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Next */
+		.actions = 0x04000350u,
+		.alarms = 0x0000000fu,
+		.attr_count = 15,
+		.attrs = attrs_class_150,
+	},
+	{
+		.class_id = 153,
+		.name = "SIP user data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x0000001fu,
+		.attr_count = 12,
+		.attrs = attrs_class_153,
 	},
 	{
 		.class_id = 157,

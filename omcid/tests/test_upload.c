@@ -380,6 +380,11 @@ static void test_every_class_but_two_appears(void)
 
 	CHECK(omci_t_up(&fx));
 	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	/* A phone socket, which the synthetic ONU has not, for its classes. */
+	caps.ports[caps.port_count++] =
+		(struct omci_hw_port){ .pptp_instance = 0x0201,
+				       .cardholder = 0x0102,
+				       .plugin_type = OMCI_HW_PLUGIN_POTS };
 	CHECK_EQ(omci_me_defaults_apply(fx.mib, &caps), OMCI_OK);
 
 	for (unsigned int i = 0; i < tsv_class_count; i++)

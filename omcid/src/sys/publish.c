@@ -294,7 +294,8 @@ void omci_publish_login(const struct omci_mib *mib,
 
 	for (enum omci_status w = omci_mib_walk_first(mib, &cur); w == OMCI_OK;
 	     w = omci_mib_walk_next(mib, &cur)) {
-		if (cur.class_id != ME_AUTH)
+		if (cur.class_id != ME_AUTH ||
+		    omci_publish_sip_account(mib, cur.instance))
 			continue;
 		size_t n = auth_text(mib, cur.instance, AUTH_USER1, user, 0);
 

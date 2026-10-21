@@ -190,7 +190,7 @@ static void test_every_table_is_stored_or_rendered(void)
 			other += !table && (is_rendered || is_stored) ? 1u : 0u;
 		}
 	printf("  %u stored, %u rendered\n", stored, rendered);
-	CHECK_EQ(stored, 9u);
+	CHECK_EQ(stored, 15u);
 	CHECK_EQ(rendered, 6u);
 	CHECK_EQ(other, 0u);
 
@@ -312,7 +312,8 @@ static void test_the_stored_tables_fold_rows_by_their_key(void)
 			if (!a->table ||
 			    !omci_me_table_policy(t->id, (uint8_t)n, &policy))
 				continue;
-			if ((t->id == 171u && n == 6u) ||
+			/* A dial plan is known by one byte: test_the_voice_tables(). */
+			if ((t->id == 171u && n == 6u) || t->id == 145u ||
 			    policy.ctrl != OMCI_ME_TABLE_CTRL_NONE)
 				continue;
 			tested++;
@@ -498,6 +499,70 @@ static void test_the_table_functions_refuse_what_cannot_be_asked(void)
 	CHECK_EQ(two[0], 0xaau);
 }
 
+/*
+ * The voice tables known by a leading index (G.988 9.9.3, 9.9.6): a row is
+ * added, or replaces the row of its index, and a row of index 0 clears the
+ * table, which takes no new index once full. A dial plan (9.9.10) is known
+ * by its number, and a row whose action is 0 removes it.
+ */
+static void test_the_voice_tables(void)
+{
+	struct omci_t_fixture fx;
+	uint8_t row[32] = { 0 }, flat[40 * 20];
+
+	fixture(&fx);
+
+	row[0] = 1;
+	row[1] = 1;
+	CHECK_EQ(set_row(fx.eng, 58u, 10u, row, 20u), R_OK);
+	row[0] = 2;
+	CHECK_EQ(set_row(fx.eng, 58u, 10u, row, 20u), R_OK);
+	row[0] = 1;
+	row[1] = 0;
+	CHECK_EQ(set_row(fx.eng, 58u, 10u, row, 20u), R_OK);
+	CHECK_EQ(walk(fx.eng, 58u, INSTANCE, 10u, flat, sizeof(flat)), 40);
+	CHECK(flat[0] == 1u && flat[1] == 0u && flat[20] == 2u);
+	row[0] = 0;
+	CHECK_EQ(set_row(fx.eng, 58u, 10u, row, 20u), R_OK);
+	CHECK_EQ(get_size(fx.eng, 58u, INSTANCE, 10u), 0);
+
+	for (unsigned int k = 1; k <= 32u; k++) {
+		row[0] = (uint8_t)k;
+		CHECK_EQ(set_row(fx.eng, 58u, 12u, row, 5u), R_OK);
+	}
+	row[0] = 33;
+	CHECK_EQ(set_row(fx.eng, 58u, 12u, row, 5u), R_DEVICE_BUSY);
+	row[0] = 5;
+	CHECK_EQ(set_row(fx.eng, 58u, 12u, row, 5u), R_OK);
+	CHECK_EQ(get_size(fx.eng, 58u, INSTANCE, 12u), 32 * 5);
+
+	row[0] = 0x01;
+	row[1] = 0x94;
+	CHECK_EQ(set_row(fx.eng, 150u, 12u, row, 5u), R_OK);
+	CHECK_EQ(get_size(fx.eng, 150u, INSTANCE, 12u), 5);
+	row[0] = 0;
+	row[1] = 0;
+	CHECK_EQ(set_row(fx.eng, 150u, 12u, row, 5u), R_OK);
+	CHECK_EQ(get_size(fx.eng, 150u, INSTANCE, 12u), 0);
+
+	memset(row, 0, sizeof(row));
+	row[0] = 1;
+	row[1] = 1;
+	memcpy(&row[2], "0T", 2);
+	CHECK_EQ(set_row(fx.eng, 145u, 6u, row, 30u), R_OK);
+	row[0] = 2;
+	CHECK_EQ(set_row(fx.eng, 145u, 6u, row, 30u), R_OK);
+	CHECK_EQ(get_size(fx.eng, 145u, INSTANCE, 6u), 60);
+	row[0] = 1;
+	row[1] = 0;
+	CHECK_EQ(set_row(fx.eng, 145u, 6u, row, 30u), R_OK);
+	CHECK_EQ(set_row(fx.eng, 145u, 6u, row, 30u), R_OK);
+	CHECK_EQ(walk(fx.eng, 145u, INSTANCE, 6u, flat, sizeof(flat)), 30);
+	CHECK_EQ(flat[0], 2u);
+
+	omci_t_down(&fx);
+}
+
 int main(int argc, char **argv)
 {
 	if (!tsv_open(argc, argv)) {
@@ -511,6 +576,7 @@ int main(int argc, char **argv)
 	RUN(test_the_stored_tables_fold_rows_by_their_key);
 	RUN(test_the_vlan_rule_table_walks);
 	RUN(test_the_table_functions_refuse_what_cannot_be_asked);
+	RUN(test_the_voice_tables);
 
 	return OMCI_T_REPORT("test_tables");
 }

@@ -625,14 +625,21 @@ static size_t g_made_n;
 static struct omci_svc_rule g_making[OMCI_SVC_MAX];
 static size_t g_making_n;
 
+/*
+ * The VLAN of an IP host's service, voice as a rule, on the fibre and
+ * towards the host (0 untagged), of the last recorded gathering and of the
+ * one under way; a fibre VLAN of 0 while there is none.
+ */
+static uint16_t g_phone[2], g_phoning[2];
+
 /* The class 171 instance each gathered rule came of, by its place. */
 static uint16_t g_rule_inst[OMCI_HW_VLAN_MAX_RULES];
 
 /* The host VIDs that the MIB's rules match and the person's moves give, a bit each. */
 static uint8_t g_host_used[4096u / 8u];
 
-/* Where the rules of an instance of class 171 lead: an Ethernet UNI, the VEIP, or else. */
-enum out_kind { OUT_OTHER, OUT_UNI, OUT_VEIP };
+/* Where the rules of an instance of class 171 lead: an Ethernet UNI, the VEIP, an IP host, or else. */
+enum out_kind { OUT_OTHER, OUT_UNI, OUT_VEIP, OUT_IPHOST };
 
 /* The association type of class 171 (G.988 9.3.13), attribute 1, and its pointer, 7. */
 enum {
@@ -640,6 +647,7 @@ enum {
 	ME171_ASSOC_PTR = 7,
 	ME171_ASSOC_BRIDGE_PORT = 0,
 	ME171_ASSOC_PPTP_ETH = 2,
+	ME171_ASSOC_IP_HOST = 3,
 	ME171_ASSOC_VEIP = 10,
 };
 
@@ -654,6 +662,8 @@ static enum out_kind out_of(const struct omci_mib *mib, uint16_t class_id,
 		return OUT_UNI;
 	if (type == ME171_ASSOC_VEIP)
 		return OUT_VEIP;
+	if (type == ME171_ASSOC_IP_HOST)
+		return OUT_IPHOST;
 	if (type != ME171_ASSOC_BRIDGE_PORT ||
 	    omci_mib_attr_get(mib, class_id, instance, ME171_ASSOC_PTR, ptr,
 			      sizeof(ptr), NULL) != OMCI_OK ||
@@ -664,6 +674,7 @@ static enum out_kind out_of(const struct omci_mib *mib, uint16_t class_id,
 		return OUT_OTHER;
 	return tp == OMCI_BRIDGE_TP_PPTP_ETH ? OUT_UNI :
 	       tp == OMCI_BRIDGE_TP_VEIP     ? OUT_VEIP :
+	       tp == OMCI_BRIDGE_TP_IP_HOST  ? OUT_IPHOST :
 					       OUT_OTHER;
 }
 
@@ -695,6 +706,26 @@ static uint16_t free_host(uint16_t fibre,
 		for (v = 2; v < 4095u && host_taken(v, rules, n); v++)
 			;
 	return v < 4095u ? v : 0u;
+}
+
+/*
+ * The services of an IP host (G.988 9.4.1), voice as a rule, reach a device
+ * behind the stick on the lane the UNIs share, where a rule that tags its
+ * untagged frames would take the untagged frames of every service. Such a
+ * rule becomes a translation from a host VLAN of its own: a person's move's,
+ * or the fibre's when free, else the first free one. Return: whether it did.
+ */
+static bool own_host_vlan(struct omci_hw_vlan_xlate *c,
+			  const struct omci_svc_rule *sr, uint16_t fibre,
+			  const struct omci_hw_vlan_xlate *rules, size_t n)
+{
+	const uint16_t host = sr != NULL && sr->action == OMCI_SVC_MOVE ?
+				      sr->host :
+				      free_host(fibre, rules, n);
+
+	c->kind = host != 0u ? OMCI_HW_VLAN_CVID_XLATE : c->kind;
+	c->match_cvid = host != 0u ? host : c->match_cvid;
+	return host != 0u;
 }
 
 const char *omci_vlan_fate_name(enum omci_vlan_fate f)
@@ -910,6 +941,8 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 		g_pass_refused_n = 0;
 	}
 	g_making_n = 0;
+	g_phoning[0] = 0;
+	g_phoning[1] = 0;
 
 	bool warned_full = false;
 
@@ -961,6 +994,16 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 				    cand.kind == OMCI_HW_VLAN_CVID_XLATE)
 					cand.match_cvid = sr->host;
 
+				const bool phone =
+					fibre != 0u &&
+					out_of(mib, class_id, cur.instance) ==
+						OUT_IPHOST;
+				const bool own =
+					phone &&
+					cand.kind == OMCI_HW_VLAN_CVID_PUSH &&
+					own_host_vlan(&cand, sr, fibre, rules,
+						      n);
+
 				if (prefer_in_force) {
 					if (!programmable(d.op)) {
 						if (pass == 0u)
@@ -977,9 +1020,9 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 
 					if (sr->action == OMCI_SVC_OFF ||
 					    (sr->action == OMCI_SVC_ONLY_UNI &&
-					     k == OUT_VEIP) ||
+					     k != OUT_UNI && k != OUT_OTHER) ||
 					    (sr->action == OMCI_SVC_ONLY_VEIP &&
-					     k == OUT_UNI)) {
+					     k != OUT_VEIP && k != OUT_OTHER)) {
 						fate_put(record, cur.instance,
 							 i,
 							 OMCI_VLAN_FATE_LOCAL,
@@ -1127,6 +1170,24 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 						"me171: C-VID %u<->%u keeps any priority, and the GEM ports of VLAN %u divide the priorities: each priority is taken apart",
 						d.match_cvid, net_vid, net_vid);
 
+				if (own &&
+				    (sr == NULL ||
+				     sr->action != OMCI_SVC_MOVE) &&
+				    g_making_n < ARRAY_SIZE(g_making))
+					g_making[g_making_n++] =
+						(struct omci_svc_rule){
+							.fibre = fibre,
+							.host = cand.match_cvid,
+							.action = OMCI_SVC_MOVE,
+							.made = true,
+						};
+				if (phone && g_phoning[0] == 0u) {
+					g_phoning[0] = fibre;
+					g_phoning[1] =
+						cand.kind == OMCI_HW_VLAN_CVID_XLATE ?
+							cand.match_cvid :
+							0u;
+				}
 				rules[n] = cand;
 				g_rule_inst[n] = cur.instance;
 				fate_put(record, cur.instance, i,
@@ -1140,6 +1201,8 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 	if (record) {
 		memcpy(g_made, g_making, g_making_n * sizeof(g_making[0]));
 		g_made_n = g_making_n;
+		g_phone[0] = g_phoning[0];
+		g_phone[1] = g_phoning[1];
 	}
 	if (bad_out != NULL)
 		*bad_out = bad;
@@ -1194,6 +1257,13 @@ size_t omci_vlan_services(const struct omci_svc_rule **person,
 	*made = g_made;
 	*made_n = g_made_n;
 	return g_svc_n;
+}
+
+bool omci_vlan_phone(uint16_t *fibre, uint16_t *host)
+{
+	*fibre = g_phone[0];
+	*host = g_phone[1];
+	return g_phone[0] != 0u;
 }
 
 enum omci_status omci_vlan_program(const struct omci_mib *mib,

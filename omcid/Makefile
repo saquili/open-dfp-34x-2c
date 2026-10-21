@@ -154,6 +154,7 @@ CORE_SRC := \
 	src/sys/ctl.c \
 	src/sys/history.c \
 	src/sys/log.c \
+	src/sys/phone.c \
 	src/sys/publish.c \
 	src/sys/transport_pipe.c
 

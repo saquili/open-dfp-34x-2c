@@ -88,8 +88,9 @@ void omci_publish_services(const struct omci_publish_ops *ops, void *ctx);
 /**
  * omci_publish_login() - Write the PPPoE login an OLT sent (Authentication
  *	security method, class 148, G.988 9.12.4): {"user":U,"secret":S,
- *	"realm":R} of the first instance whose username is not blank, its
- *	usernames 1 and 2 together; {} when there is none.
+ *	"realm":R} of the first instance whose username is not blank and
+ *	that is no SIP account (omci_publish_sip_account()), its usernames 1
+ *	and 2 together; {} when there is none.
  * @mib: the MIB
  * @ops: the writer
  * @ctx: passed to @ops
@@ -98,5 +99,45 @@ void omci_publish_services(const struct omci_publish_ops *ops, void *ctx);
  */
 void omci_publish_login(const struct omci_mib *mib,
 			const struct omci_publish_ops *ops, void *ctx);
+
+/**
+ * omci_publish_phone() - Write the phone the OLT set up on the phone
+ *	sockets (G.988 9.9, sys/phone.c), the shape of pond's value "phone":
+ *	{"method":M,"lines":[{"port":P,"number":N,"display":D,"user":U,
+ *	"password_set":B},...],"server":{"proxy","outbound_proxy","registrar",
+ *	"domain","port","transport"},"codecs":[...],"dtmf":T,"vlan":{"fibre",
+ *	"host"}}, null for what is not there and never a password.
+ * @mib: the MIB
+ * @ops: the writer
+ * @ctx: passed to @ops
+ *
+ * The method is "tr069" when VoIP config data says the OLT sets the phone
+ * up through TR-069, "omci" when through OMCI or when it sent a SIP account,
+ * "none" otherwise. A line is a POTS UNI, numbered by its port, with its SIP
+ * user data's account; the server, codecs and DTMF are those of the first.
+ */
+void omci_publish_phone(const struct omci_mib *mib,
+			const struct omci_publish_ops *ops, void *ctx);
+
+/**
+ * omci_publish_phone_secrets() - Write the SIP passwords of the lines:
+ *	{"lines":[{"port":P,"secret":S},...]}, of each POTS UNI with SIP user
+ *	data.
+ * @mib: the MIB
+ * @ops: the writer
+ * @ctx: passed to @ops
+ */
+void omci_publish_phone_secrets(const struct omci_mib *mib,
+				const struct omci_publish_ops *ops, void *ctx);
+
+/**
+ * omci_publish_sip_account() - Whether an authentication security method is
+ *	a SIP account: SIP user data points at it.
+ * @mib: the MIB
+ * @auth: its instance
+ *
+ * Return: true when it is.
+ */
+bool omci_publish_sip_account(const struct omci_mib *mib, uint16_t auth);
 
 #endif

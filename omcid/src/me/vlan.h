@@ -199,6 +199,19 @@ size_t omci_vlan_services(const struct omci_svc_rule **person,
 			  const struct omci_svc_rule **made, size_t *made_n);
 
 /**
+ * omci_vlan_phone() - The VLAN of an IP host's service, voice as a rule, at
+ *	the last programming: of its first rule in force.
+ * @fibre: set to its VLAN on the fibre, 0 without one
+ * @host: set to its VLAN towards the host, 0 for untagged
+ *
+ * A rule of an IP host that tags its untagged frames is given a host VLAN of
+ * its own, the fibre's when free (me/svcrule.h), which the moves made list.
+ *
+ * Return: whether there is one.
+ */
+bool omci_vlan_phone(uint16_t *fibre, uint16_t *host);
+
+/**
  * omci_vlan_row_refused() - Whether the hardware refused a rule at the last
  *	programming, or the programming left it out as one that the hardware
  *	cannot carry where it stands in the list.

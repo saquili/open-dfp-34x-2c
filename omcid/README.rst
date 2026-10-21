@@ -93,11 +93,44 @@ had, as the identity file says (``target/hw_kernel.c``,
 cardholder and circuit pack of that many ports, each UNI the one SFP lane;
 and ``uni_report``, ``pptp`` for the Ethernet UNIs alone, without the VEIP,
 ``veip`` for the VEIP alone, without the UNIs, their slot and their
-downstream queues, or both. A change of them is a change of the identity:
-the stick registers again and builds its MIB anew. The ubus method
-``login`` gives the PPPoE login an OLT sent in an instance of the
+downstream queues, or both; and ``pots_ports``, 0 to 2 phone sockets of
+slot 2, whatever ``uni_report`` says. A change of them is a change of the
+identity: the stick registers again and builds its MIB anew. The ubus
+method ``login`` gives the PPPoE login an OLT sent in an instance of the
 Authentication security method (class 148): its usernames together, its
-password and realm (``omci_publish_login()``).
+password and realm (``omci_publish_login()``), of an instance that no SIP
+user data points at.
+
+The phone sockets
+=================
+
+The stick has no phone socket that takes a wire. It tells the OLT of the
+sockets of the ONT it stands in for, so that the OLT sets the phone up, and
+a person's VoIP device behind the stick uses what the OLT sent. A socket is
+a PPTP POTS UNI (class 53, G.988 9.9.1) with its UNI-G and VoIP line status
+(9.9.11), in a slot whose circuit pack is of type 32, POTS; VoIP config
+data (9.9.18) offers SIP, set up through OMCI. The OLT's classes of SIP
+VoIP are served as G.988 defines them (9.9.2 to 9.9.10): SIP user data and
+agent config data, the VoIP voice CTP, media, voice service and RTP
+profiles, the application service profile, the feature access codes and
+the dial plan table. Their tables are known by their leading index, a zero
+one clearing them (the tone, ringing and SIP response tables), or by their
+number with a removal action (the dial plan).
+
+The voice reaches the device through the IP host the OLT points it at: a
+bridge port of an IP host (type 4) is the SFP lane, as a UNI's is, and the
+VLAN rules of an IP host (association 3, or such a bridge port) that tag
+its untagged frames would take the untagged frames of every service on the
+one lane, so they are given a host VLAN of their own: the fibre's when free,
+else the first free one, a move the stick made that the service rules list
+(``omci_vlan_phone()``), or a person's move. The ubus method ``phone``
+gives what the panel shows (``omci_publish_phone()``): how the OLT sets the
+phone up, each socket's number, display name and SIP user, the SIP servers,
+the codecs, how DTMF goes and the voice's VLAN, never a password; and
+``phone_secrets`` the SIP passwords, which pond shows with root's password.
+
+Not measured on the board, nor with an operator's OLT: the lab OLT sets up
+no phone.
 
 The rules of the services
 =========================

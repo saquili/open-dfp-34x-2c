@@ -14,6 +14,7 @@
 #   only for some equipment is read as mandatory); source: g988:CLAUSE, the clause of the Recommendation.
 # The daemon serves the first attributes of a class and not the later ones of the Recommendation:
 # attribute 16 of class 11 is left out.
+# Attribute 7 of class 138, Retrieve profile, write-only in the Recommendation, is served as R,W.
 #class	2	ONU data	ONU	8,9,11,12,13,14,15	-	-	single instance, number 0	g988:9.1.3
 #class	5	Cardholder	ONU	8,9	0:Plug-in circuit pack missing;1:Plug-in type mismatch alarm;2:Improper card removal;3:Plug-in equipment ID mismatch alarm;4:Protection switch	1,5,8	first byte 0 (pluggable modules) or 1 (integrated ONU), second byte the slot number 1 to 254; slot 0 is a universal pseudo-slot of an integrated ONU, 255 is reserved	g988:9.1.5
 #class	6	Circuit pack	ONU	4,6,8,9	0:Equipment alarm;1:Powering alarm;2:Self-test failure;3:Laser end of life;4:Temperature yellow;5:Temperature red	7	same value as the cardholder that contains it	g988:9.1.6
@@ -25,6 +26,8 @@
 #class	49	MAC bridge port filter table data	ONU	8,9,26,29	-	-	the same value as the MAC bridge port configuration data instance, made and removed with it by the ONU (implicit link)	g988:9.3.6
 #class	50	MAC bridge port bridge table data	ONU	9,26	-	-	the same value as the MAC bridge port configuration data instance, made and removed with it by the ONU (implicit link)	g988:9.3.8
 #class	52	MAC bridge port performance monitoring history data	OLT	4,6,8,9,28	1:Delay exceeded discard;2:MTU exceeded discard;4:Received and discarded	-	set by create; the same value as the MAC bridge port configuration data instance it monitors (implicit link)	g988:9.3.9
+#class	53	Physical path termination point POTS UNI	ONU	8,9	-	1,3,9	first byte the slot, second byte the port number 1 to 255	g988:9.9.1
+#class	58	Voice service profile	OLT	4,6,8,9,26	1:File not found	-	set by create; unique number	g988:9.9.6
 #class	78	VLAN tagging operation configuration data	OLT	4,6,8,9	-	-	set by create; the same value as the entity it tags, unless the association type names another (implicit link)	g988:9.3.12
 #class	79	MAC bridge port filter pre-assign table	ONU	8,9	-	-	the same value as the MAC bridge port configuration data instance, made and removed with it by the ONU (implicit link)	g988:9.3.7
 #class	83	Physical path termination point LCT UNI	ONU	8,9	-	-	first byte the slot, second byte the port; one instance, number 0	g988:9.13.3
@@ -35,7 +38,17 @@
 #class	134	IP host config data	ONU	8,9,18	-	9,10,11,12,13,14,15	one instance for each independent IPv4 stack of the ONU, numbered from 0 upwards as a recommendation; IPv4 and IPv6 host config data instances have separate ids	g988:9.4.1
 #class	136	TCP/UDP config data	OLT	4,6,8,9	-	-	set by create; unique number, recommended to be the port number	g988:9.4.3
 #class	137	Network address	OLT	4,6,8,9	-	-	set by create; 0 to 0x7FFF for instances the ONU creates, 0x8000 to 0xFFFE for those the OLT creates, 0xFFFF is reserved	g988:9.12.3
+#class	138	VoIP config data	ONU	8,9	0:VCD config server name;1:VCD config server reach;2:VCD config server connect;3:VCD config server validate;4:VCD config server auth;5:VCD config server timeout;6:VCD config server fail;7:VCD config file error;8:VCD subscription name;9:VCD subscription reach;10:VCD subscription connect;11:VCD subscription validate;12:VCD subscription auth;13:VCD subscription timeout;14:VCD subscription fail;15:VCD reboot request;16:VCD Notify timeout;17:VCD Notify malformed;18:VCD Notify Rejected	8	single instance, number 0	g988:9.9.18
+#class	139	VoIP voice CTP	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.9.4
+#class	141	VoIP line status	ONU	9	-	9	the same value as the PPTP POTS UNI it reports on (implicit link)	g988:9.9.11
+#class	142	VoIP media profile	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.9.5
+#class	143	RTP profile data	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.9.7
+#class	145	Network dial plan table	OLT	4,6,8,9,26	-	-	set by create; unique number	g988:9.9.10
+#class	146	VoIP application service profile	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.9.8
+#class	147	VoIP feature access codes	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.9.9
 #class	148	Authentication security method	OLT	4,6,8,9	-	-	set by create; unique number, 0xFFFF is reserved	g988:9.12.4
+#class	150	SIP agent config data	OLT	4,6,8,9,26	0:SIP UA register name;1:SIP UA register reach;2:SIP UA register connect;3:SIP UA register validate	9	set by create; unique number	g988:9.9.3
+#class	153	SIP user data	OLT	4,6,8,9	0:SIP UA register auth;1:SIP UA register timeout;2:SIP UA register fail;3:SIPUA missing dial plan;4:SIPUA invalid dial plan	-	set by create; unique number	g988:9.9.2
 #class	157	Large string	OLT	4,6,8,9	-	1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16	set by create; 0xFFFF is reserved, and 0 for an IPv6 address; the OLT numbers from 1 upwards, the ONU from 0xFFFE downwards	g988:9.12.5
 #class	171	Extended VLAN tagging operation configuration data	OLT	4,6,8,9,26,29	-	-	set by create; unique number	g988:9.3.13
 #class	256	ONU-G	ONU	8,9,18,24,25	0:Equipment alarm;1:Powering alarm;2:Battery missing;3:Battery failure;4:Battery low;5:Physical intrusion;6:ONU self-test failure;7:Dying gasp;8:Temperature yellow;9:Temperature red;10:Voltage yellow;11:Voltage red;12:ONU manual power off;13:Inv-Image;14:PSE overload yellow;15:PSE overload red	8,10,11	single instance, number 0	g988:9.1.1
@@ -159,6 +172,33 @@
 52	MAC bridge port performance monitoring history data	5	Maximum transmission unit (MTU) exceeded discard counter	4	R	mandatory	no	g988:9.3.9
 52	MAC bridge port performance monitoring history data	6	Received frame counter	4	R	mandatory	no	g988:9.3.9
 52	MAC bridge port performance monitoring history data	7	Received and discarded counter	4	R	mandatory	no	g988:9.3.9
+53	Physical path termination point POTS UNI	1	Administrative state	1	R,W	mandatory	no	g988:9.9.1
+53	Physical path termination point POTS UNI	2	Deprecated	2	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	3	ARC	1	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	4	ARC interval	1	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	5	Impedance	1	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	6	Transmission path	1	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	7	Rx gain	1	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	8	Tx gain	1	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	9	Operational state	1	R	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	10	Hook state	1	R	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	11	POTS holdover time	2	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	12	Nominal feed voltage	1	R,W	optional	no	g988:9.9.1
+53	Physical path termination point POTS UNI	13	Loss of softswitch	1	R,W	optional	no	g988:9.9.1
+58	Voice service profile	1	Announcement type	1	R,W,C	mandatory	no	g988:9.9.6
+58	Voice service profile	2	Jitter target	2	R,W,C	optional	no	g988:9.9.6
+58	Voice service profile	3	Jitter buffer max	2	R,W,C	optional	no	g988:9.9.6
+58	Voice service profile	4	Echo cancel ind	1	R,W,C	mandatory	no	g988:9.9.6
+58	Voice service profile	5	PSTN protocol variant	2	R,W,C	optional	no	g988:9.9.6
+58	Voice service profile	6	DTMF digit levels	2	R,W,C	optional	no	g988:9.9.6
+58	Voice service profile	7	DTMF digit duration	2	R,W,C	optional	no	g988:9.9.6
+58	Voice service profile	8	Hook flash minimum time	2	R,W,C	optional	no	g988:9.9.6
+58	Voice service profile	9	Hook flash maximum time	2	R,W,C	optional	no	g988:9.9.6
+58	Voice service profile	10	Tone pattern table	20	R,W	optional	yes	g988:9.9.6
+58	Voice service profile	11	Tone event table	7	R,W	optional	yes	g988:9.9.6
+58	Voice service profile	12	Ringing pattern table	5	R,W	optional	yes	g988:9.9.6
+58	Voice service profile	13	Ringing event table	7	R,W	optional	yes	g988:9.9.6
+58	Voice service profile	14	Network specific extensions pointer	2	R,W,C	optional	no	g988:9.9.6
 78	VLAN tagging operation configuration data	1	Upstream VLAN tagging operation mode	1	R,W,C	mandatory	no	g988:9.3.12
 78	VLAN tagging operation configuration data	2	Upstream VLAN tag TCI value	2	R,W,C	mandatory	no	g988:9.3.12
 78	VLAN tagging operation configuration data	3	Downstream VLAN tagging operation mode	1	R,W,C	mandatory	no	g988:9.3.12
@@ -220,11 +260,111 @@
 136	TCP/UDP config data	4	IP host pointer	2	R,W,C	mandatory	no	g988:9.4.3
 137	Network address	1	Security pointer	2	R,W,C	mandatory	no	g988:9.12.3
 137	Network address	2	Address pointer	2	R,W,C	mandatory	no	g988:9.12.3
+138	VoIP config data	1	Available signalling protocols	1	R	mandatory	no	g988:9.9.18
+138	VoIP config data	2	Signalling protocol used	1	R,W	mandatory	no	g988:9.9.18
+138	VoIP config data	3	Available VoIP configuration methods	4	R	mandatory	no	g988:9.9.18
+138	VoIP config data	4	VoIP configuration method used	1	R,W	mandatory	no	g988:9.9.18
+138	VoIP config data	5	VoIP configuration address pointer	2	R,W	mandatory	no	g988:9.9.18
+138	VoIP config data	6	VoIP configuration state	1	R	mandatory	no	g988:9.9.18
+138	VoIP config data	7	Retrieve profile	1	R,W	mandatory	no	g988:9.9.18
+138	VoIP config data	8	Profile version	25	R	mandatory	no	g988:9.9.18
+139	VoIP voice CTP	1	User protocol pointer	2	R,W,C	mandatory	no	g988:9.9.4
+139	VoIP voice CTP	2	PPTP pointer	2	R,W,C	mandatory	no	g988:9.9.4
+139	VoIP voice CTP	3	VoIP media profile pointer	2	R,W,C	mandatory	no	g988:9.9.4
+139	VoIP voice CTP	4	Signalling code	1	R,W,C	mandatory	no	g988:9.9.4
+141	VoIP line status	1	Voip codec used	2	R	mandatory	no	g988:9.9.11
+141	VoIP line status	2	Voip voice server status	1	R	mandatory	no	g988:9.9.11
+141	VoIP line status	3	Voip port session type	1	R	mandatory	no	g988:9.9.11
+141	VoIP line status	4	Voip call 1 packet period	2	R	mandatory	no	g988:9.9.11
+141	VoIP line status	5	Voip call 2 packet period	2	R	mandatory	no	g988:9.9.11
+141	VoIP line status	6	Voip call 1 dest addr	25	R	mandatory	no	g988:9.9.11
+141	VoIP line status	7	Voip call 2 dest addr	25	R	mandatory	no	g988:9.9.11
+141	VoIP line status	8	Voip line state	1	R	optional	no	g988:9.9.11
+141	VoIP line status	9	Emergency call status	1	R	optional	no	g988:9.9.11
+142	VoIP media profile	1	Fax mode	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	2	Voice service profile pointer	2	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	3	Codec selection (1st order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	4	Packet period selection (1st order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	5	Silence suppression (1st order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	6	Codec selection (2nd order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	7	Packet period selection (2nd order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	8	Silence suppression (2nd order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	9	Codec selection (3rd order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	10	Packet period selection (3rd order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	11	Silence suppression (3rd order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	12	Codec selection (4th order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	13	Packet period selection (4th order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	14	Silence suppression (4th order)	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	15	OOB DTMF	1	R,W,C	mandatory	no	g988:9.9.5
+142	VoIP media profile	16	RTP profile pointer	2	R,W,C	mandatory	no	g988:9.9.5
+143	RTP profile data	1	Local port min	2	R,W,C	mandatory	no	g988:9.9.7
+143	RTP profile data	2	Local port max	2	R,W,C	optional	no	g988:9.9.7
+143	RTP profile data	3	DSCP mark	1	R,W,C	mandatory	no	g988:9.9.7
+143	RTP profile data	4	Piggyback events	1	R,W,C	mandatory	no	g988:9.9.7
+143	RTP profile data	5	Tone events	1	R,W,C	mandatory	no	g988:9.9.7
+143	RTP profile data	6	DTMF events	1	R,W,C	mandatory	no	g988:9.9.7
+143	RTP profile data	7	CAS events	1	R,W,C	mandatory	no	g988:9.9.7
+143	RTP profile data	8	IP host config pointer	2	R,W	optional	no	g988:9.9.7
+145	Network dial plan table	1	Dial plan number	2	R	mandatory	no	g988:9.9.10
+145	Network dial plan table	2	Dial plan table max size	2	R,C	mandatory	no	g988:9.9.10
+145	Network dial plan table	3	Critical dial timeout	2	R,W,C	mandatory	no	g988:9.9.10
+145	Network dial plan table	4	Partial dial timeout	2	R,W,C	mandatory	no	g988:9.9.10
+145	Network dial plan table	5	Dial plan format	1	R,W,C	mandatory	no	g988:9.9.10
+145	Network dial plan table	6	Dial plan table	30	R,W	mandatory	yes	g988:9.9.10
+146	VoIP application service profile	1	CID features	1	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	2	Call waiting features	1	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	3	Call progress or transfer features	2	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	4	Call presentation features	2	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	5	Direct connect feature	1	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	6	Direct connect URI pointer	2	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	7	Bridged line agent URI pointer	2	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	8	Conference factory URI pointer	2	R,W,C	mandatory	no	g988:9.9.8
+146	VoIP application service profile	9	Dial tone feature delay/warmline timer	2	R,W	optional	no	g988:9.9.8
+146	VoIP application service profile	10	IP host pointer	2	R,W	optional	no	g988:9.9.8
+147	VoIP feature access codes	1	Cancel call waiting	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	2	Call hold	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	3	Call park	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	4	Caller ID activate	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	5	Caller ID deactivate	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	6	Do not disturb activation	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	7	Do not disturb deactivation	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	8	Do not disturb PIN change	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	9	Emergency service number	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	10	Intercom service	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	11	Unattended/blind call transfer	5	R,W	optional	no	g988:9.9.9
+147	VoIP feature access codes	12	Attended call transfer	5	R,W	optional	no	g988:9.9.9
 148	Authentication security method	1	Validation scheme	1	R,W	mandatory	no	g988:9.12.4
 148	Authentication security method	2	Username 1	25	R,W	mandatory	no	g988:9.12.4
 148	Authentication security method	3	Password	25	R,W	mandatory	no	g988:9.12.4
 148	Authentication security method	4	Realm	25	R,W	mandatory	no	g988:9.12.4
 148	Authentication security method	5	Username 2	25	R,W	optional	no	g988:9.12.4
+150	SIP agent config data	1	Proxy server address pointer	2	R,W,C	mandatory	no	g988:9.9.3
+150	SIP agent config data	2	Outbound proxy address pointer	2	R,W,C	mandatory	no	g988:9.9.3
+150	SIP agent config data	3	Primary SIP DNS	4	R,W,C	mandatory	no	g988:9.9.3
+150	SIP agent config data	4	Secondary SIP DNS	4	R,W,C	mandatory	no	g988:9.9.3
+150	SIP agent config data	5	TCP/UDP pointer	2	R,W	mandatory	no	g988:9.9.3
+150	SIP agent config data	6	SIP reg exp time	4	R,W	mandatory	no	g988:9.9.3
+150	SIP agent config data	7	SIP rereg head start time	4	R,W	mandatory	no	g988:9.9.3
+150	SIP agent config data	8	Host part URI	2	R,W,C	mandatory	no	g988:9.9.3
+150	SIP agent config data	9	SIP status	1	R	mandatory	no	g988:9.9.3
+150	SIP agent config data	10	SIP registrar	2	R,W,C	mandatory	no	g988:9.9.3
+150	SIP agent config data	11	Softswitch	4	R,W,C	mandatory	no	g988:9.9.3
+150	SIP agent config data	12	SIP response table	5	R,W	optional	yes	g988:9.9.3
+150	SIP agent config data	13	SIP option transmit control	1	R,W,C	optional	no	g988:9.9.3
+150	SIP agent config data	14	SIP URI format	1	R,W,C	optional	no	g988:9.9.3
+150	SIP agent config data	15	Redundant SIP agent pointer	2	R,W,C	optional	no	g988:9.9.3
+153	SIP user data	1	SIP agent pointer	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	2	User part AOR	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	3	SIP display name	25	R,W	mandatory	no	g988:9.9.2
+153	SIP user data	4	Username and password	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	5	Voicemail server SIP URI	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	6	Voicemail subscription expiration time	4	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	7	Network dial plan pointer	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	8	Application services profile pointer	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	9	Feature code pointer	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	10	PPTP pointer	2	R,W,C	mandatory	no	g988:9.9.2
+153	SIP user data	11	Release timer	1	R,W	optional	no	g988:9.9.2
+153	SIP user data	12	Receiver off hook (ROH) timer	1	R,W	optional	no	g988:9.9.2
 157	Large string	1	Number of parts	1	R,W	mandatory	no	g988:9.12.5
 157	Large string	2	Part 1	25	R,W	mandatory	no	g988:9.12.5
 157	Large string	3	Part 2	25	R,W	mandatory	no	g988:9.12.5

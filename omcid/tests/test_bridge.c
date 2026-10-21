@@ -186,6 +186,34 @@ int main(void)
 	printf("    a pointer to nothing and a kind we do not bridge are each refused alone\n");
 
 	{
+		const struct omci_hw_bridge_port *voice = NULL;
+		size_t k;
+
+		gem(mib, 0x011au, 282u);
+		iwtp(mib, 266u, 0x011au, 0x011au);
+		CHECK_EQ(omci_mib_create(mib, 45u, 0x0102u), OMCI_OK);
+		bridge_port(mib, 0x1201u, 0x0102u, 1u, OMCI_BRIDGE_TP_IP_HOST,
+			    0x0000u);
+		bridge_port(mib, 0x1202u, 0x0102u, 2u, OMCI_BRIDGE_TP_GEM_IW,
+			    0x011au);
+		CHECK_EQ(omci_bridge_program(mib, &refused), OMCI_OK);
+		CHECK_EQ(refused, 0u);
+		n = omci_hw_bridge_recorded(&ap);
+		CHECK_EQ(n, 9u);
+		for (k = 0; k < n; k++)
+			if (ap[k].port_id == OMCI_HW_BRIDGE_UNI &&
+			    ap[k].bridge == 0x0102u)
+				voice = &ap[k];
+		CHECK(voice != NULL);
+		CHECK(port_of(ap, n, 282u) != NULL);
+		CHECK_EQ(omci_mib_delete(mib, 47u, 0x1201u), OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, 47u, 0x1202u), OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, 45u, 0x0102u), OMCI_OK);
+		CHECK_EQ(omci_bridge_program(mib, &refused), OMCI_OK);
+	}
+	printf("    an IP host's bridge port is the SFP lane, as a UNI's is\n");
+
+	{
 		const struct omci_hw_bridge_port *before = NULL;
 		const size_t before_n = omci_bridge_last(&before);
 

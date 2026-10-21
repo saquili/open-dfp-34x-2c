@@ -88,8 +88,13 @@ static void test_the_instances_are_the_ones_the_onu_creates(void)
 		const struct tsv_class *t = &tsv_classes[c];
 		const unsigned int n = instances_of(mib, t->id);
 
-		/* The ONU makes the tables of a bridge port with the port. */
-		if (t->by_olt || t->id == 49u || t->id == 50u || t->id == 79u)
+		/*
+		 * The ONU makes the tables of a bridge port with the port, and
+		 * the classes of phone sockets with them, of which the
+		 * synthetic ONU has none.
+		 */
+		if (t->by_olt || t->id == 49u || t->id == 50u || t->id == 79u ||
+		    t->id == 53u || t->id == 138u || t->id == 141u)
 			CHECK_EQ(n, 0u);
 		else
 			CHECK(n > 0u);
@@ -168,6 +173,57 @@ static void test_the_ports_told_are_those_chosen(void)
 	CHECK(!omci_mib_exists(mib, 5u, 0x0101u));
 	CHECK_EQ(instances_of(mib, 277u),
 		 (unsigned int)(caps.num_tcont * caps.num_priq_per_tcont));
+	omci_mib_fini(mib);
+}
+
+/*
+ * Two phone sockets of their own slot: a POTS UNI, a UNI-G and a VoIP line
+ * status each, of one number, a circuit pack of type POTS with two ports
+ * and no queues, and VoIP config data that offers SIP set up through OMCI;
+ * told with the VEIP alone too, and no VoIP config data without them.
+ */
+static void test_the_phone_sockets_told_are_those_chosen(void)
+{
+	struct omci_hw_caps caps;
+	struct omci_mib *mib = NULL;
+	uint8_t methods[4];
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	for (unsigned int i = 0; i < 2u; i++)
+		caps.ports[caps.port_count++] = (struct omci_hw_port){
+			.pptp_instance = (uint16_t)(0x0201u + i),
+			.cardholder = 0x0102,
+			.plugin_type = OMCI_HW_PLUGIN_POTS
+		};
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 53u), 2u);
+	CHECK(omci_mib_exists(mib, 53u, 0x0202u));
+	CHECK(omci_mib_exists(mib, 141u, 0x0202u));
+	CHECK(omci_mib_exists(mib, 264u, 0x0201u));
+	CHECK_EQ(instances_of(mib, 11u), 1u);
+	CHECK_EQ(read_u(mib, 5u, 0x0102u, 1u), 32u);
+	CHECK_EQ(read_u(mib, 6u, 0x0102u, 1u), 32u);
+	CHECK_EQ(read_u(mib, 6u, 0x0102u, 2u), 2u);
+	CHECK_EQ(read_u(mib, 6u, 0x0102u, 12u), 0u);
+	CHECK_EQ(instances_of(mib, 277u),
+		 (unsigned int)(caps.num_tcont * caps.num_priq_per_tcont +
+				caps.num_priq_per_port));
+	CHECK_EQ(read_u(mib, 138u, 0u, 1u), 1u);
+	CHECK_EQ(read_u(mib, 138u, 0u, 2u), 0u);
+	CHECK_EQ(read_attr(mib, 138u, 0u, 3u, methods, sizeof(methods)), 4u);
+	CHECK_EQ(methods[3], 1u);
+	CHECK_EQ(read_u(mib, 138u, 0u, 5u), 0xffffu);
+
+	caps.uni_report = OMCI_HW_UNI_VEIP;
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 11u), 0u);
+	CHECK_EQ(instances_of(mib, 53u), 2u);
+	CHECK_EQ(instances_of(mib, 264u), 2u);
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 138u), 0u);
 	omci_mib_fini(mib);
 }
 
@@ -560,6 +616,7 @@ int main(int argc, char **argv)
 
 	RUN(test_the_instances_are_the_ones_the_onu_creates);
 	RUN(test_the_ports_told_are_those_chosen);
+	RUN(test_the_phone_sockets_told_are_those_chosen);
 	RUN(test_the_identifiers_follow_the_rules_of_the_standard);
 	RUN(test_the_values_the_sheet_states);
 	RUN(test_the_identity_the_seam_gives_is_the_identity_the_mib_holds);

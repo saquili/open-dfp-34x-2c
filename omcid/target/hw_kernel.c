@@ -98,6 +98,8 @@
  * otherwise, and OMCC version 0xA3: ITU-T G.988, baseline message set only.
  */
 #define UNI_INSTANCE 0x0101u
+#define POTS_INSTANCE 0x0201u
+#define POTS_CARDHOLDER 0x0102u
 #define PON_CARDHOLDER 0x0180u
 #define ANI_INSTANCE 0x8001u
 #define PLUGIN_ETHERNET 47u
@@ -627,16 +629,20 @@ static void board_caps(struct omci_hw_caps *out)
  * The subscriber ports the stick tells the OLT of, as the ONT it stands in
  * for had them: "uni_ports" of the identity file, 1 to OMCI_HW_UNI_MAX
  * Ethernet UNIs of slot 1, each of them the one SFP lane, 1 when it names
- * none or another number; and "uni_report", "pptp" for the Ethernet UNIs
- * alone, "veip" for the VEIP alone, both for anything else.
+ * none or another number; "uni_report", "pptp" for the Ethernet UNIs
+ * alone, "veip" for the VEIP alone, both for anything else; and
+ * "pots_ports", 0 to OMCI_HW_POTS_MAX phone sockets of slot 2, after the PON
+ * side, none for another number.
  */
 static void identity_ports(struct omci_hw_caps *caps)
 {
-	unsigned long n = 1;
+	unsigned long n = 1, pots = 0;
 	char report[8] = "";
 
 	if (!identity_number("uni_ports", &n) || n < 1 || n > OMCI_HW_UNI_MAX)
 		n = 1;
+	if (!identity_number("pots_ports", &pots) || pots > OMCI_HW_POTS_MAX)
+		pots = 0;
 	for (unsigned long i = 0; i < n; i++)
 		caps->ports[i] = (struct omci_hw_port){
 			.pptp_instance = (uint16_t)(UNI_INSTANCE + i),
@@ -646,8 +652,16 @@ static void identity_ports(struct omci_hw_caps *caps)
 	caps->ports[n] = (struct omci_hw_port){ .pptp_instance = 0,
 						.cardholder = PON_CARDHOLDER,
 						.plugin_type = PLUGIN_GPON };
-	caps->port_count = (uint8_t)(n + 1);
+	for (unsigned long i = 0; i < pots; i++)
+		caps->ports[n + 1 + i] = (struct omci_hw_port){
+			.pptp_instance = (uint16_t)(POTS_INSTANCE + i),
+			.cardholder = POTS_CARDHOLDER,
+			.plugin_type = OMCI_HW_PLUGIN_POTS
+		};
+	caps->port_count = (uint8_t)(n + 1 + pots);
 	caps->uni_port_count = (uint8_t)n;
+	if (pots)
+		OMCI_INFO("caps: %lu phone socket(s) told to the OLT", pots);
 	(void)identity_copy("uni_report", report, sizeof(report));
 	caps->uni_report = !strcmp(report, "pptp") ? OMCI_HW_UNI_PPTP :
 			   !strcmp(report, "veip") ? OMCI_HW_UNI_VEIP :
