@@ -4659,12 +4659,11 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 	v = rtl9602c_r(p, RTL9602C_L3_GLOBAL_CTRL);
 
 	/*
-	 * What the bits of RTL9602C_L3_AUX_CFG_ON enable, and whether the write
-	 * is needed, is not verified.
+	 * A reserved word of the engine, of no known function; whether the
+	 * write changes anything is not verified.
 	 */
-	rtl9602c_w(p, RTL9602C_L3_AUX_CFG, RTL9602C_L3_AUX_CFG_ON);
-	pr_info("L3: auxiliary control %08x\n",
-		rtl9602c_r(p, RTL9602C_L3_AUX_CFG));
+	rtl9602c_w(p, RTL9602C_L3_RSVD, RTL9602C_L3_RSVD_INIT);
+	pr_info("L3: reserved word %08x\n", rtl9602c_r(p, RTL9602C_L3_RSVD));
 
 	/*
 	 * Only once the engine runs: from now on, frames to this device's own
@@ -8280,7 +8279,7 @@ static const struct {
 };
 
 /*
- * l3nat: the auxiliary and configuration words, then the rows above, raw.
+ * l3nat: the reserved and configuration words, then the rows above, raw.
  * Reading a table has no side effect. The last line reads row 9999 of the
  * five-tuple table, which the geometry check must refuse with -EINVAL.
  */
@@ -8290,8 +8289,7 @@ static int rtl9602c_l3nat_show(struct seq_file *s, void *unused)
 	unsigned int t, e, w;
 	u32 l3cfg;
 
-	seq_printf(s, "aux ctrl %08x\n",
-		   rtl9602c_r(p, RTL9602C_L3_AUX_CFG));
+	seq_printf(s, "reserved %08x\n", rtl9602c_r(p, RTL9602C_L3_RSVD));
 	l3cfg = rtl9602c_r(p, RTL9602C_L3_CFG);
 	seq_printf(s, "l3 cfg   %08x  flow4 %u  flow6 %u\n\n", l3cfg,
 		   !!(l3cfg & RTL9602C_L3_CFG_FLOW4_EN),

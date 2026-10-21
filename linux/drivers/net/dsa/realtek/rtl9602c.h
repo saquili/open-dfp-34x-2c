@@ -445,11 +445,12 @@
 #define RTL9602C_L3_BIND_CFG_INIT			0xa2400000
 
 /*
- * A plain read/write word; what the bits of ON enable, and whether it is
- * needed, are not verified.
+ * The first of four reserved words of the L3/NAT engine, plain read/write.
+ * No function of it is known, and nothing the driver depends on is taken to
+ * read it; whether INIT, the value written, changes anything is not verified.
  */
-#define RTL9602C_L3_AUX_CFG			0x02a104
-#define RTL9602C_L3_AUX_CFG_ON		0xf5
+#define RTL9602C_L3_RSVD			0x02a104
+#define RTL9602C_L3_RSVD_INIT		0xf5
 
 /*
  * The engine's configuration. L3IF_LOOKUP_MAC is taken to match frames to

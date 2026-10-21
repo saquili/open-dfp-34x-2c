@@ -309,7 +309,7 @@ Interfaces to user space
   and tables, and ``l3capture`` (mode 0600), which reads and arms the engine's
   per-frame capture (see "The debugfs views" and "The per-frame capture").
 - The kernel log lines that begin ``rtl9602c-switch:``. Setup logs ``L3:
-  binding actions``, ``L3: auxiliary control`` and ``L3: reset 13 of 13 table
+  binding actions``, ``L3: reserved word`` and ``L3: reset 13 of 13 table
   engine(s), engine ON`` with the control and reset words, and, when it had to
   empty rows, ``cleared N L3/NAT table entries left by the previous kernel``.
   A row write that failed, a route table that cannot be mirrored, an interface
@@ -397,7 +397,7 @@ The engine's registers
 The engine's own registers are the 4 KiB of the switch's window from
 ``0x800000``. Three registers that the bring-up writes lie outside it, in
 blocks of the switch: the engine's master enable in the switch's lookup block,
-an auxiliary word, and the reset select of the per-L3-interface counters. The
+a reserved word, and the reset select of the per-L3-interface counters. The
 block needs nothing opened before it answers, unlike the PON MAC behind its
 enable in the system controller (see the *main* page), so the driver reads and
 writes it from setup on.
@@ -412,9 +412,9 @@ writes it from setup on.
    * - ``RTL9602C_L3_GLOBAL_CTRL``
      - ``0x01106c``
      - The master enable (outside the engine's window).
-   * - ``RTL9602C_L3_AUX_CFG``
+   * - ``RTL9602C_L3_RSVD``
      - ``0x02a104``
-     - An auxiliary word (outside the engine's window).
+     - A reserved word (outside the engine's window).
    * - ``RTL9602C_MIB_L3IF_RESET``
      - ``0x03401c``
      - The L3 interfaces whose counters a reset of the counter block clears
@@ -477,7 +477,7 @@ writes it from setup on.
        frame capture ``0x800200`` to ``0x800293``, NAPT hit bitmap ``0x800400``
        to ``0x8005fc``. Three registers that the bring-up writes lie outside
        it: the global enable at ``0x01106c`` (in the switch's lookup block), an
-       auxiliary word at ``0x02a104``, and the reset select of the
+       reserved word at ``0x02a104``, and the reset select of the
        per-L3-interface counters at ``0x03401c``.
      - M
      - A read of every register after a full chip reset; the ``l3nat`` and
@@ -498,7 +498,7 @@ Four words configure the engine, and a fifth selects counters for a reset. The
 master enable is outside the engine's window. The configuration word has two
 fields that the driver changes; the driver changes nothing else in it, because
 changing further fields turned a translated flow's verdict into one for the
-CPU. The binding-action word and the auxiliary word are written with values
+CPU. The binding-action word and the reserved word are written with values
 that changed nothing measurable, and whether they are needed is not
 established.
 
@@ -637,8 +637,8 @@ The configuration word
      - The word written by hand (``0xe4801e30``), 1,000 echo requests: the CPU
        port moved by 2,003.
 
-The binding, auxiliary and counter words
-----------------------------------------
+The binding, reserved and counter words
+---------------------------------------
 
 .. list-table::
    :header-rows: 1
@@ -662,21 +662,23 @@ The binding, auxiliary and counter words
      - I
      - Omitting the write and repeating the routing test and the PPPoE test
        would settle it.
-   * - ``RTL9602C_L3_AUX_CFG`` (``0x02a104``) is a plain read/write word:
+   * - ``RTL9602C_L3_RSVD`` (``0x02a104``) is a plain read/write word:
        ``0xf5``, 0, ``0xffffffff`` and ``0xaaaaaaaa`` each read back as written;
        it reads ``0x55555555`` in the reset state. Setup writes
-       ``RTL9602C_L3_AUX_CFG_ON`` (``0xf5``) after the global enable and logs
+       ``RTL9602C_L3_RSVD_INIT`` (``0xf5``) after the global enable and logs
        it; ``l3nat`` prints it.
      - M
      - Four patterns written by hand and read back; a read in the reset state;
-       the boot log line ``L3: auxiliary control 000000f5``; the first line of
-       ``l3nat``, ``aux ctrl 000000f5``.
-   * - What the bits of ``0xf5`` enable, and whether the write is needed, is not
-       established: ``0xf5`` and 0 gave the same result in a configuration that
-       did not yet forward.
+       the boot log line ``L3: reserved word 000000f5``; the first line of
+       ``l3nat``, ``reserved 000000f5``.
+   * - The word is reserved, the first of four from ``0x02a104`` to
+       ``0x02a110``, and no function of it is known: nothing the driver
+       depends on is taken to read it, and whether ``0xf5`` changes anything
+       is not established. ``0xf5`` and 0 gave the same result in a
+       configuration that did not yet forward.
      - I
-     - Omitting the write and repeating the routing test and the PPPoE test
-       would settle it.
+     - Not load-bearing. Writing 0 instead and repeating the routing test, the
+       PPPoE test and an ``l3capture`` would show whether the write can go.
    * - ``RTL9602C_MIB_L3IF_RESET`` (``0x03401c``) reads 0 in the reset state,
        and setup sets ``RTL9602C_MIB_L3IF_RESET_IF(0)`` (bit 0). The register
        enables no counting: it selects, bit n for row n of the L3-interface
@@ -1153,8 +1155,9 @@ of setup is on the *main* page ("Setup, in order").
    "Global enable and configuration"). (T)
 7. Read-modify-write ``RTL9602C_L3_GLOBAL_CTRL_EN``, then read the register
    back. Purpose: turn the engine on, and learn whether it is on. (T)
-8. Write ``RTL9602C_L3_AUX_CFG_ON`` and log it. Purpose: it is written on the
-   assumption, not verified, that the engine needs it. (I)
+8. Write ``RTL9602C_L3_RSVD_INIT`` to the reserved word ``RTL9602C_L3_RSVD``
+   and log it. Purpose: none established; no function of the word is known.
+   (I)
 9. Record ``l34_up`` as ``EN`` read back and, if it is set, call
    ``rtl9602c_l2_l3lookup_cpu(p, true)`` (see "The address-table entries the
    engine uses"). Purpose of the order: that call sends frames addressed to this
@@ -3390,12 +3393,12 @@ rows, but for the IPv6-neighbour table, whose rows lie where their hash puts
 them and which ``l3neigh6`` prints whole; no view prints an inbound NAPT
 entry.
 
-``l3nat`` (mode 0400) prints the auxiliary word, the configuration word and the
+``l3nat`` (mode 0400) prints the reserved word, the configuration word and the
 tables, and ends with a check of the table port's guard. Its top and its last
 line::
 
     # cat /sys/kernel/debug/rtl9602c/l3nat
-    aux ctrl 000000f5
+    reserved 000000f5
     l3 cfg   64001e20  flow4 1  flow6 1
 
     flow (table 12, 4 words)
@@ -3430,7 +3433,7 @@ worked example's host of "IPv6 neighbour (selector 11)" on ifindex 9::
    * - Fact
      - Tag
      - Checked by
-   * - ``l3nat`` (mode 0400) prints the auxiliary word (``aux ctrl``), the
+   * - ``l3nat`` (mode 0400) prints the reserved word (``reserved``), the
        configuration word with its two flow-lookup enables (``l3 cfg``), then
        for each table a heading ``<name> (table <selector>, <words> words)`` and
        the raw words of its rows, ``[<row>]``: ``flow`` (five-tuple) rows 0 to
@@ -3872,9 +3875,10 @@ Questions the code does not depend on
    * - Whether the binding-action word is needed ("Global enable and
        configuration"; "Bring-up sequence" step 5).
      - Omitting the write and repeating the routing test and the PPPoE test.
-   * - Whether the auxiliary word ``0xf5`` is needed, and what its bits enable
+   * - Whether writing ``0xf5`` to the reserved word changes anything
        ("Global enable and configuration"; step 8).
-     - Omitting the write and repeating the routing test and the PPPoE test.
+     - Writing 0 instead and repeating the routing test, the PPPoE test and
+       an ``l3capture``.
    * - Whether the write of the counter reset select is needed, and that it
        gates no counting ("Global enable and configuration"; step 4).
      - Omitting the write and repeating the routing test and the PPPoE test;
