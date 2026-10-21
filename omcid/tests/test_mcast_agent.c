@@ -2092,6 +2092,8 @@ static void test_a_discard_of_a_vid_decides_before_the_rules(void)
  * A rule that gives untagged frames two tags gives a message both, the S-tag
  * in front; one that puts an S-tag in front of a C-tag whose priority it
  * changes sends the message with that C-tag's new priority behind the S-tag.
+ * A tagged message that no rule takes goes as it came: the rule of the
+ * untagged frames gives it no tags.
  */
 static void test_the_vlan_rules_that_write_two_tags(void)
 {
@@ -2124,6 +2126,9 @@ static void test_the_vlan_rules_that_write_two_tags(void)
 	CHECK(tpid == 0x88a8u && tci == ((2u << 13) | 101u));
 	tag_at(out, 16, &tpid, &tci);
 	CHECK(tpid == 0x8100u && tci == 37u);
+	CHECK_EQ(join_up(38, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 38u));
 	rules(two, 0);
 	down();
 }
@@ -2258,6 +2263,13 @@ static void test_the_downstream_tag_of_multicast(void)
 		{ 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
 		  (8u << 16) | (420u << 3) },
 	};
+	static const uint32_t discard[][4] = {
+		/* C-VID 420, any priority: discard */
+		{ 0xf8000000u, (8u << 28) | (420u << 15), 0xc00f0000u,
+		  0x000f0000u },
+		/* the default of the single-tagged frames: discard */
+		{ 0xf8000000u, 0xe8000000u, 0xc00f0000u, 0x000f8000u },
+	};
 	const struct omci_hw_mcast_ds *d;
 	uint8_t row[20];
 	size_t n;
@@ -2334,6 +2346,20 @@ static void test_the_downstream_tag_of_multicast(void)
 	ds_control(PROFILE, 1, 0);
 	CHECK(ds_of(420, &n) == NULL);
 	CHECK_EQ(n, 1u);
+	/*
+	 * A rule that discards the frames of the VLAN, or the single-tagged
+	 * frames no rule takes, gives unicast no VLAN: it keeps its own tag.
+	 */
+	rules(discard, ARRAY_SIZE(discard));
+	{
+		const struct omci_hw_vlan_xlate *in = NULL;
+
+		CHECK_EQ(omci_vlan_in_force(&in), 2u);
+	}
+	ds_control(PROFILE, 1, 0);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_STRIP);
+	CHECK_EQ(n, 2u);
 	rules(xlate, 0);
 
 	/* No more than eight VLANs. */
