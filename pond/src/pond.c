@@ -163,15 +163,24 @@ static void api_get(struct mg_connection *c, struct mg_str id,
 	value_get(c, p, from, point);
 }
 
+/*
+ * Several values at once, ids=a,b,c, the query decoded: a client may send the
+ * commas percent-encoded, as the panel's requests made from openapi.json do.
+ */
 static void api_getm(struct mg_connection *c, struct mg_str query)
 {
-	struct mg_str ids = mg_http_var(query, mg_str("ids"));
+	char ids[1024];
+	const int n = mg_http_get_var(&query, "ids", ids, sizeof(ids));
 
-	if (!ids.len) {
+	if (n == -3) {
+		reply_err(c, 400, "too many ids", "ask for fewer at once");
+		return;
+	}
+	if (n <= 0) {
 		reply_err(c, 400, "no ids", "ask for ids=a,b,c");
 		return;
 	}
-	value_getm(c, ids);
+	value_getm(c, mg_str_n(ids, (size_t)n));
 }
 
 /*

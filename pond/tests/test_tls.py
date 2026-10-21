@@ -120,6 +120,13 @@ def main():
                                   headers={"Authorization": f"Bearer {TOKEN}"})
         check(status == 200 and words[2].encode() in body and b'"port":18443' in body
               and b'"https":true' in body, "/api/get/tls shows the same fingerprint")
+        status, _, body = request(conn, "GET", "/api/getm?ids=tls%2Cno_such_item",
+                                  headers={"Authorization": f"Bearer {TOKEN}"})
+        check(status == 200 and b'"tls":{' in body and b'"no_such_item":null' in body,
+              "/api/getm takes its ids with the commas percent-encoded")
+        status, _, body = request(conn, "GET", "/api/getm?ids=" + "x," * 600,
+                                  headers={"Authorization": f"Bearer {TOKEN}"})
+        check(status == 400 and b"too many ids" in body, "and refuses more than it holds")
         conn.close()
 
         ok = 0
