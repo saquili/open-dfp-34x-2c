@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
-"""test_tls.py POND KEYDIR: the daemon over HTTPS, as a browser meets it.
+"""test_tls.py POND KEYDIR CERTS: the daemon over HTTPS, as a browser meets it.
 
 POND is the daemon built without ubus (pond-none), run on 127.0.0.1 with the
 environment of the other tests (POND_ROOT, ONU_ROOT, POND_ONU_CONFIG); KEYDIR
@@ -9,11 +9,15 @@ is a directory to write its key in; its token is in POND_ROOT, where it
 reads every file but its key. Python's ssl module is
 OpenSSL, which takes only DER signatures, as BoringSSL does: the handshakes
 check Mongoose's signature as Chrome would. Without a key, or with a key
-that is not one, the daemon does not start.
+that is not one, the daemon does not start. CERTS holds the own certificates
+of make-certs.sh, which an authority's root signed through an intermediate:
+a client that trusts the root alone verifies the daemon's chain.
 """
 
+import base64
 import hashlib
 import http.client
+import json
 import os
 import pwd
 import socket
@@ -155,6 +159,91 @@ def main():
     slow_change(pond, os.path.dirname(key))
     token_file(pond)
     downloads(pond, os.path.dirname(key), token)
+    own_file(pond, os.path.dirname(key), sys.argv[3])
+
+
+def read(path):
+    with open(path) as f:
+        return f.read()
+
+
+def write(path, text):
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def served(ctx=None):
+    """The fingerprint of the certificate a new connection gets, and how many
+    certificates the daemon sent, where Python can say (3.13 on)."""
+    c = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=ctx or context(), timeout=10)
+    c.connect()
+    der = c.sock.getpeercert(binary_form=True)
+    sent = len(c.sock.get_unverified_chain()) if hasattr(c.sock, "get_unverified_chain") else 0
+    c.close()
+    return ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest()), sent
+
+
+def own_file(pond, workdir, certs):
+    """An own certificate of the file of -c, as onu-config writes it: served
+    on every address with its chain, which a client that trusts the root
+    alone verifies by the address; printed for the console; and, when its key
+    is another, or the file is not there, the panel's own served instead."""
+    print("an own certificate of the file of -c")
+    d = os.path.join(workdir, "own-file")
+    os.makedirs(d, exist_ok=True)
+    keyf, ownf = os.path.join(d, "tls.key"), os.path.join(d, "tls.own")
+    write(keyf, KEY + "\n")
+    chain = b"".join(open(os.path.join(certs, n), "rb").read() for n in ("leaf.der", "int.der"))
+    leaf_fp = read(os.path.join(certs, "leaf.fp")).strip()
+    mine = subprocess.run([pond, "-k", keyf, "-F", "127.0.0.1"], capture_output=True, text=True,
+                          timeout=10).stdout.split()[2]
+    trust = ssl.create_default_context(cafile=os.path.join(certs, "root.pem"))
+    urls = ["-l", f"https://127.0.0.1:{HTTPS}", "-l", f"http://127.0.0.1:{HTTP}"]
+    for key, what in ((read(os.path.join(certs, "leaf.hex")).strip(), "its own key"),
+                      (KEY, "another key"), (None, "no file")):
+        if key:
+            write(ownf, key + "\n" + base64.b64encode(chain).decode() + "\n")
+        elif os.path.exists(ownf):
+            os.unlink(ownf)
+        log = open(os.path.join(d, "log"), "w")
+        proc = subprocess.Popen([pond, *urls, "-k", keyf, "-c", ownf, "-t", "/tls-token"],
+                                stdout=subprocess.DEVNULL, stderr=log)
+        try:
+            if not started(proc, HTTPS):
+                check(False, "the daemon listens")
+                continue
+            if what == "its own key":
+                got, sent = served(trust)
+                check(got == leaf_fp and sent in (0, 2),
+                      f"with {what}: served with its chain, {sent} certificates, which a "
+                      "client that trusts the root verifies by the name 127.0.0.1")
+                conn = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=10)
+                status, _, body = request(conn, "GET", "/api/get/tls",
+                                          headers={"Authorization": f"Bearer {TOKEN}"})
+                conn.close()
+                tls = json.loads(body)["value"]
+                check(status == 200 and tls["own"]["chain"] == 2 and tls["own"]["sha256"] == leaf_fp
+                      and tls["certificates"][0]["sha256"] == leaf_fp
+                      and tls["certificates"][0]["named"] is True,
+                      "/api/get/tls says it, and that it names the address")
+            else:
+                check(served()[0] == mine, f"with {what}: the panel's own certificate is served")
+        finally:
+            proc.terminate()
+            proc.wait(5)
+            log.close()
+        said = read(os.path.join(d, "log"))
+        if what == "another key":
+            check("the own certificate of" in said and "the key is not the certificate's" in said,
+                  "and the daemon says why")
+        if what == "its own key":
+            printed = subprocess.run([pond, "-k", keyf, "-c", ownf, "-F", "127.0.0.1"],
+                                     capture_output=True, text=True, timeout=10).stdout.split()
+            check(printed[:3] == ["127.0.0.1", "SHA-256", leaf_fp]
+                  and printed[4].startswith("2036-01-01"),
+                  "-F prints the own certificate's fingerprint and end, for the console")
+        if what == "no file":
+            check("own certificate" not in said, "a file that is not there is nothing to say")
 
 
 def downloads(pond, workdir, token):

@@ -4,7 +4,9 @@
 /*
  * The panel over HTTPS (tls.h). The certificates are made as they are first
  * needed, one for each address and period, and kept: a handful of addresses
- * at most, and a signature takes a moment on the stick.
+ * at most, and a signature takes a moment on the stick. An own certificate,
+ * of the file of -c, takes their place on every address while it is there
+ * and its key is its own.
  */
 
 #include "tls.h"
@@ -40,11 +42,34 @@ struct cert_entry {
 static struct cert_entry g_cache[TLS_CACHE];
 static unsigned int g_next;
 
-int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *const *urls, int n)
+/* The files of -k and -c, and the own certificate, when there is one. */
+static const char *g_keyf, *g_ownf;
+static struct cert_own g_own;
+static bool g_has_own;
+
+/* The own certificate of the file of -c, if any; said when it is refused. */
+static void own_load(void)
+{
+	char err[160];
+	int rc;
+
+	g_has_own = false;
+	if (!g_ownf)
+		return;
+	rc = cert_own_load(g_ownf, &g_own, err, sizeof(err));
+	if (rc && rc != -ENOENT)
+		fprintf(stderr, "pond: the own certificate of %s is not served: %s\n", g_ownf, err);
+	g_has_own = !rc;
+}
+
+int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *ownfile,
+	      const char *const *urls, int n)
 {
 	int i, rc;
 
 	g_mgr = mgr;
+	g_keyf = keyfile;
+	g_ownf = ownfile;
 	if (keyfile) {
 		rc = cert_load_key(keyfile);
 		if (rc) {
@@ -53,6 +78,7 @@ int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *const *urls, 
 			return rc;
 		}
 	}
+	own_load();
 	for (i = 0; i < n && g_naddrs < TLS_LISTEN_MAX; i++) {
 		struct listen_addr *a = &g_addrs[g_naddrs];
 
@@ -166,6 +192,16 @@ void tls_accept(struct mg_connection *c)
 
 	if (!tls_port(mg_ntohs(c->loc.port)))
 		return;
+	/* The own certificate on every address, the server's and its chain. */
+	if (g_has_own) {
+		cert_own_key_der(&g_own, key);
+		memset(&opts, 0, sizeof(opts));
+		opts.cert = mg_str_n((const char *)g_own.chain, g_own.len);
+		opts.key = mg_str_n((const char *)key, sizeof(key));
+		mg_tls_init(c, &opts);
+		memset(key, 0, sizeof(key));
+		return;
+	}
 	e = c->loc.is_ip6 ? NULL : certificate(c->loc.ip, time(NULL));
 	if (!e) {
 		mg_error(c, "no certificate for this address");
@@ -258,6 +294,12 @@ int tls_print(const char *ip, time_t now)
 		fprintf(stderr, "pond: %s is not an IPv4 address\n", ip);
 		return 1;
 	}
+	if (g_has_own) {
+		cert_fingerprint(g_own.chain, g_own.leaf, fp);
+		cert_iso(g_own.not_after, until);
+		printf("%.*s SHA-256 %s until %s\n", (int)strcspn(ip, "/"), ip, fp, until);
+		return 0;
+	}
 	e = certificate(a.ip, now);
 	if (!e) {
 		fprintf(stderr, "pond: no certificate for %s\n", ip);
@@ -270,7 +312,54 @@ int tls_print(const char *ip, time_t now)
 	return 0;
 }
 
-/* The provider "tls": for each address served over HTTPS, its certificate. */
+static void pv_member(struct prov_buf *out, const char *key, const char *value)
+{
+	pv_comma(out);
+	pv_key(out, key);
+	pv_str(out, value);
+}
+
+/* The own certificate: who it names, who signed it, its validity and its names. */
+static void own_value(struct prov_buf *out)
+{
+	char fp[CERT_FP_LEN], t[24], *name, *save = NULL;
+	char names[CERT_NAMES_MAX];
+
+	if (!g_has_own) {
+		pv_null(out);
+		return;
+	}
+	pv_open(out, '{');
+	pv_key(out, "subject");
+	pv_str(out, g_own.subject);
+	pv_member(out, "issuer", g_own.issuer);
+	cert_fingerprint(g_own.chain, g_own.leaf, fp);
+	pv_member(out, "sha256", fp);
+	cert_iso(g_own.not_before, t);
+	pv_member(out, "not_before", t);
+	cert_iso(g_own.not_after, t);
+	pv_member(out, "not_after", t);
+	pv_comma(out);
+	pv_key(out, "chain");
+	pv_num(out, g_own.count);
+	pv_comma(out);
+	pv_key(out, "names");
+	pv_open(out, '[');
+	snprintf(names, sizeof(names), "%s", g_own.names);
+	for (name = strtok_r(names, " ", &save); name; name = strtok_r(NULL, " ", &save)) {
+		if (name != names)
+			pv_comma(out);
+		pv_str(out, name);
+	}
+	pv_close(out, ']');
+	pv_close(out, '}');
+}
+
+/*
+ * The provider "tls": whether the daemon serves HTTPS, the own certificate
+ * or null, and for each address served over HTTPS, the certificate it
+ * gets, and whether that certificate names it.
+ */
 int prov_tls(struct prov_buf *out)
 {
 	struct mg_connection *l;
@@ -282,6 +371,9 @@ int prov_tls(struct prov_buf *out)
 	pv_key(out, "https");
 	pv_bool(out, g_tls);
 	pv_comma(out);
+	pv_key(out, "own");
+	own_value(out);
+	pv_comma(out);
 	pv_key(out, "certificates");
 	pv_open(out, '[');
 	for (l = g_mgr ? g_mgr->conns : NULL; g_tls && l; l = l->next) {
@@ -290,14 +382,12 @@ int prov_tls(struct prov_buf *out)
 		if (!l->is_listening || l->is_closing || l->loc.is_ip6 ||
 		    !tls_port(mg_ntohs(l->loc.port)))
 			continue;
-		e = certificate(l->loc.ip, now);
-		if (!e)
+		e = g_has_own ? NULL : certificate(l->loc.ip, now);
+		if (!e && !g_has_own)
 			continue;
 		if (!first)
 			pv_comma(out);
 		first = false;
-		cert_fingerprint(e->der, e->len, fp);
-		cert_validity(now, &from, &to);
 		snprintf(ip, sizeof(ip), "%u.%u.%u.%u", l->loc.ip[0], l->loc.ip[1],
 			 l->loc.ip[2], l->loc.ip[3]);
 		pv_open(out, '{');
@@ -306,17 +396,25 @@ int prov_tls(struct prov_buf *out)
 		pv_comma(out);
 		pv_key(out, "port");
 		pv_num(out, mg_ntohs(l->loc.port));
+		if (e) {
+			cert_fingerprint(e->der, e->len, fp);
+			cert_validity(now, &from, &to);
+			pv_member(out, "sha256", fp);
+			iso(from, t);
+			pv_member(out, "not_before", t);
+			iso(to, t);
+			pv_member(out, "not_after", t);
+		} else {
+			cert_fingerprint(g_own.chain, g_own.leaf, fp);
+			pv_member(out, "sha256", fp);
+			cert_iso(g_own.not_before, t);
+			pv_member(out, "not_before", t);
+			cert_iso(g_own.not_after, t);
+			pv_member(out, "not_after", t);
+		}
 		pv_comma(out);
-		pv_key(out, "sha256");
-		pv_str(out, fp);
-		pv_comma(out);
-		pv_key(out, "not_before");
-		iso(from, t);
-		pv_str(out, t);
-		pv_comma(out);
-		pv_key(out, "not_after");
-		iso(to, t);
-		pv_str(out, t);
+		pv_key(out, "named");
+		pv_bool(out, !g_has_own || cert_own_names(&g_own, l->loc.ip));
 		pv_close(out, '}');
 	}
 	pv_close(out, ']');

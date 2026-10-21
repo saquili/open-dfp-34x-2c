@@ -14,16 +14,17 @@ app in ``web/``, as static files.
 
 ::
 
-   pond [-l http[s]://ADDRESS:PORT]... [-k KEYFILE] [-t TOKENFILE] [-w WEBDIR]
-        [-u USER]
-   pond -k KEYFILE -F ADDRESS
+   pond [-l http[s]://ADDRESS:PORT]... [-k KEYFILE] [-c OWNFILE] [-t TOKENFILE]
+        [-w WEBDIR] [-u USER]
+   pond -k KEYFILE [-c OWNFILE] -F ADDRESS
 
 Each ``-l`` adds an address to listen on, up to four; with none, the daemon
 listens on port 8080 of every address. An address it cannot listen on is
 reported and left out, and the daemon ends only when it listens on none. An
-``https://`` address needs the key of ``-k`` (see "HTTPS"); ``-F`` prints the
-fingerprint of the certificate of an address, and the end of its validity,
-and ends. On the stick ``onu-run`` starts it on the management address, and
+``https://`` address needs the key of ``-k`` (see "HTTPS"); ``-c`` names the
+file of an own certificate, served in place of the daemon's own while it is
+there; ``-F`` prints the fingerprint of the certificate of an address, and the
+end of its validity, and ends. On the stick ``onu-run`` starts it on the management address, and
 on the address of the host link if there is one, each over HTTPS on port 443
 and over HTTP on port 80. ``-u`` makes a daemon started as root run as the
 account ``USER``, with its groups, keeping of root's powers only the one to
@@ -156,14 +157,34 @@ The panel shows the fingerprint of the address it was opened at (``tls``,
 below), and the boot script prints the one of the management address on the
 console, for a person to compare with the browser's.
 
-Mongoose's TLS, of version 7.16, is changed in three places, each marked in
+An own certificate, one that an authority signed, takes the place of those
+certificates on every address while the file of ``-c`` holds it and its key
+is its own (``src/cert.h``): the file onu-config writes (``onu-config tls
+own``, from the store), the certificate's P-256 key in 64 hexadecimal digits
+on its first line, as the file of ``-k``, and on its second the certificate
+and the CA certificates after it, DER one after another, in base64, at most
+8 KiB of DER and eight certificates. Mongoose's TLS signs with a P-256 key
+alone, so the certificate's key must be one; the CA certificates may be of
+any kind, as only the browser checks them. The daemon sends the certificate
+with its chain, each an entry of the handshake's Certificate message, and a
+browser that trusts the authority's root then takes it without a warning,
+for the names it carries: the address the panel is opened at must be among
+its subject's alternative names (``tls`` says, for each address, whether
+it is). Without the CA certificates between, a browser that does not have
+them already cannot make the path to the root, and warns. A file whose key
+is not its certificate's is said in the log and left out; so is a file that
+is not one. ``-F`` prints the own certificate's fingerprint while there is
+one.
+
+Mongoose's TLS, of version 7.16, is changed in four places, each marked in
 ``third_party/mongoose/mongoose.c``: ChaCha20 takes the byte order from the
 compiler, as the C library defines ``LITTLE_ENDIAN`` on the big-endian stick
 too, where every record came out wrong; the signature of its
 CertificateVerify message is encoded as DER asks, without the leading zeros
 that made OpenSSL, and BoringSSL with it, refuse about one handshake in 128;
-and a malformed key ends the connection rather than leaving it a key of the
-wrong bytes.
+a malformed key ends the connection rather than leaving it a key of the
+wrong bytes; and the Certificate message carries each certificate of a
+chain as an entry of its own, where it sent the chain as one.
 
 Routes
 ======
@@ -371,9 +392,12 @@ password, only whether one is set; ``omci_frames``, the conversation with
 the OLT as omcid keeps it (method ``frames``): its last frames, each with the
 time it passed and what omcid did with it, and with ``?since=N`` in the
 address only those from number N on, so that a reader that follows the
-conversation comes back for what is new; ``tls``, whether the daemon serves HTTPS
-and, for each address it does, the port, the certificate's SHA-256 as
-browsers show it and the start and end of its validity; ``clock``, the time
+conversation comes back for what is new; ``tls``, whether the daemon serves HTTPS,
+the own certificate or null (its subject and issuer as words, its SHA-256,
+the start and end of its validity, the certificates of its chain and its
+alternative names), and, for each address it serves over HTTPS, the port, the
+certificate's SHA-256 as browsers show it, the start and end of its validity
+and whether it names the address (``named``, always for the daemon's own); ``clock``, the time
 the stick's clock reads and what timed says of it in ``/run/timed/state``
 (``timed/README.rst``): the source in use, ``ptp``, ``ntp``, ``olt`` or
 ``none``, the state (``locked``, ``syncing``, ``set``, ``holdover`` or
@@ -439,7 +463,12 @@ and its fingerprint (``tests/test_cert.c``), and run the daemon with a key on
 two addresses of the loopback, one over HTTPS and one over HTTP, which
 ``tests/test_tls.py`` reaches with Python's ssl module, OpenSSL too: the
 handshake, the certificate, a hundred handshakes in a row, the cookie, the
-redirect and the refusals; ``openssl`` is needed for them.
+redirect and the refusals; ``openssl`` is needed for them. An own
+certificate is tested with those ``tests/make-certs.sh`` makes with openssl,
+as an authority would, a root, an intermediate and the server's: taken and
+refused (``tests/test_cert.c``), and served by the daemon, through which a
+client that trusts the root alone verifies it by the address, which it
+cannot without the intermediate (``tests/test_tls.py``).
 
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,

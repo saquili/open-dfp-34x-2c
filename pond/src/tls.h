@@ -22,11 +22,14 @@
 #define TLS_LISTEN_MAX 4
 
 /*
- * Take the key of @keyfile, or none with NULL, and the -l addresses: an
- * https:// one without a key is refused. Returns 0, or a negative errno.
+ * Take the key of @keyfile, or none with NULL, the own certificate of
+ * @ownfile, or none with NULL or without the file (cert.h, cert_own_load()),
+ * and the -l addresses: an https:// one without a key is refused. An own
+ * certificate that is refused is said, and the daemon makes its own.
+ * Returns 0, or a negative errno.
  */
-int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *const *urls,
-	      int n);
+int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *ownfile,
+	      const char *const *urls, int n);
 
 /* Whether the daemon serves HTTPS: a key and an https:// address. */
 bool tls_on(void);

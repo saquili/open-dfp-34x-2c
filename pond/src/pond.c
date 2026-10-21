@@ -73,6 +73,7 @@ static const char *g_listen[POND_LISTEN_MAX];
 static int g_nlisten;
 static const char *g_tokenf;
 static const char *g_keyf;
+static const char *g_ownf;
 static const char *g_web = "/usr/share/pond/www";
 static char g_token[128];
 static volatile sig_atomic_t g_stop;
@@ -749,6 +750,8 @@ int main(int argc, char **argv)
 			g_tokenf = argv[++i];
 		else if (!strcmp(argv[i], "-k") && i + 1 < argc)
 			g_keyf = argv[++i];
+		else if (!strcmp(argv[i], "-c") && i + 1 < argc)
+			g_ownf = argv[++i];
 		else if (!strcmp(argv[i], "-F") && i + 1 < argc)
 			print_for = argv[++i];
 		else if (!strcmp(argv[i], "-w") && i + 1 < argc)
@@ -757,9 +760,9 @@ int main(int argc, char **argv)
 			user = argv[++i];
 		else {
 			fprintf(stderr,
-				"usage: %s [-l http[s]://addr:port]... [-k keyfile] [-t tokenfile] [-w webdir]\n"
-				"          [-u user]\n"
-				"       %s -k keyfile -F address\n",
+				"usage: %s [-l http[s]://addr:port]... [-k keyfile] [-c ownfile] [-t tokenfile]\n"
+				"          [-w webdir] [-u user]\n"
+				"       %s -k keyfile [-c ownfile] -F address\n",
 				argv[0], argv[0]);
 			return 2;
 		}
@@ -777,7 +780,7 @@ int main(int argc, char **argv)
 
 	/* The boot script's line for the console: the certificate of an address. */
 	if (print_for) {
-		if (!g_keyf || tls_setup(NULL, g_keyf, NULL, 0))
+		if (!g_keyf || tls_setup(NULL, g_keyf, g_ownf, NULL, 0))
 			return 1;
 		return tls_print(print_for, time(NULL));
 	}
@@ -801,7 +804,7 @@ int main(int argc, char **argv)
 	auth_init();
 	mg_mgr_init(&mgr);
 	g_mgr = &mgr;
-	if (tls_setup(&mgr, g_keyf, g_listen, g_nlisten))
+	if (tls_setup(&mgr, g_keyf, g_ownf, g_listen, g_nlisten))
 		return 1;
 	/*
 	 * An address that is missing costs only its own listener: the others

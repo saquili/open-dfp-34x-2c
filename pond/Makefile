@@ -29,7 +29,8 @@ LDLIBS  += -lmnl
 PROV := prov.o prov_file.o prov_net.o prov_mtd.o prov_netlink.o prov_settings.o \
         prov_identity.o prov_firmware.o prov_omci.o prov_system.o table.o tls.o cert.o \
         value.o
-OBJS := $(addprefix $(BUILD)/src/,pond.o auth.o changes.o firmware.o mgmt.o $(PROV)) $(BUILD)/mongoose.o
+OBJS := $(addprefix $(BUILD)/src/,pond.o auth.o changes.o firmware.o mgmt.o $(PROV)) \
+	$(BUILD)/mongoose.o
 
 .PHONY: all check clean
 
@@ -110,9 +111,11 @@ check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_ce
 	POND_ROOT=$(abspath $(BUILD))/auth ONU_ROOT=$(abspath $(BUILD))/auth \
 		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config $(BUILD)/test_auth
 	# The certificate, read by OpenSSL: its signature and its fingerprint;
+	# own certificates as an authority makes them, which openssl makes too;
 	# then the daemon over HTTPS.
-	rm -rf $(BUILD)/tls && mkdir -p $(BUILD)/tls
-	$(BUILD)/test_cert $(BUILD)/tls
+	rm -rf $(BUILD)/tls $(BUILD)/certs && mkdir -p $(BUILD)/tls
+	sh tests/make-certs.sh $(BUILD)/certs
+	$(BUILD)/test_cert $(BUILD)/tls $(BUILD)/certs
 	openssl x509 -inform DER -in $(BUILD)/tls/cert.der -out $(BUILD)/tls/cert.pem
 	openssl verify -check_ss_sig -partial_chain -trusted $(BUILD)/tls/cert.pem $(BUILD)/tls/cert.pem
 	test "$$(openssl x509 -in $(BUILD)/tls/cert.pem -noout -fingerprint -sha256 | cut -d= -f2)" = \
@@ -120,7 +123,8 @@ check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_ce
 	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
 	POND_ROOT=$(abspath $(BUILD))/auth ONU_ROOT=$(abspath $(BUILD))/auth \
 		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \
-		python3 tests/test_tls.py $(abspath $(BUILD))/pond-none $(abspath $(BUILD))/tls
+		python3 tests/test_tls.py $(abspath $(BUILD))/pond-none $(abspath $(BUILD))/tls \
+			$(abspath $(BUILD))/certs
 
 clean:
 	rm -rf $(BUILD)

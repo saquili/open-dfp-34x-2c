@@ -67,4 +67,92 @@ void cert_fingerprint(const uint8_t *der, size_t len, char out[CERT_FP_LEN]);
 #define CERT_KEY_DER_LEN 39
 void cert_key_der(uint8_t der[CERT_KEY_DER_LEN]);
 
+/*
+ * An own certificate, which the daemon serves on every address in place of
+ * those it makes: one that an authority signed, with the CA certificates
+ * that lead to the authority's own, which the browser trusts. Mongoose's TLS
+ * signs with a P-256 key alone, so the certificate's key is one; the CA
+ * certificates may be of any kind, as only the browser checks them. The
+ * chain is at most CERT_CHAIN_MAX bytes of DER, CERT_CHAIN_COUNT
+ * certificates, the server's first, and the configuration store keeps it
+ * (onu-config tls own).
+ */
+#define CERT_CHAIN_MAX 8192
+#define CERT_CHAIN_COUNT 8
+#define CERT_NAME_MAX 128
+#define CERT_NAMES_MAX 384
+#define CERT_IPS_MAX 8
+
+/**
+ * struct cert_own - An own certificate, checked.
+ * @chain: the certificates, DER, one after another, the server's first
+ * @len: the bytes of @chain
+ * @leaf: the bytes of the first certificate
+ * @count: the certificates of @chain
+ * @key: the scalar of the first certificate's key
+ * @not_before: the start of its validity, in seconds from 1970
+ * @not_after: its end
+ * @subject: the common name and the organisation of its subject, as words
+ * @issuer: the same of its issuer
+ * @names: the names of its subjectAltName, "DNS:name" and "IP:address",
+ *	apart by a blank
+ * @ips: the IPv4 addresses among them
+ * @nips: how many
+ */
+struct cert_own {
+	uint8_t chain[CERT_CHAIN_MAX];
+	size_t len;
+	size_t leaf;
+	unsigned int count;
+	uint8_t key[CERT_KEY_LEN];
+	long long not_before;
+	long long not_after;
+	char subject[CERT_NAME_MAX];
+	char issuer[CERT_NAME_MAX];
+	char names[CERT_NAMES_MAX];
+	uint8_t ips[CERT_IPS_MAX][4];
+	unsigned int nips;
+};
+
+/**
+ * cert_own_pem() - Check an own certificate as a person gives it.
+ * @cert: the certificate and the CA certificates after it, each a PEM block
+ *	BEGIN CERTIFICATE, the server's first; other text is passed over
+ * @key: its private key, unencrypted, a PEM block BEGIN EC PRIVATE KEY
+ *	(SEC1, RFC 5915) or BEGIN PRIVATE KEY (PKCS#8, RFC 5208)
+ * @own: what it is, filled in when it is taken
+ * @err: why not, in words, @errcap bytes
+ *
+ * Return: 0, or -EINVAL with why in @err: no certificate, a chain too long,
+ * a block that is no certificate, a key of another kind than P-256, an
+ * encrypted key, or a key that is not the certificate's.
+ */
+int cert_own_pem(const char *cert, const char *key, struct cert_own *own, char *err,
+		 size_t errcap);
+
+/**
+ * cert_own_der() - The same, of a chain in DER, @len bytes, and the scalar
+ *	@key, as the store keeps them.
+ */
+int cert_own_der(const uint8_t *chain, size_t len, const uint8_t key[CERT_KEY_LEN],
+		 struct cert_own *own, char *err, size_t errcap);
+
+/**
+ * cert_own_load() - The same, of the file at @path, as onu-config writes it:
+ *	the key in 64 hexadecimal digits on its first line, the chain in base64
+ *	on its second.
+ *
+ * Return: 0, -ENOENT without the file, or -EINVAL with why in @err.
+ */
+int cert_own_load(const char *path, struct cert_own *own, char *err, size_t errcap);
+
+/* Whether @own names the IPv4 address @ip among its subjectAltName. */
+bool cert_own_names(const struct cert_own *own, const uint8_t ip[4]);
+
+/* The private key of @own as cert_key_der() writes the daemon's. */
+void cert_own_key_der(const struct cert_own *own, uint8_t der[CERT_KEY_DER_LEN]);
+
+/* @t, seconds from 1970, as 2026-10-21T12:00:00Z, in @out of 24 bytes. */
+void cert_iso(long long t, char out[24]);
+
 #endif

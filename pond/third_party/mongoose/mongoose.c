@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only AND BSD-2-Clause
 // SPDX-FileCopyrightText: 2014-2015 Kenneth MacKay
 // Vendored from Cesanta mongoose 7.16, taken under the GPL-2.0 arm of its
-// dual licence. Changed, apart from this header, in three places of its
+// dual licence. Changed, apart from this header, in four places of its
 // built-in TLS, each marked "open-dfp-34x-2c": the signature of the
 // CertificateVerify message is DER as RFC 8446 asks, a malformed EC key ends
 // the connection rather than lending it 32 bytes of the wrong place as its
-// key, and ChaCha20 takes the byte order from the compiler. Mongoose holds
+// key, ChaCha20 takes the byte order from the compiler, and the Certificate
+// message carries each certificate of a chain as an entry. Mongoose holds
 // micro-ecc by Kenneth MacKay (its tls_uecc parts), under the BSD 2-clause
 // licence, whose notice a binary keeps too (LICENSES/preferred/BSD-2-Clause.txt).
 // Copyright (c) 2004-2013 Sergey Lyubka
@@ -10595,32 +10596,52 @@ static void mg_tls_server_send_ext(struct mg_connection *c) {
   mg_tls_encrypt(c, ext, sizeof(ext), MG_TLS_HANDSHAKE);
 }
 
+// open-dfp-34x-2c: the DER of the certificate may be a chain, its
+// certificates one after another, the server's first, each a SEQUENCE: each
+// is an entry of the Certificate message (RFC 8446 section 4.4.2), so that a
+// browser has the CA certificates between the server's and the authority's
+// own that it trusts. It sent the whole as one entry before.
+static size_t mg_tls_der_len(const uint8_t *p, size_t n) {
+  // the bytes of the SEQUENCE at p, or all n when it is none
+  size_t k = (n > 1 && (p[1] & 0x80U)) ? (size_t) (p[1] & 0x7fU) : 0, len = 0, i;
+  if (n < 2 + k || p[0] != 0x30 || k > 3) return n;
+  for (i = 0; i < k; i++) len = len << 8 | p[2 + i];
+  if (k == 0) len = p[1];
+  return len > n - 2 - k ? n : 2 + k + len;
+}
+
 static void mg_tls_server_send_cert(struct mg_connection *c) {
   struct tls_data *tls = (struct tls_data *) c->tls;
-  // server DER certificate (empty)
-  size_t n = tls->cert_der.len;
-  uint8_t *cert = (uint8_t *) calloc(1, 13 + n);
+  const uint8_t *der = (const uint8_t *) tls->cert_der.buf;
+  size_t n = tls->cert_der.len, at, list = 0, one, w;
+  uint8_t *cert;
+  // each entry: 3 bytes of length, the DER, 2 bytes of extensions (none)
+  for (at = 0; at < n; at += one) {
+    one = mg_tls_der_len(der + at, n - at);
+    list += 3 + one + 2;
+  }
+  cert = (uint8_t *) calloc(1, 8 + list);
   if (cert == NULL) {
     mg_error(c, "tls cert oom");
     return;
   }
-  cert[0] = 0x0b;                                // handshake header
-  cert[1] = (uint8_t) (((n + 9) >> 16) & 255U);  // 3 bytes: payload length
-  cert[2] = (uint8_t) (((n + 9) >> 8) & 255U);
-  cert[3] = (uint8_t) ((n + 9) & 255U);
-  cert[4] = 0;                                   // request context
-  cert[5] = (uint8_t) (((n + 5) >> 16) & 255U);  // 3 bytes: cert (s) length
-  cert[6] = (uint8_t) (((n + 5) >> 8) & 255U);
-  cert[7] = (uint8_t) ((n + 5) & 255U);
-  cert[8] =
-      (uint8_t) (((n) >> 16) & 255U);  // 3 bytes: first (and only) cert len
-  cert[9] = (uint8_t) (((n) >> 8) & 255U);
-  cert[10] = (uint8_t) (n & 255U);
-  // bytes 11+ are certificate in DER format
-  memmove(cert + 11, tls->cert_der.buf, n);
-  cert[11 + n] = cert[12 + n] = 0;  // certificate extensions (none)
-  mg_sha256_update(&tls->sha256, cert, 13 + n);
-  mg_tls_encrypt(c, cert, 13 + n, MG_TLS_HANDSHAKE);
+  cert[0] = 0x0b;                                   // handshake header
+  cert[1] = (uint8_t) (((list + 4) >> 16) & 255U);  // 3 bytes: payload length
+  cert[2] = (uint8_t) (((list + 4) >> 8) & 255U);
+  cert[3] = (uint8_t) ((list + 4) & 255U);
+  cert[4] = 0;                                      // request context
+  cert[5] = (uint8_t) ((list >> 16) & 255U);        // 3 bytes: list length
+  cert[6] = (uint8_t) ((list >> 8) & 255U);
+  cert[7] = (uint8_t) (list & 255U);
+  for (at = 0, w = 8; at < n; at += one, w += 3 + one + 2) {
+    one = mg_tls_der_len(der + at, n - at);
+    cert[w] = (uint8_t) ((one >> 16) & 255U);
+    cert[w + 1] = (uint8_t) ((one >> 8) & 255U);
+    cert[w + 2] = (uint8_t) (one & 255U);
+    memmove(cert + w + 3, der + at, one);  // then 2 bytes of extensions, none
+  }
+  mg_sha256_update(&tls->sha256, cert, 8 + list);
+  mg_tls_encrypt(c, cert, 8 + list, MG_TLS_HANDSHAKE);
   free(cert);
 }
 
