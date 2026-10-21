@@ -729,8 +729,8 @@ those of the facts that carry each step.
 9. Set the burst merge threshold. (I)
 10. Write the response delay under the write key. Purpose: upstream timing. (M)
 11. Write the status-reporting block, 48 bytes, into the PON MAC. Purpose: the
-    unit of the DBRu reports (see "Status reporting"). (P for the 48, I for
-    the rest)
+    unit of the DBRu reports (see "Status reporting"). (P for the 48, M for
+    the word read back, I for the unit)
 12. Write the period of the frame-derived pulse. (I)
 13. Set the signal-detect mismatch limit. (I)
 14. Enable the optical LOS input and select its polarity. Purpose: downstream
@@ -2802,31 +2802,38 @@ carries a value that an OLT writes into the driver (see "Known limitations").
        reports. At step 11 of the bring-up the driver writes
        ``RTL9602C_PONSCH_DBRU_CFG_BLOCK_DEF`` (48) into the block and leaves the
        period as it finds it. Like the rest of the PON MAC, the word is read
-       only once the PON MAC is built.
-     - I
-     - The ``dbru cfg`` line of the ``usburst`` view after bring-up, ``block
-       48``, and the debug line ``<GPON> status reporting: ...``, which gives
-       the word as found and as written. That the unit is the byte, and the
-       period's meaning, need an OLT that asks for mode 0 reports while a known
-       amount waits in a T-CONT.
+       only once the PON MAC is built. After bring-up it read ``00003002``:
+       the block 48, the period 2.
+     - M, I
+     - M: the ``dbru cfg`` line of the ``usburst`` view after bring-up,
+       ``dbru cfg 00003002 block 48 period 2`` (2026-10-21). I: that the unit
+       is the byte, and the period's meaning, which need an OLT that asks for
+       mode 0 reports while a known amount waits in a T-CONT.
    * - ``RTL9602C_GTC_US_CTRL_DBRU_DIS`` (bit 8 of ``RTL9602C_GTC_US_CTRL``,
        ``0x705014``, locked) is taken to keep the DBRu out of the bursts even
        where an allocation asks for one. At step 24 of the bring-up the driver
        clears it, under the write key, so that the MAC answers every request.
-       Whether it resets clear, which would make the write change nothing, is
-       not established.
-     - I
-     - The ``tx ctrl`` line of the ``usburst`` view, ``dbru on``, and the
-       debug line ``<GPON> upstream control: ...``, which gives the word as
-       found and as written; an OLT that asks for a DBRu, with the DBRu column
-       of the ``bwmap`` view and index 1 of the ``uscntr`` view, taken to
-       count the DBRu sent.
+       On the lab stick the bit was clear before the driver cleared it: the
+       word read ``0x0c18`` with the driver that left the bit alone, and reads
+       the same with the write, so there the write changes nothing.
+     - M, I
+     - M: the ``tx ctrl`` line of the ``usburst`` view after bring-up, ``tx
+       ctrl 00000c18 dbru on``, the value the word read on the same stick
+       before the change (2026-10-21). I: that the bit keeps the DBRu out of
+       the bursts; an OLT that asks for a DBRu, with the DBRu column of the
+       ``bwmap`` view and index 1 of the ``uscntr`` view, taken to count the
+       DBRu sent.
    * - Status reporting has no part in activation or in OMCI: an OLT that asks
        for no DBRu, as the test OLT is taken to, sees the same bursts whether
        the report is on or off.
-     - I
-     - The ONU reaching O5 on an OLT and OMCI messages passing both ways with
-       the report on; the DBRu column of the ``bwmap`` view on the test OLT.
+     - M, I
+     - M: with the report on and the block written, the ONU reached O5 on the
+       lab OLT, and the device tests ``gpon.downstream``,
+       ``gpon.activation``, ``gpon.stable``, ``omci.channel``,
+       ``omci.mib-upload``, ``omci.gem-ports``, ``omci.tcont-map``,
+       ``omci.alarms`` and ``optics.diagnostics`` passed, 9 of 9
+       (2026-10-21). I: that the test OLT asks for no DBRu; the DBRu column of
+       the ``bwmap`` view on it would show.
 
 Tables: Alloc-ID, Port-ID and multicast
 =======================================
@@ -3941,12 +3948,11 @@ Assumptions the driver depends on
      - An OLT that relies on the ONU's own levelling, or a later edition of
        G.984.3 clause 10.5.1.
    * - That the block written into ``RTL9602C_PONSCH_DBRU_CFG`` is counted in
-       bytes, that clearing ``RTL9602C_GTC_US_CTRL_DBRU_DIS`` makes the MAC
-       answer every DBRu request, and that neither write disturbs activation
-       or OMCI ("Status reporting").
-     - The ``usburst`` view and the two debug lines after bring-up, the ONU
-       reaching O5 with OMCI passing both ways; an OLT that asks for mode 0
-       reports while a known amount waits in a T-CONT.
+       bytes, and that with ``RTL9602C_GTC_US_CTRL_DBRU_DIS`` clear the MAC
+       answers every DBRu request ("Status reporting"). Neither write
+       disturbed activation or OMCI on the lab OLT (2026-10-21).
+     - An OLT that asks for mode 0 reports while a known amount waits in a
+       T-CONT.
 
 Questions the code does not depend on
 -------------------------------------

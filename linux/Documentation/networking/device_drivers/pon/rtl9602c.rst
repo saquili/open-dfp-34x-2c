@@ -1422,9 +1422,10 @@ T-CONT 16.
        period beside it. The GPON MAC's bring-up, not the build, writes the
        block, 48, once the PON MAC is built; the ``usburst`` view of the GPON
        MAC shows the word.
-     - I
-     - The GPON MAC's page, "Status reporting", which gives the facts and what
-       would settle them.
+     - M, I
+     - M: after bring-up the word read ``00003002``, the block 48 and the
+       period 2 (2026-10-21). I: the unit and the period; the GPON MAC's page,
+       "Status reporting", gives the facts and what would settle them.
 
 Data on the default Alloc-ID
 ----------------------------
