@@ -103,6 +103,10 @@ int prov_rule_set(const char *val, char *err, size_t errcap);
 int prov_fw_write(const char *val, char *err, size_t errcap, prov_done done,
 		  void *ctx);
 int prov_fw_set(const char *val, char *err, size_t errcap);
+int prov_iptv_write(const char *val, char *err, size_t errcap, prov_done done,
+		    void *ctx);
+int prov_iptv_set(const char *val, char *err, size_t errcap);
+int prov_iptv(struct prov_buf *out);
 int prov_omci(struct prov_buf *out);
 int prov_omci_frames(struct prov_buf *out);
 int prov_service_rules(struct prov_buf *out);

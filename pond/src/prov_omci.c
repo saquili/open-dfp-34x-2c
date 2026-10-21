@@ -124,6 +124,26 @@ int prov_omci_frames(struct prov_buf *out)
 }
 
 /*
+ * Television, as omcid's multicast agent holds it (its method "iptv",
+ * mcast/agent.h): the OLT's policy, the groups the bridge forwards, the
+ * joins refused, the events, the counts and who gives IGMP its priority. 64
+ * groups, 16 refusals and 32 events at most, a hundred-odd bytes each.
+ */
+#define IPTV_TEXT (32u * 1024u)
+
+int prov_iptv(struct prov_buf *out)
+{
+	int n;
+
+	pv_reserve(out, IPTV_TEXT);
+	n = bus_call("omcid", "iptv", NULL, 0, out->buf + out->len, pv_room(out));
+	if (n < 0)
+		return n;
+	out->len += (size_t)n;
+	return 0;
+}
+
+/*
  * The rules of the services in force, as omcid applies them to the OLT's
  * VLAN rules (its method "rules", me/svcrule.h): a person's, then the moves
  * omcid made for clashes of two outputs. 32 of each at most, a few dozen

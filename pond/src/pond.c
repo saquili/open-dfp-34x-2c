@@ -21,6 +21,8 @@
  *                      (changes.c)
  *   /api/identity/olt-login a POST, with root's password: the PPPoE login
  *                      the OLT sent, its password with it
+ *   /api/iptv/test     a POST: a group of television joined from the stick
+ *                      for a few seconds, and what came of it (iptv.h)
  *   /api/system/restart a POST: restart the stick
  *   /api/firmware/upload   a POST of an update file: into the other bank
  *   /api/firmware/download the running bank as an update file
@@ -47,6 +49,7 @@
 #include "bus.h"
 #include "changes.h"
 #include "firmware.h"
+#include "iptv.h"
 #include "keys.h"
 #include "later.h"
 #include "mgmt.h"
@@ -796,6 +799,11 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 			api_olt_login(c, hm);
 		else
 			reply_err(c, 405, "use POST", "ask for the OLT's login with a POST");
+	} else if (mg_match(hm->uri, mg_str("/api/iptv/test"), NULL)) {
+		if (post)
+			iptv_test(c, hm);
+		else
+			reply_err(c, 405, "use POST", "test a group with a POST");
 	} else if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL)) {
 		reply_err(c, 405, "use POST", "upload an update file with a POST");
 	} else if (mg_match(hm->uri, mg_str("/api/firmware/download"), NULL)) {
@@ -953,9 +961,11 @@ int main(int argc, char **argv)
 					  "a password is set");
 
 	while (!g_stop) {
-		mg_mgr_poll(&mgr, 200);
+		/* A test of a group reads its count every 50 ms (iptv.h). */
+		mg_mgr_poll(&mgr, iptv_running() ? 10 : 200);
 		prov_settings_reap();
 		firmware_poll();
+		iptv_poll();
 		restart_when_due();
 	}
 

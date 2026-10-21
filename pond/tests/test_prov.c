@@ -2608,6 +2608,57 @@ static void test_service_rules(void)
 	check(rc < 0, "without omcid the value is an error");
 }
 
+/* What omcid's multicast agent shows of television, in short. */
+#define OMCID_IPTV                                                             \
+	"{\"now_s\":40,\"policy\":null,\"groups\":[],\"rejected\":[],"      \
+	"\"log\":[],\"lost\":[],\"counters\":{\"joins\":0,\"leaves\":0,"    \
+	"\"rejected\":0,\"queries\":0,\"reports\":0},\"querier\":null,"      \
+	"\"priority\":null}"
+
+static void test_iptv(void)
+{
+	static char buf[16384];
+	char file[512], err[256], stub[512], path[512];
+	const char *s;
+	FILE *f;
+	int rc;
+
+	puts("television");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+
+	rc = prov_iptv_set("IGMP_PRIORITY=host\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "IGMP_PRIORITY=host"),
+	      "the host's own priority for IGMP is IGMP_PRIORITY=host");
+	rc = prov_iptv_set("IGMP_PRIORITY=auto\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "IGMP_PRIORITY"),
+	      "auto is the default, which the settings do not keep");
+	check(prov_iptv_set("IGMP_PRIORITY=olt\n", err, sizeof(err)) == -EINVAL &&
+		      !strcmp(err, "IGMP_PRIORITY: auto or host") &&
+		      prov_iptv_set("\n", err, sizeof(err)) == -EINVAL,
+	      "another priority, or none, is refused");
+	(void)s;
+	unsetenv("POND_ONU_APPLY");
+
+	mkdir(prov_path("/run/ubus", path, sizeof(path)), 0755);
+	f = fopen(prov_path("/run/ubus/omcid.iptv", path, sizeof(path)), "w");
+	check(f != NULL, "omcid's answer is in place");
+	if (!f)
+		return;
+	fputs(OMCID_IPTV "\n", f);
+	fclose(f);
+	s = render(prov_iptv, buf, sizeof(buf), &rc);
+	check(rc == 0 && !strcmp(s, OMCID_IPTV), "omcid's television is the value as it is");
+	unlink(path);
+	s = render(prov_iptv, buf, sizeof(buf), &rc);
+	check(rc < 0, "without omcid the value is an error");
+}
+
 static void test_forwards(void)
 {
 	static char buf[16384];
@@ -3655,6 +3706,7 @@ int main(void)
 	test_largest_settings();
 	test_forwards();
 	test_service_rules();
+	test_iptv();
 	test_rules();
 	test_omci();
 	test_omci_frames();

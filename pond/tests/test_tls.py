@@ -671,6 +671,36 @@ def sessions_and_token(pond, workdir):
         check(status == 405, "it is a POST")
         os.unlink(login)
 
+        print("  a test of a group of television")
+        tv = os.path.join(ubus, "omcid.tv_test")
+        status, _, body = ask("POST", "/api/iptv/test", mine,
+                              "GROUP=239.1.1.5\nVLAN=421\nSECONDS=1\n")
+        check(status == 503 and body.get("error") == "no omcid", "without omcid, it says so")
+        for text, what in (("GROUP=192.0.2.1\n", "GROUP"), ("GROUP=239.1.1.5\nVLAN=4095\n", "VLAN"),
+                           ("GROUP=239.1.1.5\nSECONDS=31\n", "SECONDS"), ("", "GROUP")):
+            status, _, body = ask("POST", "/api/iptv/test", mine, text)
+            check(status == 400 and body.get("detail", "").startswith(what),
+                  f"a test with no right {what} is refused")
+        write(tv, '{"error":"refused","reason":"not_allowed"}\n')
+        status, _, body = ask("POST", "/api/iptv/test", mine, "GROUP=239.2.2.2\n")
+        check(status == 403 and body == {"error": "refused", "detail": "not_allowed"},
+              "a group the operator's policy refuses, and why")
+        write(tv, '{"ok":true,"running":true,"bytes":125000}\n')
+        status, _, body = ask("POST", "/api/iptv/test", mine,
+                              "GROUP=239.1.1.5\nVLAN=421\nSECONDS=1\n")
+        check(status == 200 and body.get("group") == "239.1.1.5" and body.get("vlan") == 421
+              and body.get("seconds") == 1 and body.get("bytes") == 125000
+              and body.get("rate_bps") == 1000000 and 0 <= (body.get("first_ms") or -1) < 1000,
+              "the bytes of the group in the seconds asked, and when the first came")
+        write(tv, '{"ok":true,"running":true,"bytes":0}\n')
+        status, _, body = ask("POST", "/api/iptv/test", mine, "GROUP=239.1.1.6\nSECONDS=1\n")
+        check(status == 200 and body.get("vlan") is None and body.get("bytes") == 0
+              and body.get("first_ms", 0) is None,
+              "untagged, and nothing came")
+        status, _, _ = ask("GET", "/api/iptv/test", first)
+        check(status == 405, "it is a POST")
+        os.unlink(tv)
+
         print("  wrong passwords")
         for _ in range(5):
             ask("POST", "/api/token/off", dict(mine, **{CONFIRM: "wrong"}), "")

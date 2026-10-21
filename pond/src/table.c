@@ -118,6 +118,11 @@ const struct prov pond_provs[] = {
 	{ "service_rule", "Mode",
 	  "A rule of a service the OLT set up: moved, off, one output alone, or "
 	  "the stick's own way", NULL, prov_service_rule_write, 0 },
+	{ "iptv", "GPON",
+	  "Television: the OLT's policy, the channels watched, the joins refused "
+	  "and the streams lost, the events, and who gives IGMP its priority; "
+	  "set IGMP_PRIORITY, auto or host",
+	  prov_iptv, prov_iptv_write, PROV_VOLATILE },
 	{ "omci", "OMCI",
 	  "What the OLT set up: the managed entities omcid holds, and its "
 	  "counts of the frames", prov_omci, NULL, PROV_SLOW },

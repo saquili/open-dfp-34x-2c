@@ -1525,6 +1525,16 @@
                           "$ref": "#/components/schemas/Error"
                         }
                       ]
+                    },
+                    "iptv": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Iptv"
+                        },
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      ]
                     }
                   }
                 }
@@ -3089,6 +3099,52 @@
         }
       }
     },
+    "/api/get/iptv": {
+      "get": {
+        "tags": [
+          "values"
+        ],
+        "summary": "The value iptv",
+        "description": "Television: the OLT's policy, the channels watched, the joins refused and the streams lost, the events, and who gives IGMP its priority; set IGMP_PRIORITY, auto or host",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "iptv"
+                    },
+                    "value": {
+                      "$ref": "#/components/schemas/Iptv"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "value"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "500": {
+            "description": "The value cannot be read, or is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/set/hostname": {
       "post": {
         "tags": [
@@ -4335,6 +4391,88 @@
         }
       }
     },
+    "/api/set/iptv": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "summary": "Change iptv",
+        "description": "Television: the OLT's policy, the channels watched, the joins refused and the streams lost, the events, and who gives IGMP its priority; set IGMP_PRIORITY, auto or host. The priority the subscriber's IGMP goes up with where the OLT leaves it to the subscriber: auto, one the operator's rules take, or host, the host's own.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XPond"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "KEY=VALUE lines, one per line",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "IGMP_PRIORITY": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "host"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "iptv"
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The change is refused, and why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "403": {
+            "description": "No X-Pond header, or the default password is in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/set/settings": {
       "post": {
         "tags": [
@@ -4528,6 +4666,116 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorised"
+          }
+        }
+      }
+    },
+    "/api/iptv/test": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "summary": "A group of television joined from the stick for a few seconds, and what came of it",
+        "description": "omcid sends the OLT a join of the group as a set-top box's would go, judged by the operator's policy, and counts the group's bytes, which the bridge does not forward to the host; pond reads the count every 50 ms and answers when the seconds are over. One test at a time.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XPond"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string",
+                "description": "KEY=VALUE lines: GROUP, an IPv4 multicast group; VLAN, the VLAN a set-top box would join it in, 1 to 4094, none for untagged; SECONDS, 1 to 30, 10 when not given"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IptvTest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No group, VLAN or time the test takes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "403": {
+            "description": "The operator's policy refuses the group; detail says why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Not a POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A test runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The stick cannot join or count a group here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The join could not be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "omcid does not answer, or no counter is free",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -7262,6 +7510,447 @@
         },
         "required": [
           "rules"
+        ]
+      },
+      "Iptv": {
+        "description": "pond's value \"iptv\": television on the stick, as omcid's multicast agent holds it (omcid/README.rst, the multicast proxy): the OLT's policy, the groups the bridge forwards now, the joins it refused and the streams that stopped, the counts, the OLT's queries and the latest events. Times are the stick's clock in seconds, now_s among them.",
+        "type": "object",
+        "properties": {
+          "now_s": {
+            "type": "number"
+          },
+          "policy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "igmp_version": {
+                "type": "number"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "snoop",
+                  "snoop_proxy",
+                  "proxy"
+                ],
+                "description": "Snooping alone, snooping with proxy reporting, or a proxy (G.988 9.3.27, IGMP function)."
+              },
+              "fast_leave": {
+                "type": "boolean"
+              },
+              "max_groups": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The most groups at once; null for no limit."
+              },
+              "max_bandwidth_bps": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "robustness": {
+                "type": "number"
+              },
+              "query_interval_s": {
+                "type": "number"
+              },
+              "query_response_ms": {
+                "type": "number",
+                "description": "The most time to answer a query, and to answer one about a group after a leave."
+              },
+              "last_member_ms": {
+                "type": "number"
+              },
+              "host_vlan": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The VLAN the groups reach the host in; null when the OLT keeps the stream's tag."
+              },
+              "allowed": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "vlan": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "bandwidth_bps": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "preview": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "from",
+                    "to",
+                    "vlan",
+                    "bandwidth_bps",
+                    "preview"
+                  ]
+                },
+                "description": "The groups the OLT allows, as ranges, in full or for preview."
+              },
+              "static": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "group": {
+                      "type": "string"
+                    },
+                    "vlan": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "group",
+                    "vlan"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "igmp_version",
+              "mode",
+              "fast_leave",
+              "max_groups",
+              "max_bandwidth_bps",
+              "robustness",
+              "query_interval_s",
+              "query_response_ms",
+              "last_member_ms",
+              "host_vlan",
+              "allowed",
+              "static"
+            ],
+            "description": "What the OLT set in the multicast operations profile; null before it set one."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "vlan": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "client": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The host address that joined it."
+                },
+                "since_s": {
+                  "type": "number"
+                },
+                "rate_bps": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "The stream's bits a second, from the bytes the switch counted; null before two counts."
+                }
+              },
+              "required": [
+                "group",
+                "source",
+                "vlan",
+                "client",
+                "since_s",
+                "rate_bps"
+              ]
+            },
+            "description": "The groups the bridge forwards now."
+          },
+          "rejected": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at_s": {
+                  "type": "number"
+                },
+                "group": {
+                  "type": "string"
+                },
+                "vlan": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "client": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "not_allowed",
+                    "max_groups",
+                    "max_bandwidth",
+                    "preview_over"
+                  ]
+                }
+              },
+              "required": [
+                "at_s",
+                "group",
+                "vlan",
+                "client",
+                "reason"
+              ]
+            },
+            "description": "The joins the policy refused, the latest first."
+          },
+          "lost": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group": {
+                  "type": "string"
+                },
+                "since_s": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "group",
+                "since_s"
+              ]
+            },
+            "description": "The groups whose stream stopped while they were joined."
+          },
+          "counters": {
+            "type": "object",
+            "properties": {
+              "joins": {
+                "type": "number"
+              },
+              "leaves": {
+                "type": "number"
+              },
+              "rejected": {
+                "type": "number"
+              },
+              "queries": {
+                "type": "number"
+              },
+              "reports": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "joins",
+              "leaves",
+              "rejected",
+              "queries",
+              "reports"
+            ]
+          },
+          "querier": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "last_s": {
+                "type": "number"
+              },
+              "version": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "last_s",
+              "version"
+            ],
+            "description": "The OLT's latest query, and its IGMP version; null before one came."
+          },
+          "priority": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "control": {
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "const": 1
+                  },
+                  {
+                    "const": 2
+                  },
+                  {
+                    "const": 3
+                  }
+                ]
+              },
+              "by": {
+                "type": "string",
+                "enum": [
+                  "olt",
+                  "stick",
+                  "host"
+                ]
+              },
+              "pcp": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The priority given; null when the host's goes."
+              },
+              "auto": {
+                "type": "boolean",
+                "description": "The stick gives the rules' priority where the OLT leaves it to the host."
+              },
+              "dropped": {
+                "type": "number",
+                "description": "The joins no rule took for their priority, while the host's went."
+              }
+            },
+            "required": [
+              "control",
+              "by",
+              "pcp",
+              "auto",
+              "dropped"
+            ],
+            "description": "The priority the subscriber's IGMP goes up with. The profile's upstream IGMP tag control (G.988 9.3.27): 0 the VLAN rules, 1 a tag added, 2 the tag replaced, 3 its VID replaced. At 1 and 2 the OLT's tag gives it; at 0 and 3 the host's would, and the stick gives the one the operator's rules take in the VLAN instead, unless a person turned that off."
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at_s": {
+                  "type": "number"
+                },
+                "event": {
+                  "type": "string",
+                  "enum": [
+                    "join",
+                    "leave",
+                    "reject",
+                    "query",
+                    "lost",
+                    "back"
+                  ]
+                },
+                "group": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "vlan": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "at_s",
+                "event",
+                "group",
+                "vlan"
+              ]
+            },
+            "description": "The latest events, the newest first."
+          }
+        },
+        "required": [
+          "now_s",
+          "policy",
+          "groups",
+          "rejected",
+          "lost",
+          "counters",
+          "querier",
+          "priority",
+          "log"
+        ]
+      },
+      "IptvTest": {
+        "description": "What a test of a group measured: the stick joins it, counts its stream's bytes, and leaves.",
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "vlan": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "seconds": {
+            "type": "number"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "rate_bps": {
+            "type": "number"
+          },
+          "first_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "The milliseconds until the first frame; null when none came."
+          }
+        },
+        "required": [
+          "group",
+          "vlan",
+          "seconds",
+          "bytes",
+          "rate_bps",
+          "first_ms"
         ]
       },
       "OltLogin": {

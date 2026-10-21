@@ -2179,3 +2179,28 @@ int prov_fw_set(const char *val, char *err, size_t errcap)
 
 	return prov_wait(prov_fw_write(val, err, errcap, prov_waited, &w), &w);
 }
+
+/*
+ * The priority the subscriber's IGMP goes up with where the OLT leaves it to
+ * the subscriber: IGMP_PRIORITY, auto, one the operator's rules take, which
+ * omcid finds, or host, the host's own (onu-utils' settings.h).
+ */
+int prov_iptv_write(const char *val, char *err, size_t errcap, prov_done done, void *ctx)
+{
+	char change[VALUE_MAX + 16], v[VALUE_MAX];
+
+	if (!line_value(val, "IGMP_PRIORITY", v, sizeof(v)) ||
+	    (strcmp(v, "auto") && strcmp(v, "host"))) {
+		snprintf(err, errcap, "IGMP_PRIORITY: auto or host");
+		return -EINVAL;
+	}
+	snprintf(change, sizeof(change), "IGMP_PRIORITY=%s\n", v);
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_iptv_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_iptv_write(val, err, errcap, prov_waited, &w), &w);
+}
