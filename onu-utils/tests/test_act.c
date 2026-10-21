@@ -76,6 +76,7 @@ static void test_values_in_their_places(void)
 	const char *const here[] = { "fe80::1" };
 	const char *const none[] = { NULL };
 	const char *const bank[] = { "1" };
+	const char *const on[] = { "on" }, *const off[] = { "off" };
 	const char *bad;
 
 	puts("values in their places");
@@ -114,7 +115,22 @@ static void test_values_in_their_places(void)
 	CHECK(!act_find("settings_try")->background && act_find("settings_try")->timeout_s >= 60);
 	CHECK(!strcmp(run("update_write", NULL, &bad), "/usr/sbin/onu-update write -"));
 	CHECK(act_find("update_write")->fd_in && act_find("update_read")->fd_out);
-	/* What would give a caller root needs root's password, and no more. */
+	/* The keys of the ssh server and of the panel. */
+	CHECK(!strcmp(run("ssh_state", NULL, &bad), "/usr/sbin/onu-config ssh show"));
+	CHECK(!strcmp(run("ssh_host_key_new", NULL, &bad), "/usr/sbin/onu-config ssh new"));
+	CHECK(!strcmp(run("ssh_key_add", NULL, &bad), "/usr/sbin/onu-config ssh-keys add"));
+	CHECK(!strcmp(run("ssh_key_remove", NULL, &bad), "/usr/sbin/onu-config ssh-keys remove"));
+	CHECK(act_find("ssh_key_add")->input && act_find("ssh_key_remove")->input);
+	CHECK(!strcmp(run("ssh_keys_only", on, &bad), "/usr/sbin/onu-config ssh-keys only on"));
+	CHECK(!strcmp(run("ssh_keys_only", off, &bad), "/usr/sbin/onu-config ssh-keys only off"));
+	CHECK(!strcmp(run("tls_key_new", NULL, &bad), "/usr/sbin/onu-config tls new"));
+	CHECK(!strcmp(run("tls_own_store", NULL, &bad), "/usr/sbin/onu-config tls own"));
+	CHECK(act_find("tls_own_store")->input);
+	CHECK(!strcmp(run("tls_own_remove", NULL, &bad), "/usr/sbin/onu-config tls self-signed"));
+	/*
+	 * What would give a caller root, or change the keys of the stick's
+	 * servers, needs root's password, and no more.
+	 */
 	for (size_t i = 0; i < act_method_count; i++) {
 		const char *n = act_methods[i].name;
 
@@ -122,7 +138,14 @@ static void test_values_in_their_places(void)
 						  !strcmp(n, "update_write") ||
 						  !strcmp(n, "update_try") ||
 						  !strcmp(n, "update_return") ||
-						  !strcmp(n, "update_backup")));
+						  !strcmp(n, "update_backup") ||
+						  !strcmp(n, "ssh_host_key_new") ||
+						  !strcmp(n, "ssh_key_add") ||
+						  !strcmp(n, "ssh_key_remove") ||
+						  !strcmp(n, "ssh_keys_only") ||
+						  !strcmp(n, "tls_key_new") ||
+						  !strcmp(n, "tls_own_store") ||
+						  !strcmp(n, "tls_own_remove")));
 	}
 }
 
@@ -148,6 +171,9 @@ static void test_what_is_refused(void)
 	CHECK(!*run("mgmt_add", pair, &bad) && bad && !strcmp(bad, "address"));
 	CHECK(!*run("hostname", name, &bad) && bad);
 	CHECK(!*run("update_try", bank, &bad) && bad);
+	CHECK(!*run("ssh_keys_only", option, &bad) && bad && !strcmp(bad, "state"));
+	CHECK(!*run("ssh_keys_only", NULL, &bad) && bad);
+	CHECK(!*run("ssh_keys_only", lng, &bad) && bad);
 	CHECK(!*run("nothing", NULL, &bad) && !bad);
 }
 

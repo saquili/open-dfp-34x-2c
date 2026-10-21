@@ -29,10 +29,15 @@
  * checks and replaces without holding its hash, and an update file, which
  * streams from it into the bank that does not run (onu-update write -) or
  * from the running bank to it (onu-update read) through a pipe it passes,
- * as a copy of the whole flash does (onu-update backup). A new password, an
+ * as a copy of the whole flash does (onu-update backup), and the keys of
+ * the ssh server and of the panel's HTTPS: the host key, the public keys root
+ * logs in with and whether the server takes them alone, the panel's key and
+ * an own certificate (onu-config ssh, ssh-keys and tls). A new password, an
  * update written, a start of the other bank, the way back to the shipped
- * firmware and the copy of the flash, which holds the unit's credentials,
- * need root's password in force with the call.
+ * firmware, the copy of the flash, which holds the unit's credentials, and
+ * every change of those keys, a key to log in with as root among them, need
+ * root's password in force with the call. A key's fingerprint, which holds a
+ * slash, goes on the standard input, never in an argument's place.
  */
 const struct act_method act_methods[] = {
 	{ .name = "lane_status", .program = LIB "onu-lane", .fixed = { "status" } },
@@ -88,6 +93,21 @@ const struct act_method act_methods[] = {
 	  .params = { { "bank", "01", 1, true } }, .needs_password = true },
 	{ .name = "update_backup", .program = "/usr/sbin/onu-update", .fixed = { "backup" },
 	  .fd_out = true, .needs_password = true, .timeout_s = 600 },
+	{ .name = "ssh_state", .program = "/usr/sbin/onu-config", .fixed = { "ssh", "show" } },
+	{ .name = "ssh_host_key_new", .program = "/usr/sbin/onu-config", .fixed = { "ssh", "new" },
+	  .needs_password = true },
+	{ .name = "ssh_key_add", .program = "/usr/sbin/onu-config", .fixed = { "ssh-keys", "add" },
+	  .input = true, .needs_password = true },
+	{ .name = "ssh_key_remove", .program = "/usr/sbin/onu-config",
+	  .fixed = { "ssh-keys", "remove" }, .input = true, .needs_password = true },
+	{ .name = "ssh_keys_only", .program = "/usr/sbin/onu-config", .fixed = { "ssh-keys", "only" },
+	  .params = { { "state", "fno", 3 } }, .needs_password = true },
+	{ .name = "tls_key_new", .program = "/usr/sbin/onu-config", .fixed = { "tls", "new" },
+	  .needs_password = true },
+	{ .name = "tls_own_store", .program = "/usr/sbin/onu-config", .fixed = { "tls", "own" },
+	  .input = true, .needs_password = true },
+	{ .name = "tls_own_remove", .program = "/usr/sbin/onu-config",
+	  .fixed = { "tls", "self-signed" }, .needs_password = true },
 };
 
 const size_t act_method_count = ARRAY_SIZE(act_methods);

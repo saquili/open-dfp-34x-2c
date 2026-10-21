@@ -60,8 +60,9 @@ struct act_param {
  * @background: whether it is answered once started, and not waited for
  * @needs_password: whether it runs only when the call carries root's password in
  *	force, as "password", which onu-config password-check judges: what
- *	would give a caller root (a new password, a new system), so that the
- *	status daemon alone, taken over, cannot
+ *	would give a caller root (a new password, a new system, a key to log
+ *	in with) or the keys of the stick's servers, so that the status
+ *	daemon alone, taken over, cannot
  * @timeout_s: how long it may run before it is killed
  */
 struct act_method {
