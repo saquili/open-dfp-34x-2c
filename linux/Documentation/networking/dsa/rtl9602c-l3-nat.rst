@@ -669,8 +669,9 @@ The binding, reserved and counter words
        it; ``l3nat`` prints it.
      - M
      - Four patterns written by hand and read back; a read in the reset state;
-       the boot log line ``L3: reserved word 000000f5``; the first line of
-       ``l3nat``, ``reserved 000000f5``.
+       the boot log line ``L3: reserved word 000000f5`` (2026-10-21, the
+       first boot with the word so named); the first line of ``l3nat``, read
+       as ``aux ctrl 000000f5`` before the rename.
    * - The word is reserved, the first of four from ``0x02a104`` to
        ``0x02a110``, and no function of it is known: nothing the driver
        depends on is taken to read it, and whether ``0xf5`` changes anything
