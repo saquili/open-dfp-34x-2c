@@ -856,15 +856,14 @@ export const pl: Dictionary = {
     mode2500Hint:
       "2,5\u00a0Gb/s bez negocjacji, jak większość portów 2,5G, np. 10G SFP+ w trybie 2,5G. Sprawdzony z hostem.",
     mode2500anHint:
-      "2,5\u00a0Gb/s z negocjacją (clause 37): po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Dla hosta, który jej przy 2,5G wymaga. Jeszcze niesprawdzony z hostem.",
+      "2,5\u00a0Gb/s z negocjacją (clause 37): po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Dla hosta, który jej przy 2,5G wymaga. Sprawdzony z hostem.",
     mode1000: "1G",
     mode1000Hint:
-      "1\u00a0Gb/s bez negocjacji, dla portów, które jej nie robią. Jeszcze niesprawdzony z hostem.",
+      "1\u00a0Gb/s bez negocjacji, dla portów, które jej nie robią. Sprawdzony z hostem.",
     mode1000anHint:
       "1\u00a0Gb/s z negocjacją (clause 37), jak większość portów SFP 1G: po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Sprawdzony z hostem.",
     withAn: "z negocjacją",
     withoutAn: "bez negocjacji",
-    untested: "niesprawdzony",
     modeTry: "Przełącz na próbę",
     modeConfirm:
       "Przełączyć linię SFP na wybrany tryb? Jeśli urządzenie hosta go nie obsłuży, łącze zniknie razem z panelem; wkładka sama wróci do obecnego trybu po 90\u00a0s, jeśli nie potwierdzisz zmiany.",

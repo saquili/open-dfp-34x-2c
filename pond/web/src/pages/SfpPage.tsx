@@ -32,8 +32,8 @@ import { hostLink, laneMode, linkSpeed, port } from "../lib/state";
 /*
  * The lane's modes: the stick's own search, and the four it keeps to, each
  * speed with in-band negotiation and without, named by their speed with
- * their standard's name and the negotiation under it. The two not tested
- * with a host say so.
+ * their standard's name and the negotiation under it. Each was tested with a
+ * host in the same mode.
  */
 const MODES: {
   id: LaneMode;
@@ -41,16 +41,14 @@ const MODES: {
   hint: Key;
   standard?: string;
   an?: boolean;
-  tested?: boolean;
 }[] = [
-  { id: "auto", label: "sfp.modeAuto", hint: "sfp.modeAutoHint", tested: true },
+  { id: "auto", label: "sfp.modeAuto", hint: "sfp.modeAutoHint" },
   {
     id: "2500basex",
     label: "sfp.mode2500",
     hint: "sfp.mode2500Hint",
     standard: "2500BASE-X",
     an: false,
-    tested: true,
   },
   {
     id: "2500basex-an",
@@ -72,7 +70,6 @@ const MODES: {
     hint: "sfp.mode1000anHint",
     standard: "1000BASE-X",
     an: true,
-    tested: true,
   },
 ];
 
@@ -190,7 +187,6 @@ function LaneCard() {
                     <span className="text-xs text-base-content/70">{t(m.hint)}</span>
                   )}
                 </span>
-                {!m.tested && <Badge tone="neutral">{t("sfp.untested")}</Badge>}
                 {m.id === active && <Badge tone="good">{t("sfp.modeActive")}</Badge>}
               </label>
             ))}

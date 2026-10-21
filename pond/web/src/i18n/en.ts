@@ -863,15 +863,14 @@ export const en = {
     mode2500Hint:
       "2.5\u00a0Gb/s without negotiation, as most 2.5G ports, e.g. a 10G SFP+ port in 2.5G mode. Tested with a host.",
     mode2500anHint:
-      "2.5\u00a0Gb/s with negotiation (clause 37): once the link is up, the stick agrees duplex and pause with the host. For a host that asks for it at 2.5G. Not tested with a host yet.",
+      "2.5\u00a0Gb/s with negotiation (clause 37): once the link is up, the stick agrees duplex and pause with the host. For a host that asks for it at 2.5G. Tested with a host.",
     mode1000: "1G",
     mode1000Hint:
-      "1\u00a0Gb/s without negotiation, for ports that do not negotiate. Not tested with a host yet.",
+      "1\u00a0Gb/s without negotiation, for ports that do not negotiate. Tested with a host.",
     mode1000anHint:
       "1\u00a0Gb/s with negotiation (clause 37), as most 1G SFP ports: once the link is up, the stick agrees duplex and pause with the host. Tested with a host.",
     withAn: "with negotiation",
     withoutAn: "without negotiation",
-    untested: "not tested",
     modeTry: "Switch on trial",
     modeConfirm:
       "Switch the SFP lane to the chosen mode? If the host does not take it, the link goes and the panel with it; the stick goes back to the current mode after 90\u00a0s unless you keep the change.",
