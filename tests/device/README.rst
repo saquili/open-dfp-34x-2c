@@ -130,6 +130,20 @@ today's image, but none has run on it. What a case expects of the image:
 * ``mgmt.pond-no-store`` puts the mark that ``onu-config`` leaves when the store
   cannot be read, ``!`` in ``/run/onu-auth``, for the length of one request and
   puts the file back.
+* ``omci.olt-login``, ``omci.igmp-policy`` and ``omci.phone`` check what an OLT
+  may provision that the bench's OLT does not: a PPPoE login (class 148), a
+  multicast profile (classes 309 and 310) and a SIP phone on a phone socket
+  (G.988 9.9) with its IP host's VLAN rule. A stand-in OLT (``devtest/omci.py``)
+  writes its messages into the PON's inject file, which only a kernel built
+  with ``CONFIG_PON_OMCI_INJECT`` has, such as a RAM image made with
+  ``make ram-image OPEN_DFP_34X_2C_RAM_KCONFIG="--enable DEBUG_FS --enable
+  PON_OMCI_INJECT"``; without it the cases are skipped. omcid takes them as the OLT's, and its
+  answers still go to the bench's OLT. The values are made up: names of
+  ``example.org``, a number of the range 555-0100 to 555-0199, groups of
+  ``239.255.0.0/16``. Each case deletes what it created; ``omci.phone``
+  tells the OLT of a phone socket, registers again, and at the end registers
+  again with the sockets the stick had, so that the OLT starts its MIB anew.
+  It is run with ``--destructive``.
 
 The way in through the shipped firmware's web page has no case yet; the host tests
 of ``mkweb.py`` cover the package. The warning of ``omcid`` about a VLAN of the OLT

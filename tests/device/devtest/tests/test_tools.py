@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 import unittest
 
-from devtest import cases_data, cases_net, cases_pon, cases_system, cases_update, tools  # noqa: F401
+from devtest import cases_data, cases_net, cases_omci, cases_pon, cases_system, cases_update, tools  # noqa: F401
 from devtest.access import Remote, Settings
 from devtest.core import CASES, PASS, SKIP, Case, Context, passed, run_case
 from devtest.tests.test_devtest import SETTINGS, Canned
@@ -238,7 +238,7 @@ class Declared(unittest.TestCase):
 
     def test_every_case_declares_the_tools_it_runs(self):
         by_function = {}
-        for module in (cases_data, cases_net, cases_pon, cases_system, cases_update):
+        for module in (cases_data, cases_net, cases_omci, cases_pon, cases_system, cases_update):
             used = self.used(module.__file__)
             for c in CASES:
                 if c.run.__module__ == module.__name__:

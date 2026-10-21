@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-from . import cases_system, cases_net, cases_pon, cases_data, cases_update  # noqa: F401
+from . import cases_system, cases_net, cases_pon, cases_omci, cases_data, cases_update  # noqa: F401
 from .access import NETNS, Settings, bench_remote, redact, stick_remote
 from .core import CASES, FAIL, Context, run_case, select
 from .tools import PROGRAMS, TOOLS_DIR, remove
