@@ -605,7 +605,10 @@ export const TLS: Tls = {
   ],
 };
 
-/* The ssh server as a stick that has no key of its owner's yet has it. */
+/*
+ * The ssh server as a stick has it that no key of its owner's was added to
+ * yet, of an image built with a bench's key, which ssh takes besides.
+ */
 export const SSH: Ssh = {
   host_key: {
     type: "ssh-ed25519",
@@ -613,7 +616,15 @@ export const SSH: Ssh = {
   },
   keys_only: false,
   keys_max: 8,
-  keys: [],
+  keys: [
+    {
+      type: "ssh-ed25519",
+      bits: 256,
+      fingerprint: "SHA256:Qm3vb0g0C2zN6g7e0P0kPq6U8xg1d9v8tq1pM4yB7rA",
+      comment: "bench@lab",
+      source: "image",
+    },
+  ],
 };
 
 /* The clock as timed keeps it from a PTP master on the management link, NTP from the router beside it. */

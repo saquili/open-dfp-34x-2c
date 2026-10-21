@@ -17,6 +17,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { AuthError, request } from "./client";
+import { refresh } from "./config";
 import type { Session } from "./types";
 
 export const sessionQuery = queryOptions({
@@ -60,12 +61,18 @@ export function signOutOptions(qc: QueryClient) {
   });
 }
 
-/* The new password ends the must_change of a session with the default one. */
+/*
+ * The new password ends the must_change of a session with the default one,
+ * and every other session.
+ */
 export function passwordOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["auth", "password"],
     mutationFn: (v: { current: string; next: string }) => request<Session>("/api/auth/password", v),
-    onSuccess: (s) => qc.setQueryData(sessionQuery.queryKey, s),
+    onSuccess: (s) => {
+      qc.setQueryData(sessionQuery.queryKey, s);
+      void refresh(qc, "password");
+    },
   });
 }
 

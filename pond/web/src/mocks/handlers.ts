@@ -15,6 +15,7 @@ import type {
   Mgmt,
   Session,
   SessionInfo,
+  Sessions,
   Settings,
   SfpLane,
 } from "../api/types";
@@ -50,6 +51,13 @@ const tls = structuredClone(TLS);
 const selfSigned = TLS.certificates.map((c) => c.sha256);
 /* The devices with an address from the networks' DHCP servers: a value of their own, as on the stick. */
 let leases: LeaseInfo[] = [];
+/*
+ * The sessions open besides this browser's, by the stick's clock in seconds,
+ * and when this browser's began; and the token of scripts, or none.
+ */
+let others: Sessions["sessions"] = [];
+let mine = Math.floor(Date.now() / 1000);
+let token: string | null = null;
 
 /*
  * POND_MOCK_SCENARIO=sessions: the stick's own connections in the shapes
@@ -74,9 +82,18 @@ const SCENARIO =
  * install through that firmware's page, and a person signed in already, for a
  * look at what the panel says of what is not on the stick yet.
  */
+/* A browser of another computer, signed in an hour ago, and a script's token. */
+function elsewhere() {
+  const now = Math.floor(Date.now() / 1000);
+  mine = now - 600;
+  others = [{ since_s: now - 3900, seen_s: now - 40, from: "192.0.2.10", this: false }];
+  token = "5f".repeat(32);
+}
+
 if (SCENARIO === "stick") {
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
+  elsewhere();
   Object.assign(firmware.banks[1] ?? {}, {
     state: "shipped",
     version: "1.2.0",
@@ -428,6 +445,7 @@ if (SCENARIO === "sessions" || SCENARIO === "demo") {
   settings.fw = { out: "allow", between: "block" };
   rootSecret = SCENARIO === "demo" ? "admin" : "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
+  elsewhere();
 }
 const ticks = structuredClone(
   LIVE.cpu?.ticks ?? {
@@ -600,6 +618,33 @@ const wrongPassword = () =>
     { status: 403 },
   );
 
+/*
+ * The refusal of a change that needs root's password, or null for the right
+ * one: five wrong ones in a row stop every one for half a minute, as pond
+ * stops them, the right one too, and say how long.
+ */
+let wrongs = 0;
+let stopped = 0;
+function passwordRefused(request: Request): Response | null {
+  const now = Date.now();
+  if (now < stopped) {
+    const left = Math.ceil((stopped - now) / 1000);
+    return HttpResponse.json(
+      { error: "too many attempts", detail: "wait half a minute and try again", retry_after: left },
+      { status: 429, headers: { "Retry-After": String(left) } },
+    );
+  }
+  if (rootPassword(request)) {
+    wrongs = 0;
+    return null;
+  }
+  if (++wrongs >= 5) {
+    wrongs = 0;
+    stopped = now + 30_000;
+  }
+  return wrongPassword();
+}
+
 const away = () => (offline ? HttpResponse.error() : null);
 
 /* onu-config's refusal of a change of the servers' keys, as pond answers it. */
@@ -710,12 +755,66 @@ const stick = [
     if (user !== "root" || secret !== rootSecret)
       return HttpResponse.json({ error: "wrong user or password" }, { status: 401 });
     signedIn = { user, must_change: rootSecret === "admin", idle_timeout_s: 900 };
+    mine = Math.floor(Date.now() / 1000);
     return HttpResponse.json(signedIn);
   }),
 
   http.post("*/api/auth/logout", () => {
     signedIn = null;
     return HttpResponse.json({});
+  }),
+
+  /* The sessions open, this browser's among them, by the stick's clock. */
+  http.get("*/api/auth/sessions", async () => {
+    await delay(150);
+    if (!signedIn) return away() ?? unauthorized();
+    const now = Math.floor(Date.now() / 1000);
+    const value: Sessions = {
+      now_s: now,
+      max: 3,
+      idle_timeout_s: 900,
+      max_age_s: 43200,
+      sessions: [...others, { since_s: mine, seen_s: now, from: "127.0.0.1", this: true }].sort(
+        (a, b) => a.since_s - b.since_s,
+      ),
+    };
+    return away() ?? HttpResponse.json(value);
+  }),
+
+  /* Every session but this browser's ended, with root's password. */
+  http.post("*/api/auth/sessions/others", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const no = passwordRefused(request);
+    if (no) return no;
+    const ended = others.length;
+    others = [];
+    return HttpResponse.json({ ok: true, ended });
+  }),
+
+  /* Whether a token of scripts is in force; a new one, shown once; none. */
+  http.get("*/api/token", async () => {
+    await delay(100);
+    if (!signedIn) return away() ?? unauthorized();
+    return away() ?? HttpResponse.json({ set: token !== null });
+  }),
+
+  http.post("*/api/token/new", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const no = passwordRefused(request);
+    if (no) return no;
+    token = [...random(32)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    return HttpResponse.json({ ok: true, token });
+  }),
+
+  http.post("*/api/token/off", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const no = passwordRefused(request);
+    if (no) return no;
+    token = null;
+    return HttpResponse.json({ ok: true });
   }),
 
   http.post("*/api/auth/password", async ({ request }) => {
@@ -871,7 +970,8 @@ const stick = [
   http.post("*/api/ssh/host-key", async ({ request }) => {
     await delay(500);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     ssh.host_key = { type: "ssh-ed25519", fingerprint: await fingerprint(random(51)) };
     return HttpResponse.json({ ok: true, host_key: ssh.host_key });
   }),
@@ -879,26 +979,36 @@ const stick = [
   http.post("*/api/ssh/keys", async ({ request }) => {
     await delay(400);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     const c = checkKey(await request.text());
     if (!c.ok) return refused(KEY_SAYS[c.problem]);
     const fp = await fingerprint(c.blob);
-    if (ssh.keys.some((k) => k.fingerprint === fp)) return refused(`the key ${fp} is kept already`);
-    if (ssh.keys.length >= ssh.keys_max)
+    const panel = ssh.keys.filter((k) => k.source === "panel");
+    if (panel.some((k) => k.fingerprint === fp)) return refused(`the key ${fp} is kept already`);
+    if (panel.length >= ssh.keys_max)
       return refused(`${ssh.keys_max} keys at most: remove one first`);
-    const key = { type: c.type, bits: c.bits, fingerprint: fp, comment: c.comment };
-    ssh.keys.push(key);
+    const key = {
+      type: c.type,
+      bits: c.bits,
+      fingerprint: fp,
+      comment: c.comment,
+      source: "panel" as const,
+    };
+    /* The store's keys first, then the image's, as onu-config says them. */
+    ssh.keys.splice(panel.length, 0, key);
     return HttpResponse.json({ ok: true, key });
   }),
 
   http.post("*/api/ssh/keys/remove", async ({ request }) => {
     await delay(300);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     const fp = (await request.text()).trim();
-    const at = ssh.keys.findIndex((k) => k.fingerprint === fp);
+    const at = ssh.keys.findIndex((k) => k.source === "panel" && k.fingerprint === fp);
     if (at < 0) return refused(`no key ${fp} is kept`);
-    if (ssh.keys_only && ssh.keys.length === 1)
+    if (ssh.keys_only && ssh.keys.filter((k) => k.source === "panel").length === 1)
       return refused("the last key stays while ssh takes keys alone: turn that off first");
     ssh.keys.splice(at, 1);
     return HttpResponse.json({ ok: true });
@@ -907,14 +1017,16 @@ const stick = [
   http.post("*/api/ssh/keys-only", async ({ request }) => {
     await delay(300);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     const state = (await request.text()).trim();
     if (state !== "on" && state !== "off")
       return HttpResponse.json(
         { error: "not on or off", detail: "the body is on or off" },
         { status: 400 },
       );
-    if (state === "on" && ssh.keys.length === 0) return refused("no key is kept: add one first");
+    if (state === "on" && !ssh.keys.some((k) => k.source === "panel"))
+      return refused("no key is kept: add one first");
     ssh.keys_only = state === "on";
     return HttpResponse.json({ ok: true });
   }),
@@ -922,7 +1034,8 @@ const stick = [
   http.post("*/api/tls/key", async ({ request }) => {
     await delay(500);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     for (let i = 0; i < selfSigned.length; i++) selfSigned[i] = hexFingerprint();
     if (!tls.own)
       for (const [i, c] of tls.certificates.entries()) c.sha256 = selfSigned[i] ?? c.sha256;
@@ -932,7 +1045,8 @@ const stick = [
   http.post("*/api/tls/certificate", async ({ request }) => {
     await delay(500);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     const body = (await request.json().catch(() => ({}))) as { certificate?: string; key?: string };
     const problem = checkPem(body.certificate ?? "", body.key ?? "");
     if (problem)
@@ -963,7 +1077,8 @@ const stick = [
   http.post("*/api/tls/self-signed", async ({ request }) => {
     await delay(400);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     tls.own = null;
     for (const [i, c] of tls.certificates.entries())
       Object.assign(c, { ...TLS.certificates[i], sha256: selfSigned[i] ?? c.sha256 });
@@ -1457,7 +1572,8 @@ const stick = [
   /* An upload: a file of the update's magic is written into the other bank. */
   http.post("*/api/firmware/upload", async ({ request }) => {
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     const body = new Uint8Array(await request.arrayBuffer());
     const target = 1 - (firmware.running ?? 0);
     firmware.update = {
@@ -1488,7 +1604,8 @@ const stick = [
   http.post("*/api/firmware/try", async ({ request }) => {
     await delay(300);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     const text = await request.text();
     firmware.next = text === "" ? 1 - (firmware.running ?? 0) : Number(text);
     return HttpResponse.json({ ok: true, detail: "the stick restarts into the bank once" });
@@ -1497,7 +1614,8 @@ const stick = [
   http.post("*/api/firmware/return", async ({ request }) => {
     await delay(300);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     const bank = Number(await request.text());
     if (firmware.banks.find((b) => b.bank === bank)?.state !== "shipped")
       return HttpResponse.json(
@@ -1515,7 +1633,8 @@ const stick = [
   http.get("*/api/firmware/backup", async ({ request }) => {
     await delay(600);
     if (!signedIn) return unauthorized();
-    if (!rootPassword(request)) return wrongPassword();
+    const no = passwordRefused(request);
+    if (no) return no;
     return new HttpResponse(new Uint8Array(4096).fill(0xff), {
       headers: {
         "Content-Type": "application/octet-stream",

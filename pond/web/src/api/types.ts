@@ -430,16 +430,46 @@ export interface OwnCertificate {
 export interface Ssh {
   host_key: { type: string; fingerprint: string } | null;
   keys_only: boolean;
+  /** The most keys of the panel's; the image's do not count. */
   keys_max: number;
   keys: SshKey[];
 }
 
 export interface SshKey {
+  /** "unknown" for a line of the image's file that is no key the panel reads. */
   type: string;
   bits: number;
-  /** "SHA256:" and unpadded base64, as ssh-keygen -l prints it. */
+  /** "SHA256:" and unpadded base64, as ssh-keygen -l prints it; "-" when unknown. */
   fingerprint: string;
   comment: string;
+  /**
+   * "panel" for a key the panel added, which it may remove; "image" for one
+   * of the image's /root/.ssh/authorized_keys, which nothing on the stick
+   * changes. Absent from a stick whose pond predates it: the panel's.
+   */
+  source?: "panel" | "image";
+}
+
+/** pond's /api/auth/sessions: the sessions open, none with its id. */
+export interface Sessions {
+  /** The stick's clock when it answered, which since_s and seen_s are of. */
+  now_s: number;
+  max: number;
+  idle_timeout_s: number;
+  max_age_s: number;
+  sessions: {
+    since_s: number;
+    seen_s: number;
+    /** The address its sign-in came from. */
+    from: string;
+    /** The session of this browser. */
+    this: boolean;
+  }[];
+}
+
+/** pond's /api/token: whether a token of scripts is in force; never the token. */
+export interface TokenState {
+  set: boolean;
 }
 
 /**

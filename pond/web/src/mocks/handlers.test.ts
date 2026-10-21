@@ -88,7 +88,10 @@ describe("the mock stick's servers' keys", () => {
   const detail = async (r: Response | undefined) =>
     ((await r?.json()) as { detail?: string } | undefined)?.detail;
   type Tls = { own: { chain: number } | null; certificates: { sha256: string }[] };
-  type Ssh = { host_key: { fingerprint: string } };
+  type Ssh = {
+    host_key: { fingerprint: string };
+    keys: { fingerprint: string; source?: string }[];
+  };
 
   it("takes a key and keys alone with root's password, and refuses as the stick", async () => {
     await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
@@ -97,8 +100,15 @@ describe("the mock stick's servers' keys", () => {
       expect((await send("/api/ssh/keys-only", "on"))?.status).toBe(400);
       const added = await send("/api/ssh/keys", `${ED25519}\n`);
       expect(added?.status).toBe(200);
-      const key = ((await added?.json()) as { key?: { fingerprint: string } } | undefined)?.key;
-      expect(key?.fingerprint).toBe(FP);
+      const key = (
+        (await added?.json()) as { key?: { fingerprint: string; source: string } } | undefined
+      )?.key;
+      expect(key).toMatchObject({ fingerprint: FP, source: "panel" });
+      /* The panel's keys first, then the image's, which it does not change. */
+      const keys = (await value<Ssh>("ssh")).keys;
+      expect(keys.map((k) => k.source)).toEqual(["panel", "image"]);
+      const bench = keys[1]?.fingerprint ?? "";
+      expect(await detail(await send("/api/ssh/keys/remove", bench))).toContain("no key");
       expect(await detail(await send("/api/ssh/keys", ED25519))).toContain("kept already");
       expect(await detail(await send("/api/ssh/keys", "ssh-dss AAAA"))).toContain("another type");
       expect((await send("/api/ssh/keys-only", "maybe"))?.status).toBe(400);
@@ -113,7 +123,8 @@ describe("the mock stick's servers' keys", () => {
     } finally {
       await send("/api/auth/logout", "");
     }
-  });
+    /* The mock stick takes as long over each change as the stick. */
+  }, 15_000);
 
   it("makes a new key for the panel, takes an own certificate, and goes back", async () => {
     await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
@@ -130,6 +141,71 @@ describe("the mock stick's servers' keys", () => {
       expect((await value<Tls>("tls")).own?.chain).toBe(2);
       expect((await send("/api/tls/self-signed", ""))?.status).toBe(200);
       expect((await value<Tls>("tls")).own).toBeNull();
+    } finally {
+      await send("/api/auth/logout", "");
+    }
+  });
+});
+
+describe("the mock stick's sessions and token", () => {
+  const CONFIRM = "X-Pond-Password";
+  const send = (path: string, body: string, secret = "admin") =>
+    getResponse(
+      handlers,
+      new Request(`http://stick.invalid${path}`, {
+        method: "POST",
+        body,
+        headers: { [CONFIRM]: encodeURIComponent(secret) },
+      }),
+    );
+  const json = async <T>(r: Response | undefined) => (await r?.json()) as T;
+  type Sessions = { max: number; sessions: { this: boolean; from: string }[] };
+
+  it("lists this browser's session, and ends the others with root's password", async () => {
+    expect((await ask("/api/auth/sessions"))?.status).toBe(401);
+    await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
+    try {
+      const list = await json<Sessions>(await ask("/api/auth/sessions"));
+      expect(list.max).toBe(3);
+      expect(list.sessions.filter((x) => x.this)).toHaveLength(1);
+      expect((await send("/api/auth/sessions/others", "", "wrong"))?.status).toBe(403);
+      const ended = await send("/api/auth/sessions/others", "");
+      expect(ended?.status).toBe(200);
+      expect(await json<{ ended: number }>(ended)).toMatchObject({ ok: true });
+      const after = await json<Sessions>(await ask("/api/auth/sessions"));
+      expect(after.sessions.map((x) => x.this)).toEqual([true]);
+    } finally {
+      await send("/api/auth/logout", "");
+    }
+  });
+
+  it("makes a token, shows it once, and takes it away, with root's password", async () => {
+    await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
+    try {
+      expect(await json(await ask("/api/token"))).toEqual({ set: false });
+      expect((await send("/api/token/new", "", "wrong"))?.status).toBe(403);
+      const made = await json<{ token: string }>(await send("/api/token/new", ""));
+      expect(made.token).toMatch(/^[0-9a-f]{64}$/);
+      expect(await json(await ask("/api/token"))).toEqual({ set: true });
+      expect(JSON.stringify(await json(await ask("/api/token")))).not.toContain(made.token);
+      expect((await send("/api/token/off", ""))?.status).toBe(200);
+      expect(await json(await ask("/api/token"))).toEqual({ set: false });
+    } finally {
+      await send("/api/auth/logout", "");
+    }
+  });
+
+  it("stops every change that needs root's password after five wrong ones, the right one too", async () => {
+    await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
+    try {
+      for (let i = 0; i < 5; i++)
+        expect((await send("/api/token/off", "", "wrong"))?.status).toBe(403);
+      const stopped = await send("/api/token/off", "");
+      expect(stopped?.status).toBe(429);
+      const reply = await json<{ retry_after: number }>(stopped);
+      expect(reply.retry_after).toBeGreaterThan(0);
+      expect(reply.retry_after).toBeLessThanOrEqual(30);
+      expect(stopped?.headers.get("Retry-After")).toBe(String(reply.retry_after));
     } finally {
       await send("/api/auth/logout", "");
     }

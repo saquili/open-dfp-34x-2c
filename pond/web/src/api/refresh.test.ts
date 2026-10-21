@@ -14,6 +14,7 @@ import { passwordOptions, signInOptions, signOutOptions } from "./auth";
 import {
   type Change,
   changeOptions,
+  endOthersOptions,
   REFRESH,
   restartOptions,
   returnOptions,
@@ -24,6 +25,8 @@ import {
   tlsCertificateOptions,
   tlsKeyOptions,
   tlsSelfSignedOptions,
+  tokenNewOptions,
+  tokenOffOptions,
   tryOptions,
 } from "./config";
 
@@ -36,6 +39,8 @@ const READS = [
   ["firmware"],
   ["tls"],
   ["ssh"],
+  ["sessions"],
+  ["token"],
   ["clock"],
   ["identity"],
   ["omci"],
@@ -72,6 +77,8 @@ const CHANGED_BY: Record<string, Change[]> = {
   firmware: ["upload", "try", "return"],
   tls: ["mgmt", "tls_key", "tls_certificate", "tls_self_signed"],
   ssh: ["ssh_host_key", "ssh_key", "ssh_keys_only"],
+  sessions: ["password", "sessions_end"],
+  token: ["token"],
   clock: [],
   identity: ["identity"],
   omci: [],
@@ -126,7 +133,7 @@ describe("the reads a change makes stale", () => {
   });
 
   /* The changes of routes of their own, which their tests below run. */
-  const OWN_ROUTE = ["upload", "try", "return", "restart"];
+  const OWN_ROUTE = ["upload", "try", "return", "restart", "password"];
   const KEYS = [
     ["ssh_host_key", sshHostKeyOptions, { secret: "s" }],
     ["ssh_key", sshKeyAddOptions, { key: "ssh-ed25519 AAAA", secret: "s" }],
@@ -135,6 +142,9 @@ describe("the reads a change makes stale", () => {
     ["tls_key", tlsKeyOptions, { secret: "s" }],
     ["tls_certificate", tlsCertificateOptions, { certificate: "c", key: "k", secret: "s" }],
     ["tls_self_signed", tlsSelfSignedOptions, { secret: "s" }],
+    ["sessions_end", endOthersOptions, { secret: "s" }],
+    ["token", tokenNewOptions, { secret: "s" }],
+    ["token", tokenOffOptions, { secret: "s" }],
   ] as const;
 
   for (const change of Object.keys(REFRESH) as Change[]) {
@@ -157,7 +167,7 @@ describe("the reads a change makes stale", () => {
     }
   });
 
-  it("are, after a change of the servers' keys, those of the table", async () => {
+  it("are, after a change of the servers' keys, the sessions or the token, those of the table", async () => {
     for (const [change, options, values] of KEYS) {
       const qc = warm();
       await run(qc, options(qc), values);
@@ -206,7 +216,7 @@ describe("signing in and out", () => {
     expect(READS.filter((k) => qc.getQueryState([...k])).map(name)).toEqual(["session"]);
   });
 
-  it("keeps the new session after a change of the password, and every read", async () => {
+  it("keeps the new session after a change of the password, and every read but the sessions", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => Response.json(session)),
@@ -214,7 +224,8 @@ describe("signing in and out", () => {
     const qc = warm();
     await run(qc, passwordOptions(qc), { current: "a", next: "bbbbbbbb" });
     expect(qc.getQueryData(["session"])).toEqual(session);
-    expect(stale(qc)).toEqual([]);
+    expect(stale(qc)).toEqual(expected("password"));
+    expect(stale(qc)).toEqual(["sessions"]);
   });
 });
 
@@ -247,12 +258,18 @@ describe("a change of the servers' keys", () => {
     await run(qc, sshKeysOnlyOptions(qc), { on: false, secret });
     await run(qc, sshHostKeyOptions(qc), { secret });
     await run(qc, tlsCertificateOptions(qc), { certificate: "C", key: "K", secret });
+    await run(qc, endOthersOptions(qc), { secret });
+    await run(qc, tokenNewOptions(qc), { secret });
+    await run(qc, tokenOffOptions(qc), { secret });
     expect(sent.map((s) => [s.url, s.body])).toEqual([
       ["/api/ssh/keys", "ssh-ed25519 AAAA me\n"],
       ["/api/ssh/keys/remove", "SHA256:a/b+c"],
       ["/api/ssh/keys-only", "off"],
       ["/api/ssh/host-key", ""],
       ["/api/tls/certificate", JSON.stringify({ certificate: "C", key: "K" })],
+      ["/api/auth/sessions/others", ""],
+      ["/api/token/new", ""],
+      ["/api/token/off", ""],
     ]);
     for (const s of sent) {
       expect(s.headers["X-Pond-Password"]).toBe(encodeURIComponent(secret));
@@ -268,5 +285,36 @@ describe("a change of the servers' keys", () => {
       await run(qc, options(qc), { certificate: "c", key: "k", secret: "s" });
       expect(qc.getQueryData(["tls"])).toEqual(tls);
     }
+  });
+});
+
+describe("the sessions and the token", () => {
+  it("are read where they are shown, the sessions again every half a minute", async () => {
+    const { sessionsQuery, tokenQuery } = await import("./config");
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        asked.push(url);
+        return Response.json(url.endsWith("token") ? { set: true } : { sessions: [] });
+      }),
+    );
+    const qc = new QueryClient();
+    expect(await qc.fetchQuery(tokenQuery)).toEqual({ set: true });
+    expect(await qc.fetchQuery(sessionsQuery)).toEqual({ sessions: [] });
+    expect(asked).toEqual(["/api/token", "/api/auth/sessions"]);
+    expect(sessionsQuery.refetchInterval).toBe(30_000);
+  });
+
+  it("hands back a new token once, as its answer carries it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ ok: true, token: "ab".repeat(32) })),
+    );
+    const qc = warm();
+    const reply = await run(qc, tokenNewOptions(qc), { secret: "s" });
+    expect(reply).toEqual({ ok: true, token: "ab".repeat(32) });
+    /* The token itself is never read again: only whether there is one. */
+    expect(stale(qc)).toEqual(["token"]);
   });
 });

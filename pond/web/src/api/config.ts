@@ -27,10 +27,12 @@ import type {
   Mgmt,
   Network,
   OmciValue,
+  Sessions,
   SfpLane,
   Ssh,
   SshKey,
   Tls,
+  TokenState,
 } from "./types";
 
 interface Value<T> {
@@ -123,6 +125,32 @@ export function useSsh() {
   return useQuery(sshQuery);
 }
 
+/*
+ * The sessions open: another browser signs in or idles out on its own, so
+ * the list is read again every half a minute while it is shown.
+ */
+export const sessionsQuery = queryOptions({
+  queryKey: ["sessions"],
+  queryFn: () => request<Sessions>("/api/auth/sessions"),
+  staleTime: 10_000,
+  refetchInterval: 30_000,
+});
+
+export function useSessions() {
+  return useQuery(sessionsQuery);
+}
+
+/* Whether a token of scripts is in force: it changes only when a person changes it. */
+export const tokenQuery = queryOptions({
+  queryKey: ["token"],
+  queryFn: () => request<TokenState>("/api/token"),
+  staleTime: 60_000,
+});
+
+export function useToken() {
+  return useQuery(tokenQuery);
+}
+
 export function useTls() {
   return useQuery(tlsQuery);
 }
@@ -145,7 +173,8 @@ export function useIdentity() {
  * a trial and an address beside the old one, with a certificate of its own.
  * An update, a start of the other bank and the way back change what the
  * banks hold and what starts next. A restart changes nothing the panel
- * reads that the stick's coming back does not show by itself.
+ * reads that the stick's coming back does not show by itself. A new
+ * password and the end of the other sessions change the sessions open.
  */
 export const REFRESH = {
   session: [["live"], ["leases"], ["switch"]],
@@ -176,6 +205,11 @@ export const REFRESH = {
   tls_key: [["tls"]],
   tls_certificate: [["tls"]],
   tls_self_signed: [["tls"]],
+  /* A new password ends the other sessions, and so does their end. */
+  password: [["sessions"]],
+  sessions_end: [["sessions"]],
+  /* A new token of scripts, or none. */
+  token: [["token"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type Change = keyof typeof REFRESH;
@@ -385,6 +419,47 @@ export const tlsSelfSignedOptions = (qc: QueryClient) =>
     request<TlsAnswer>("/api/tls/self-signed", "", passwordHeader(secret)),
   );
 
+/** End every session but this browser's, with root's password: how many ended. */
+export function endOthersOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["sessions", "others"],
+    mutationFn: ({ secret }: Keyed<object>) =>
+      request<{ ok: boolean; ended: number }>(
+        "/api/auth/sessions/others",
+        "",
+        passwordHeader(secret),
+      ),
+    onSuccess: () => void refresh(qc, "sessions_end"),
+  });
+}
+
+/**
+ * A new token of scripts in place of the one in force, which the answer
+ * carries once: the panel shows it until the page is left, and the stick
+ * never again.
+ */
+export function tokenNewOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["token", "new"],
+    mutationFn: ({ secret }: Keyed<object>) =>
+      request<{ ok: boolean; token?: string }>("/api/token/new", "", passwordHeader(secret)),
+    onSuccess: () => void refresh(qc, "token"),
+  });
+}
+
+/** No token of scripts. */
+export function tokenOffOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["token", "off"],
+    mutationFn: ({ secret }: Keyed<object>) =>
+      request<{ ok: boolean }>("/api/token/off", "", passwordHeader(secret)),
+    onSuccess: () => void refresh(qc, "token"),
+  });
+}
+
+export const useEndOthers = () => useMutation(endOthersOptions(useQueryClient()));
+export const useTokenNew = () => useMutation(tokenNewOptions(useQueryClient()));
+export const useTokenOff = () => useMutation(tokenOffOptions(useQueryClient()));
 export const useSshHostKey = () => useMutation(sshHostKeyOptions(useQueryClient()));
 export const useSshKeyAdd = () => useMutation(sshKeyAddOptions(useQueryClient()));
 export const useSshKeyRemove = () => useMutation(sshKeyRemoveOptions(useQueryClient()));
@@ -414,8 +489,14 @@ export async function downloadFlash(secret: string): Promise<void> {
     const reply = (await response.json().catch(() => null)) as {
       error?: string;
       detail?: string;
+      retry_after?: number;
     } | null;
-    throw new ApiError(response.status, reply?.error ?? response.statusText, reply?.detail);
+    throw new ApiError(
+      response.status,
+      reply?.error ?? response.statusText,
+      reply?.detail,
+      reply?.retry_after,
+    );
   }
   const blob = await response.blob();
   const name =
@@ -447,14 +528,17 @@ export function uploadFirmware(
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.upload.onprogress = (e) => onProgress(e.loaded, e.total || file.size);
     xhr.onload = () => {
-      let reply: { ok?: boolean; error?: string; detail?: string } = {};
+      let reply: { ok?: boolean; error?: string; detail?: string; retry_after?: number } = {};
       try {
         reply = JSON.parse(xhr.responseText);
       } catch {
         /* an answer that is not JSON is told by its status */
       }
       if (xhr.status === 200 && reply.ok) resolve(reply.detail ?? "");
-      else reject(new ApiError(xhr.status, reply.error ?? xhr.statusText, reply.detail));
+      else
+        reject(
+          new ApiError(xhr.status, reply.error ?? xhr.statusText, reply.detail, reply.retry_after),
+        );
     };
     /* A connection cut short: what became of the upload is in the firmware value. */
     xhr.onerror = () => reject(new OfflineError());
