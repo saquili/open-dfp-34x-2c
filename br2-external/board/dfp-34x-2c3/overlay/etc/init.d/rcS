@@ -19,6 +19,13 @@
 PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/lib/onu
 export PATH
 
+# Started from RAM, the root is the kernel's rootfs, whose top directory any
+# account may write to (mode 1777). The ssh server refuses login keys in a
+# directory that a path writable by others leads to, / included, so the top
+# directory is made 0755 as the flash's root file system has it. That one is
+# read-only, and the test leaves it alone.
+[ ! -w / ] || chmod 0755 /
+
 # After a start from a bank that the boot loader was told to try once,
 # onu-trial makes it the bank the loader starts when the system is up, and
 # restarts into the committed bank when it is not; any other start it leaves
