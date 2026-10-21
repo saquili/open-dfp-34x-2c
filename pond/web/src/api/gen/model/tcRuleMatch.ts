@@ -6,18 +6,36 @@
  * OpenAPI spec version: 1
  */
 
+/**
+ * What the rule matches; null for a key it does not match on.
+ */
 export type TcRuleMatch = {
-  indev?: string;
-  eth_dst?: string;
-  eth_src?: string;
-  ethertype?: number;
-  ip_proto?: number;
-  ipv4_src?: string;
-  ipv4_src_mask?: string;
-  ipv4_dst?: string;
-  ipv4_dst_mask?: string;
-  vlan_id?: number;
+  /** @nullable */
+  indev?: string | null;
+  /** @nullable */
+  eth_dst?: string | null;
+  /** @nullable */
+  eth_dst_mask?: string | null;
+  /** @nullable */
+  eth_src?: string | null;
+  /** @nullable */
+  eth_src_mask?: string | null;
+  /** @nullable */
+  ethertype?: number | null;
+  /** @nullable */
+  ip_proto?: number | null;
+  /** @nullable */
+  ipv4_src?: string | null;
+  /** @nullable */
+  ipv4_src_mask?: string | null;
+  /** @nullable */
+  ipv4_dst?: string | null;
+  /** @nullable */
+  ipv4_dst_mask?: string | null;
+  /** @nullable */
+  vlan_id?: number | null;
   /** @nullable */
   vlan_prio?: number | null;
-  vlan_ethtype?: number;
+  /** @nullable */
+  vlan_ethtype?: number | null;
 };

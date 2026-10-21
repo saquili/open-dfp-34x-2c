@@ -7,7 +7,11 @@
  */
 
 export type BanksRootfs = {
-  root: string;
+  /**
+   * The kernel command line's root=; null when it names none, as on a RAM boot.
+   * @nullable
+   */
+  root: string | null;
   /** @nullable */
   mtd: number | null;
   /** @nullable */

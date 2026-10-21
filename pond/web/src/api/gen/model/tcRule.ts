@@ -13,10 +13,18 @@ export interface TcRule {
   handle: number;
   priority: number;
   ethertype: number;
-  kind: string;
+  /** The qdisc the rule is on (tcm_parent). */
+  parent?: number;
+  /** @nullable */
+  kind: string | null;
   /** @nullable */
   chain: number | null;
+  /** What the rule matches; null for a key it does not match on. */
   match?: TcRuleMatch;
   actions?: TcAction[];
   offload?: TcRuleOffload;
+  /** The numbers of the flower attributes the rule has and pond does not read. */
+  match_unparsed?: number[];
+  /** false for a rule whose options pond does not read, which then has no match, actions or offload. */
+  options_decoded?: boolean;
 }

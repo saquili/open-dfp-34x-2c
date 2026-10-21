@@ -5,6 +5,7 @@
  * The HTTP API of pond (pond/README.rst), which the panel uses. Every route but /api/health and /api/auth/login needs a session (the cookie pond_sid) or the token of scripts (Authorization: Bearer). A change made in a session carries the header X-Pond. A change that gives root, or that a person checks a connection by, carries root's password in X-Pond-Password as well; five wrong passwords hold every such change, and sign-ins from that address, back for half a minute. Values are read with /api/get/ID and changed with POST /api/set/ID, whose body is KEY=VALUE lines. Over HTTP, every route but /api/health is sent on to HTTPS.
  * OpenAPI spec version: 1
  */
+import type { SetIdentityBodyUNIREPORT } from "./setIdentityBodyUNIREPORT.ts";
 
 export type SetIdentityBody = {
   SERIAL?: string;
@@ -21,6 +22,13 @@ export type SetIdentityBody = {
   LOID_PASSWORD?: string;
   SW_VERSION0?: string;
   SW_VERSION1?: string;
+  PACK_VERSION?: string;
   /** the PLOAM password: ten characters, or twenty hexadecimal digits */
   PLOAM?: string;
+  /** the subscriber ports told to the OLT: the Ethernet UNIs and the VEIP, the UNIs alone, or the VEIP alone */
+  UNI_REPORT?: SetIdentityBodyUNIREPORT;
+  /** the Ethernet UNIs told to the OLT, 1 to 8 */
+  UNI_PORTS?: string;
+  /** the phone sockets told to the OLT, 0 to 2 */
+  POTS_PORTS?: string;
 };

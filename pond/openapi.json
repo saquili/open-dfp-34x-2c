@@ -3506,7 +3506,7 @@
           "values"
         ],
         "summary": "Change identity",
-        "description": "How the stick introduces itself to the OLT. How the stick introduces itself to the OLT; a key left out keeps its value.",
+        "description": "How the stick introduces itself to the OLT, and the subscriber ports it tells the OLT of; a key left out keeps its value. A change registers again.",
         "parameters": [
           {
             "$ref": "#/components/parameters/XPond"
@@ -3560,9 +3560,29 @@
                   "SW_VERSION1": {
                     "type": "string"
                   },
+                  "PACK_VERSION": {
+                    "type": "string"
+                  },
                   "PLOAM": {
                     "type": "string",
                     "description": "the PLOAM password: ten characters, or twenty hexadecimal digits"
+                  },
+                  "UNI_REPORT": {
+                    "type": "string",
+                    "enum": [
+                      "both",
+                      "pptp",
+                      "veip"
+                    ],
+                    "description": "the subscriber ports told to the OLT: the Ethernet UNIs and the VEIP, the UNIs alone, or the VEIP alone"
+                  },
+                  "UNI_PORTS": {
+                    "type": "string",
+                    "description": "the Ethernet UNIs told to the OLT, 1 to 8"
+                  },
+                  "POTS_PORTS": {
+                    "type": "string",
+                    "description": "the phone sockets told to the OLT, 0 to 2"
                   }
                 },
                 "additionalProperties": false
@@ -7284,7 +7304,11 @@
             "type": "object",
             "properties": {
               "root": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The kernel command line's root=; null when it names none, as on a RAM boot."
               },
               "mtd": {
                 "type": [
@@ -8965,7 +8989,10 @@
         "type": "object",
         "properties": {
           "kind": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "order": {
             "type": "number"
@@ -9013,8 +9040,15 @@
           "ethertype": {
             "type": "number"
           },
+          "parent": {
+            "type": "number",
+            "description": "The qdisc the rule is on (tcm_parent)."
+          },
           "kind": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "chain": {
             "type": [
@@ -9026,34 +9060,76 @@
             "type": "object",
             "properties": {
               "indev": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "eth_dst": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "eth_dst_mask": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "eth_src": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "eth_src_mask": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "ethertype": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "ip_proto": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "ipv4_src": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "ipv4_src_mask": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "ipv4_dst": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "ipv4_dst_mask": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "vlan_id": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "vlan_prio": {
                 "type": [
@@ -9062,9 +9138,13 @@
                 ]
               },
               "vlan_ethtype": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
-            }
+            },
+            "description": "What the rule matches; null for a key it does not match on."
           },
           "actions": {
             "type": "array",
@@ -9094,6 +9174,17 @@
               "in_hw",
               "not_in_hw"
             ]
+          },
+          "match_unparsed": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "The numbers of the flower attributes the rule has and pond does not read."
+          },
+          "options_decoded": {
+            "type": "boolean",
+            "description": "false for a rule whose options pond does not read, which then has no match, actions or offload."
           }
         },
         "required": [

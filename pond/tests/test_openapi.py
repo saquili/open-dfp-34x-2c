@@ -5,7 +5,8 @@
 sources agree. Every route the sources answer (src/pond.c, the table of
 src/keys.c) is described, and every route described is answered; every value
 of the table (src/table.c) that reads has its /api/get/ID, every one that
-changes its /api/set/ID, and no other value is described. Every reference of
+changes its /api/set/ID, and no other value is described. A change of the
+identity is described with the keys src/prov_identity.c takes. Every reference of
 the description leads to a schema of its own. The panel's tests check the
 mock stick's answers against the schemas (web/src/mocks/openapi.test.ts).
 Run from pond's directory.
@@ -57,6 +58,16 @@ def main():
     check(not gets - reads, "/api/get of no value that reads: %s" % sorted(gets - reads))
     check(not writes - sets, "values that change without /api/set: %s" % sorted(writes - sets))
     check(not sets - writes - special, "/api/set of no value that changes: %s" % sorted(sets - writes - special))
+
+    # The keys a change of the identity takes: those of its fields, and
+    # those prov_identity_set() checks by name.
+    identity = open("src/prov_identity.c").read()
+    takes = set(re.findall(r'^\t\{ "([A-Z_0-9]+)", "[a-z_0-9]+", \d+, (?:0x)?[0-9a-f]+ \},$', identity, re.M))
+    takes |= set(re.findall(r'!strcmp\(line, "([A-Z_0-9]+)"\)', identity))
+    body = spec["paths"]["/api/set/identity"]["post"]["requestBody"]["content"]["text/plain"]
+    keys = set(body["schema"]["properties"])
+    check(len(takes) > 10 and takes == keys,
+          "keys of a change of identity, taken or described alone: %s" % sorted(takes ^ keys))
 
     schemas = spec["components"]["schemas"]
     refs = set(re.findall(r'"\$ref": "#/components/([a-zA-Z]+)/([A-Za-z0-9]+)"', json.dumps(spec, indent=1)))

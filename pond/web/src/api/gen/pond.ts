@@ -6161,7 +6161,7 @@ export const getSetIdentityUrl = () => {
 };
 
 /**
- * How the stick introduces itself to the OLT. How the stick introduces itself to the OLT; a key left out keeps its value.
+ * How the stick introduces itself to the OLT, and the subscriber ports it tells the OLT of; a key left out keeps its value. A change registers again.
  * @summary Change identity
  */
 export const setIdentity = async (

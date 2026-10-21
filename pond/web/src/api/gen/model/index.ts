@@ -185,6 +185,7 @@ export * from "./setHostname200.ts";
 export * from "./setHostnameBody.ts";
 export * from "./setIdentity200.ts";
 export * from "./setIdentityBody.ts";
+export * from "./setIdentityBodyUNIREPORT.ts";
 export * from "./setIpoe200.ts";
 export * from "./setIpoeBody.ts";
 export * from "./setIptv200.ts";

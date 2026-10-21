@@ -8,7 +8,8 @@
 import type { TcActionVlanAction } from "./tcActionVlanAction.ts";
 
 export interface TcAction {
-  kind: string;
+  /** @nullable */
+  kind: string | null;
   order?: number;
   options_decoded?: boolean;
   vlan_action?: TcActionVlanAction;
