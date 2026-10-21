@@ -394,12 +394,13 @@ Before you install
   driver writes the laser driver only in a module whose header reads ``ODI``
   and ``DFP-34X-2C``, and only reads any other. It cannot tell which IC such
   a stick carries. In one, every start of the PON link writes registers of
-  the IC's configuration table: the automatic extinction-ratio loop goes
-  off, and when the OLT asks for a lower transmit power the modulation and
-  the power set point move. The driver writes no byte of the table unless it
-  has read that the IC keeps register changes out of its EEPROM, and the
-  image never writes the table's password bytes (only a test build's store
-  entry does). The one byte the module keeps, the page select, is written
+  the IC's configuration table: it puts back what the IC loads at
+  power-up, the automatic extinction-ratio loop on, and when the OLT asks
+  for a lower transmit power the power set point moves. The driver writes
+  no byte of the table unless it has read that the IC keeps register
+  changes out of its EEPROM, and the image never writes the table's
+  password bytes (only a test build's store entry does). The one byte the
+  module keeps, the page select, is written
   only when it holds another page, and put back as found. What those
   registers do in another IC is not known, and neither is whether its optics
   would work or stay dark when they should (`optical-safety.rst
