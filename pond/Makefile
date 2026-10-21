@@ -107,6 +107,8 @@ check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_ce
 		$(BUILD)/test_prov
 	# ubusd's list for pond and onu-act's table agree.
 	python3 -I tests/test_acl.py $(ONU_UTILS)
+	# The API's description and the routes and values of the sources agree.
+	python3 -I tests/test_openapi.py
 	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
 	POND_ROOT=$(abspath $(BUILD))/auth ONU_ROOT=$(abspath $(BUILD))/auth \
 		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config $(BUILD)/test_auth

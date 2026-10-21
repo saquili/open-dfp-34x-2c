@@ -203,6 +203,15 @@ chain as an entry of its own, where it sent the chain as one.
 Routes
 ======
 
+``openapi.json`` describes every route below in OpenAPI 3.1, with the schema
+of each value that ``/api/get/ID`` reads and the keys that ``/api/set/ID``
+takes, for a script's author or a tool that makes a client of it. It is not
+on the stick. ``make check`` checks it against the routes of ``src/pond.c``
+and ``src/keys.c`` and the values of ``src/table.c`` (``tests/test_openapi.py``),
+and the panel's tests check the mock stick's answers against its schemas
+(``web/src/mocks/openapi.test.ts``): a route or a value added without its
+description fails both.
+
 ``/api/health`` answers anyone. ``POST /api/auth/login`` takes ``{"user",
 "secret"}``; ``/api/auth/session`` says who is signed in and whether the
 password must change; ``POST /api/auth/logout`` ends the session; ``POST
