@@ -6,6 +6,7 @@
 #
 # Usage: kernel-series import
 #        kernel-series upstream
+#        kernel-series base
 #        kernel-series files [PATHSPEC...]
 #        kernel-series check-log LOG
 #
@@ -16,8 +17,11 @@
 #               latest "Squashed 'linux/' ..." commit reachable from HEAD.
 #               Its tree is the release as it is.
 #   upstream    the commit that squash was made from, named by its
-#               git-subtree-split trailer: the commit at which the history
-#               of "git subtree split -P linux" starts.
+#               git-subtree-split trailer: that release as the history of
+#               "git subtree split -P linux" holds it.
+#   base        the commit the first import, "git subtree add --squash",
+#               was made from, named the same way: the oldest release in
+#               that history. Every commit of the series descends from it.
 #   files       the paths, relative to linux/, that HEAD adds or changes on
 #               top of the release, one per line; PATHSPECs, relative to
 #               linux/ as well, narrow the list.
@@ -58,6 +62,14 @@ import_commit() {
 	printf '%s\n' "$commit"
 }
 
+# The commit the squash commit $1 was made from: its git-subtree-split trailer.
+squashed_from() {
+	split=$(git -C "$top" log -1 --format=%B "$1" |
+		sed -n 's/^git-subtree-split: *\([0-9a-f]\{40,\}\) *$/\1/p')
+	[ -n "$split" ] || die "$1 has no git-subtree-split trailer"
+	printf '%s\n' "$split"
+}
+
 series_files() {
 	squash=$(import_commit)
 	git -C "$top" diff --name-only --no-renames --diff-filter=AMT \
@@ -92,10 +104,15 @@ import)
 upstream)
 	[ $# -eq 0 ] || usage
 	squash=$(import_commit)
-	split=$(git -C "$top" log -1 --format=%B "$squash" |
-		sed -n 's/^git-subtree-split: *\([0-9a-f]\{40,\}\) *$/\1/p')
-	[ -n "$split" ] || die "$squash has no git-subtree-split trailer"
-	printf '%s\n' "$split"
+	squashed_from "$squash"
+	;;
+base)
+	[ $# -eq 0 ] || usage
+	squash=$(git -C "$top" log --format=%H --all-match \
+		--grep='^git-subtree-dir: linux/*$' \
+		--grep="^Squashed 'linux/' content from commit " HEAD | tail -n 1)
+	[ -n "$squash" ] || die "no subtree add of linux/ is reachable from HEAD"
+	squashed_from "$squash"
 	;;
 files)
 	series_files "$@"

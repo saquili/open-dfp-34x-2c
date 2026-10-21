@@ -113,18 +113,28 @@ jobs:
         # of its own. The split starts at the commit the import was squashed
         # from; the repository keeps that commit with a tag
         # (CONTRIBUTING.rst), and without it the split fails.
+        #
+        # The series is the commits of the split that descend from the
+        # release of the first import, but for the releases imported since.
+        # The split holds more beside them: before the first import, linux/
+        # held a README, which a commit removed again, and the split keeps
+        # the README's commit, and the project's commits up to the one that
+        # removed it, which hold no kernel.
         run: |
           import=$(.github/scripts/kernel-series import)
           upstream=$(.github/scripts/kernel-series upstream)
+          base=$(.github/scripts/kernel-series base)
           split=$(git subtree split -P linux HEAD)
-          printf 'import=%s\nupstream=%s\nsplit=%s\n' "$import" "$upstream" "$split" |
-            tee -a "$GITHUB_ENV"
+          printf 'import=%s\nupstream=%s\nbase=%s\nsplit=%s\n' \
+            "$import" "$upstream" "$base" "$split" | tee -a "$GITHUB_ENV"
           git worktree add --detach "$RUNNER_TEMP/kernel" "$split"
-          git log --oneline --no-merges "$upstream..$split"
+          git log --oneline --no-merges --ancestry-path="$base" \
+            "$base..$split" "^$upstream"
       - name: checkpatch --strict on every commit of the series
         run: |
           cd "$RUNNER_TEMP/kernel"
-          if [ "$(git rev-list --count --no-merges "$upstream..HEAD")" = 0 ]; then
+          series=(--no-merges --ancestry-path="$base" "$base..HEAD" "^$upstream")
+          if [ "$(git rev-list --count "${series[@]}")" = 0 ]; then
             echo "No kernel commits above the import."
             # The split of an empty series is the imported release itself.
             test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$import^{tree}")"
@@ -133,7 +143,7 @@ jobs:
           # Tool assistance is credited with a Co-Authored-By: trailer
           # (CONTRIBUTING.rst), which checkpatch does not know; it is taken
           # out of the patches before they are checked, and nothing else.
-          git format-patch -q -o "$RUNNER_TEMP/patches" "$upstream..HEAD"
+          git format-patch -q -o "$RUNNER_TEMP/patches" "${series[@]}"
           sed -i '/^Co-Authored-By: /d' "$RUNNER_TEMP"/patches/*.patch
           ./scripts/checkpatch.pl --strict \
             ${CHECKPATCH_IGNORE:+--ignore "$CHECKPATCH_IGNORE"} "$RUNNER_TEMP"/patches/*.patch

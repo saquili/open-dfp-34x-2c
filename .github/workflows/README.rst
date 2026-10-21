@@ -253,8 +253,14 @@ that stops with an error does.
 ``checkpatch``
     ``git subtree split -P linux`` -- the kernel history as it would be
     published -- checked out as a tree of its own, and
-    ``scripts/checkpatch.pl --strict`` on every commit above the imported
-    release, with SPDX expressions validated by ``scripts/spdxcheck.py``.
+    ``scripts/checkpatch.pl --strict`` on every commit of the series, with
+    SPDX expressions validated by ``scripts/spdxcheck.py``. The series is
+    the commits of the split that descend from the release of the first
+    import, but for the releases imported since (``kernel-series base`` and
+    ``upstream``). The split holds more: before the first import,
+    ``linux/`` held a README, which a commit removed again, and the split
+    keeps the README's commit, and the project's commits up to the one that
+    removed it, which hold no kernel and are not checked.
     The ``Co-Authored-By:`` trailer, which checkpatch does not know, is
     taken out of the patches first, and five types are not reported:
     ``FILE_PATH_CHANGES``, as a series adds its MAINTAINERS entries in its
