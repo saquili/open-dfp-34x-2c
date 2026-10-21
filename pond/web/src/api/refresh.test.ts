@@ -17,6 +17,13 @@ import {
   REFRESH,
   restartOptions,
   returnOptions,
+  sshHostKeyOptions,
+  sshKeyAddOptions,
+  sshKeyRemoveOptions,
+  sshKeysOnlyOptions,
+  tlsCertificateOptions,
+  tlsKeyOptions,
+  tlsSelfSignedOptions,
   tryOptions,
 } from "./config";
 
@@ -28,6 +35,7 @@ const READS = [
   ["banks"],
   ["firmware"],
   ["tls"],
+  ["ssh"],
   ["clock"],
   ["identity"],
   ["omci"],
@@ -62,7 +70,8 @@ const CHANGED_BY: Record<string, Change[]> = {
   leases: ["session", "ipoe", "lan", "changes"],
   banks: ["upload", "try", "return"],
   firmware: ["upload", "try", "return"],
-  tls: ["mgmt"],
+  tls: ["mgmt", "tls_key", "tls_certificate", "tls_self_signed"],
+  ssh: ["ssh_host_key", "ssh_key", "ssh_keys_only"],
   clock: [],
   identity: ["identity"],
   omci: [],
@@ -116,8 +125,20 @@ describe("the reads a change makes stale", () => {
     expect(Object.keys(CHANGED_BY).sort()).toEqual(READS.map(name).sort());
   });
 
+  /* The changes of routes of their own, which their tests below run. */
+  const OWN_ROUTE = ["upload", "try", "return", "restart"];
+  const KEYS = [
+    ["ssh_host_key", sshHostKeyOptions, { secret: "s" }],
+    ["ssh_key", sshKeyAddOptions, { key: "ssh-ed25519 AAAA", secret: "s" }],
+    ["ssh_key", sshKeyRemoveOptions, { fingerprint: "SHA256:x", secret: "s" }],
+    ["ssh_keys_only", sshKeysOnlyOptions, { on: true, secret: "s" }],
+    ["tls_key", tlsKeyOptions, { secret: "s" }],
+    ["tls_certificate", tlsCertificateOptions, { certificate: "c", key: "k", secret: "s" }],
+    ["tls_self_signed", tlsSelfSignedOptions, { secret: "s" }],
+  ] as const;
+
   for (const change of Object.keys(REFRESH) as Change[]) {
-    if (["upload", "try", "return", "restart"].includes(change)) continue;
+    if (OWN_ROUTE.includes(change) || KEYS.some(([c]) => c === change)) continue;
     it(`are, after a change of ${change}, ${expected(change).join(", ") || "none"}`, async () => {
       const qc = warm();
       await run(qc, changeOptions(qc, change), { ID: "1" });
@@ -130,6 +151,14 @@ describe("the reads a change makes stale", () => {
       ["try", tryOptions, { bank: 1, secret: "s" }],
       ["return", returnOptions, { bank: 1, secret: "s" }],
     ] as const) {
+      const qc = warm();
+      await run(qc, options(qc), values);
+      expect(stale(qc)).toEqual(expected(change));
+    }
+  });
+
+  it("are, after a change of the servers' keys, those of the table", async () => {
+    for (const [change, options, values] of KEYS) {
       const qc = warm();
       await run(qc, options(qc), values);
       expect(stale(qc)).toEqual(expected(change));
@@ -186,5 +215,58 @@ describe("signing in and out", () => {
     await run(qc, passwordOptions(qc), { current: "a", next: "bbbbbbbb" });
     expect(qc.getQueryData(["session"])).toEqual(session);
     expect(stale(qc)).toEqual([]);
+  });
+});
+
+describe("a change of the servers' keys", () => {
+  type Sent = { url: string; body: string; headers: Record<string, string> };
+
+  /* The requests sent, and pond's answer @reply to each. */
+  function sending(reply: unknown) {
+    const sent: Sent[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        sent.push({
+          url,
+          body: String(init.body ?? ""),
+          headers: init.headers as Record<string, string>,
+        });
+        return Response.json(reply);
+      }),
+    );
+    return sent;
+  }
+
+  it("goes with root's password, percent-encoded, and its body as pond takes it", async () => {
+    const sent = sending({ ok: true });
+    const qc = warm();
+    const secret = "zażółć 1";
+    await run(qc, sshKeyAddOptions(qc), { key: "  ssh-ed25519 AAAA me \n", secret });
+    await run(qc, sshKeyRemoveOptions(qc), { fingerprint: "SHA256:a/b+c", secret });
+    await run(qc, sshKeysOnlyOptions(qc), { on: false, secret });
+    await run(qc, sshHostKeyOptions(qc), { secret });
+    await run(qc, tlsCertificateOptions(qc), { certificate: "C", key: "K", secret });
+    expect(sent.map((s) => [s.url, s.body])).toEqual([
+      ["/api/ssh/keys", "ssh-ed25519 AAAA me\n"],
+      ["/api/ssh/keys/remove", "SHA256:a/b+c"],
+      ["/api/ssh/keys-only", "off"],
+      ["/api/ssh/host-key", ""],
+      ["/api/tls/certificate", JSON.stringify({ certificate: "C", key: "K" })],
+    ]);
+    for (const s of sent) {
+      expect(s.headers["X-Pond-Password"]).toBe(encodeURIComponent(secret));
+      expect(s.headers["X-Pond"]).toBe("1");
+    }
+  });
+
+  it("of the panel's certificate shows its answer at once, the new fingerprints", async () => {
+    const tls = { https: true, own: null, certificates: [] };
+    sending({ ok: true, tls });
+    for (const options of [tlsKeyOptions, tlsCertificateOptions, tlsSelfSignedOptions]) {
+      const qc = warm();
+      await run(qc, options(qc), { certificate: "c", key: "k", secret: "s" });
+      expect(qc.getQueryData(["tls"])).toEqual(tls);
+    }
   });
 });

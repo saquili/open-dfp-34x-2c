@@ -18,11 +18,12 @@ import type {
   Settings,
   SfpLane,
 } from "../api/types";
+import { checkKey, checkPem, fingerprint, type KeyProblem, type PemProblem } from "../lib/keys";
 import { MAX_MOVED, moved } from "../lib/ports";
 import { DEFAULT_PRODUCT, productNameOk, productSlug } from "../lib/product";
 import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
 import { conversation } from "./conversation";
-import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
+import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, SSH, TC_RULES, TLS } from "./fixture";
 import { delay, type Handler, HttpResponse, http } from "./http";
 import { OMCI, withServices } from "./omci";
 
@@ -43,6 +44,10 @@ const cpu = structuredClone(
   },
 );
 const settings: Settings = structuredClone(LIVE.settings);
+/* The servers' keys, which a change through the panel replaces, as on the stick. */
+const ssh = structuredClone(SSH);
+const tls = structuredClone(TLS);
+const selfSigned = TLS.certificates.map((c) => c.sha256);
 /* The devices with an address from the networks' DHCP servers: a value of their own, as on the stick. */
 let leases: LeaseInfo[] = [];
 
@@ -597,6 +602,32 @@ const wrongPassword = () =>
 
 const away = () => (offline ? HttpResponse.error() : null);
 
+/* onu-config's refusal of a change of the servers' keys, as pond answers it. */
+const refused = (detail: string) =>
+  HttpResponse.json({ error: "refused", detail }, { status: 400 });
+
+/* What onu-config and pond say of a key or a certificate they refuse, in their words. */
+const KEY_SAYS: Record<KeyProblem, string> = {
+  empty: "no key: a line TYPE BASE64 [COMMENT]",
+  lines: "more than one line: one key at a time",
+  options: "a key with options in front of it: give the key alone",
+  type: "a key of another type: the stick takes ssh-ed25519, ecdsa-sha2-nistp256, -nistp384, -nistp521 and ssh-rsa",
+  base64: "the key is not base64, or too long for the store",
+  inside: "the key inside is not of its type",
+  rsa: "an RSA key of another size: the stick takes 2048 to 4096 bits",
+  comment: "the comment is longer than 100 bytes, or holds a control character",
+};
+const PEM_SAYS: Record<PemProblem, string> = {
+  noCertificate: "no certificate: a PEM block BEGIN CERTIFICATE",
+  noKey: "no key: a PEM block BEGIN PRIVATE KEY or BEGIN EC PRIVATE KEY",
+  encrypted: "the key is encrypted: give it without its passphrase",
+  rsa: "an RSA key: the panel's HTTPS takes an ECDSA key of P-256 alone",
+};
+
+const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
+const hexFingerprint = () =>
+  [...random(32)].map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(":");
+
 /* The paths the stick refuses, with the status it refuses them with, and how long it takes over each answer. */
 const failing = new Map<string, number>();
 let slow = 0;
@@ -823,7 +854,120 @@ const stick = [
 
   http.get("*/api/get/tls", async () => {
     await delay(200);
-    return away() ?? (signedIn ? HttpResponse.json({ id: "tls", value: TLS }) : unauthorized());
+    return away() ?? (signedIn ? HttpResponse.json({ id: "tls", value: tls }) : unauthorized());
+  }),
+
+  http.get("*/api/get/ssh", async () => {
+    await delay(150);
+    return away() ?? (signedIn ? HttpResponse.json({ id: "ssh", value: ssh }) : unauthorized());
+  }),
+
+  /*
+   * The servers' keys, each change with root's password, which the stick
+   * judges as onu-config does: a public key by the panel's own check, which
+   * takes and refuses what the stick does, an own certificate by its blocks
+   * alone, which the mock does not read further.
+   */
+  http.post("*/api/ssh/host-key", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    ssh.host_key = { type: "ssh-ed25519", fingerprint: await fingerprint(random(51)) };
+    return HttpResponse.json({ ok: true, host_key: ssh.host_key });
+  }),
+
+  http.post("*/api/ssh/keys", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    const c = checkKey(await request.text());
+    if (!c.ok) return refused(KEY_SAYS[c.problem]);
+    const fp = await fingerprint(c.blob);
+    if (ssh.keys.some((k) => k.fingerprint === fp)) return refused(`the key ${fp} is kept already`);
+    if (ssh.keys.length >= ssh.keys_max)
+      return refused(`${ssh.keys_max} keys at most: remove one first`);
+    const key = { type: c.type, bits: c.bits, fingerprint: fp, comment: c.comment };
+    ssh.keys.push(key);
+    return HttpResponse.json({ ok: true, key });
+  }),
+
+  http.post("*/api/ssh/keys/remove", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    const fp = (await request.text()).trim();
+    const at = ssh.keys.findIndex((k) => k.fingerprint === fp);
+    if (at < 0) return refused(`no key ${fp} is kept`);
+    if (ssh.keys_only && ssh.keys.length === 1)
+      return refused("the last key stays while ssh takes keys alone: turn that off first");
+    ssh.keys.splice(at, 1);
+    return HttpResponse.json({ ok: true });
+  }),
+
+  http.post("*/api/ssh/keys-only", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    const state = (await request.text()).trim();
+    if (state !== "on" && state !== "off")
+      return HttpResponse.json(
+        { error: "not on or off", detail: "the body is on or off" },
+        { status: 400 },
+      );
+    if (state === "on" && ssh.keys.length === 0) return refused("no key is kept: add one first");
+    ssh.keys_only = state === "on";
+    return HttpResponse.json({ ok: true });
+  }),
+
+  http.post("*/api/tls/key", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    for (let i = 0; i < selfSigned.length; i++) selfSigned[i] = hexFingerprint();
+    if (!tls.own)
+      for (const [i, c] of tls.certificates.entries()) c.sha256 = selfSigned[i] ?? c.sha256;
+    return HttpResponse.json({ ok: true, tls });
+  }),
+
+  http.post("*/api/tls/certificate", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    const body = (await request.json().catch(() => ({}))) as { certificate?: string; key?: string };
+    const problem = checkPem(body.certificate ?? "", body.key ?? "");
+    if (problem)
+      return HttpResponse.json(
+        { error: "not a certificate", detail: PEM_SAYS[problem] },
+        { status: 400 },
+      );
+    const now = Date.now();
+    tls.own = {
+      subject: "O=Example, CN=stick.example",
+      issuer: "O=Example CA, CN=Example Intermediate",
+      sha256: hexFingerprint(),
+      not_before: new Date(now).toISOString().replace(/\.\d+Z$/, "Z"),
+      not_after: new Date(now + 397 * 86_400_000).toISOString().replace(/\.\d+Z$/, "Z"),
+      chain: (body.certificate?.match(/-----BEGIN CERTIFICATE-----/g) ?? []).length,
+      names: ["DNS:stick.example", "DNS:localhost", "IP:127.0.0.1"],
+    };
+    for (const c of tls.certificates)
+      Object.assign(c, {
+        sha256: tls.own.sha256,
+        not_before: tls.own.not_before,
+        not_after: tls.own.not_after,
+        named: c.address === "localhost" || c.address === "127.0.0.1",
+      });
+    return HttpResponse.json({ ok: true, tls });
+  }),
+
+  http.post("*/api/tls/self-signed", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
+    tls.own = null;
+    for (const [i, c] of tls.certificates.entries())
+      Object.assign(c, { ...TLS.certificates[i], sha256: selfSigned[i] ?? c.sha256 });
+    return HttpResponse.json({ ok: true, tls });
   }),
 
   http.get("*/api/get/clock", async () => {

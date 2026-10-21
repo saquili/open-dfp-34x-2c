@@ -67,3 +67,71 @@ describe("the mock stick's product name", () => {
     }
   });
 });
+
+describe("the mock stick's servers' keys", () => {
+  /* The header of root's password, which each change of a key takes. */
+  const CONFIRM = "X-Pond-Password";
+  const ED25519 =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJUZp+xf8C/t3NT+0VYL5nV7MNOQXr21ORnzDVmED9xE me@laptop";
+  const FP = "SHA256:lxckqci4MwTwEjJFI7q4oX1lApk+VkklJ0/B5U0TTc0";
+  const send = (path: string, body: string, secret = "admin") =>
+    getResponse(
+      handlers,
+      new Request(`http://stick.invalid${path}`, {
+        method: "POST",
+        body,
+        headers: { [CONFIRM]: encodeURIComponent(secret) },
+      }),
+    );
+  const value = async <T>(id: string) =>
+    ((await (await ask(`/api/get/${id}`))?.json()) as { value: T } | undefined)?.value as T;
+  const detail = async (r: Response | undefined) =>
+    ((await r?.json()) as { detail?: string } | undefined)?.detail;
+  type Tls = { own: { chain: number } | null; certificates: { sha256: string }[] };
+  type Ssh = { host_key: { fingerprint: string } };
+
+  it("takes a key and keys alone with root's password, and refuses as the stick", async () => {
+    await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
+    try {
+      expect((await send("/api/ssh/keys", ED25519, "wrong"))?.status).toBe(403);
+      expect((await send("/api/ssh/keys-only", "on"))?.status).toBe(400);
+      const added = await send("/api/ssh/keys", `${ED25519}\n`);
+      expect(added?.status).toBe(200);
+      const key = ((await added?.json()) as { key?: { fingerprint: string } } | undefined)?.key;
+      expect(key?.fingerprint).toBe(FP);
+      expect(await detail(await send("/api/ssh/keys", ED25519))).toContain("kept already");
+      expect(await detail(await send("/api/ssh/keys", "ssh-dss AAAA"))).toContain("another type");
+      expect((await send("/api/ssh/keys-only", "maybe"))?.status).toBe(400);
+      expect((await send("/api/ssh/keys-only", "on"))?.status).toBe(200);
+      expect(await detail(await send("/api/ssh/keys/remove", FP))).toContain("last key stays");
+      expect((await send("/api/ssh/keys-only", "off"))?.status).toBe(200);
+      expect((await send("/api/ssh/keys/remove", FP))?.status).toBe(200);
+      expect(await detail(await send("/api/ssh/keys/remove", FP))).toContain("no key");
+      const before = (await value<Ssh>("ssh")).host_key;
+      expect((await send("/api/ssh/host-key", ""))?.status).toBe(200);
+      expect((await value<Ssh>("ssh")).host_key).not.toEqual(before);
+    } finally {
+      await send("/api/auth/logout", "");
+    }
+  });
+
+  it("makes a new key for the panel, takes an own certificate, and goes back", async () => {
+    await send("/api/auth/login", JSON.stringify({ user: "root", secret: "admin" }));
+    try {
+      const first = (await value<Tls>("tls")).certificates[0]?.sha256;
+      expect((await send("/api/tls/key", ""))?.status).toBe(200);
+      expect((await value<Tls>("tls")).certificates[0]?.sha256).not.toBe(first);
+      const cert = "-----BEGIN CERTIFICATE-----\nQUFB\n-----END CERTIFICATE-----\n";
+      const pem = (key: string) => JSON.stringify({ certificate: cert + cert, key });
+      const rsa = await send("/api/tls/certificate", pem("-----BEGIN RSA PRIVATE KEY-----"));
+      expect(await detail(rsa)).toContain("RSA");
+      const own = await send("/api/tls/certificate", pem("-----BEGIN PRIVATE KEY-----"));
+      expect(own?.status).toBe(200);
+      expect((await value<Tls>("tls")).own?.chain).toBe(2);
+      expect((await send("/api/tls/self-signed", ""))?.status).toBe(200);
+      expect((await value<Tls>("tls")).own).toBeNull();
+    } finally {
+      await send("/api/auth/logout", "");
+    }
+  });
+});

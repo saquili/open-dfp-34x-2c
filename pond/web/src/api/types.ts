@@ -396,6 +396,11 @@ export interface Settings {
 /** The panel's HTTPS: the certificate of each address it answers on (pond's "tls"). */
 export interface Tls {
   https: boolean;
+  /**
+   * An own certificate, which an authority signed and the stick serves on
+   * every address in place of those it signs itself; null without one.
+   */
+  own: OwnCertificate | null;
   certificates: {
     address: string;
     port: number;
@@ -403,7 +408,38 @@ export interface Tls {
     sha256: string;
     not_before: string;
     not_after: string;
+    /** Whether the certificate names the address; the stick's own always do. */
+    named: boolean;
   }[];
+}
+
+export interface OwnCertificate {
+  /** The common name and the organisation, as words: "O=Example, CN=stick.example". */
+  subject: string;
+  issuer: string;
+  sha256: string;
+  not_before: string;
+  not_after: string;
+  /** The certificates the stick sends, its own first. */
+  chain: number;
+  /** Its subject's alternative names: "IP:192.0.2.254", "DNS:stick.example". */
+  names: string[];
+}
+
+/** pond's value "ssh": the ssh server's host key and the keys root logs in with. */
+export interface Ssh {
+  host_key: { type: string; fingerprint: string } | null;
+  keys_only: boolean;
+  keys_max: number;
+  keys: SshKey[];
+}
+
+export interface SshKey {
+  type: string;
+  bits: number;
+  /** "SHA256:" and unpadded base64, as ssh-keygen -l prints it. */
+  fingerprint: string;
+  comment: string;
 }
 
 /**

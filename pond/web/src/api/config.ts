@@ -28,6 +28,8 @@ import type {
   Network,
   OmciValue,
   SfpLane,
+  Ssh,
+  SshKey,
   Tls,
 } from "./types";
 
@@ -110,6 +112,17 @@ export function useBanks() {
   return useQuery(banksQuery);
 }
 
+/* The ssh server's keys: they change only when a person changes them. */
+export const sshQuery = queryOptions({
+  queryKey: ["ssh"],
+  queryFn: async () => (await request<Value<Ssh>>("/api/get/ssh")).value,
+  staleTime: 60_000,
+});
+
+export function useSsh() {
+  return useQuery(sshQuery);
+}
+
 export function useTls() {
   return useQuery(tlsQuery);
 }
@@ -155,6 +168,14 @@ export const REFRESH = {
   try: [["firmware"], ["banks"]],
   return: [["firmware"], ["banks"]],
   restart: [],
+  /* The ssh server's host key, its keys and whether it takes them alone. */
+  ssh_host_key: [["ssh"]],
+  ssh_key: [["ssh"]],
+  ssh_keys_only: [["ssh"]],
+  /* The panel's key and an own certificate: the certificates it serves. */
+  tls_key: [["tls"]],
+  tls_certificate: [["tls"]],
+  tls_self_signed: [["tls"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type Change = keyof typeof REFRESH;
@@ -277,6 +298,100 @@ export function returnOptions(qc: QueryClient) {
 }
 
 export const useReturnBank = () => useMutation(returnOptions(useQueryClient()));
+
+/*
+ * The keys of the stick's two servers, each change with root's password
+ * besides the session (pond's routes of /api/ssh and /api/tls). After a new
+ * key or certificate of the panel, the connections the browser opens from
+ * then on meet the new certificate, which it warns about once unless it
+ * trusts its authority; the answer carries the new value "tls", which the
+ * panel shows at once, with the fingerprints to compare.
+ */
+type Keyed<T> = T & { secret: string };
+
+export function sshHostKeyOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["ssh", "host-key"],
+    mutationFn: ({ secret }: Keyed<object>) =>
+      request<{ ok: boolean; host_key?: { type: string; fingerprint: string } }>(
+        "/api/ssh/host-key",
+        "",
+        passwordHeader(secret),
+      ),
+    onSuccess: () => void refresh(qc, "ssh_host_key"),
+  });
+}
+
+export function sshKeyAddOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["ssh", "key-add"],
+    mutationFn: ({ key, secret }: Keyed<{ key: string }>) =>
+      request<{ ok: boolean; key?: SshKey }>(
+        "/api/ssh/keys",
+        `${key.trim()}\n`,
+        passwordHeader(secret),
+      ),
+    onSuccess: () => void refresh(qc, "ssh_key"),
+  });
+}
+
+export function sshKeyRemoveOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["ssh", "key-remove"],
+    mutationFn: ({ fingerprint, secret }: Keyed<{ fingerprint: string }>) =>
+      request<{ ok: boolean }>("/api/ssh/keys/remove", fingerprint, passwordHeader(secret)),
+    onSuccess: () => void refresh(qc, "ssh_key"),
+  });
+}
+
+export function sshKeysOnlyOptions(qc: QueryClient) {
+  return mutationOptions({
+    mutationKey: ["ssh", "keys-only"],
+    mutationFn: ({ on, secret }: Keyed<{ on: boolean }>) =>
+      request<{ ok: boolean }>("/api/ssh/keys-only", on ? "on" : "off", passwordHeader(secret)),
+    onSuccess: () => void refresh(qc, "ssh_keys_only"),
+  });
+}
+
+type TlsAnswer = { ok: boolean; tls?: Tls };
+
+/* A change of the panel's certificates: its answer is the value tls, at once. */
+function tlsOptions<V>(qc: QueryClient, change: Change, send: (v: V) => Promise<TlsAnswer>) {
+  return mutationOptions({
+    mutationKey: ["tls", change],
+    mutationFn: send,
+    onSuccess: (reply: TlsAnswer) => {
+      if (reply.tls) qc.setQueryData(tlsQuery.queryKey, reply.tls);
+      void refresh(qc, change);
+    },
+  });
+}
+
+export const tlsKeyOptions = (qc: QueryClient) =>
+  tlsOptions(qc, "tls_key", ({ secret }: Keyed<object>) =>
+    request<TlsAnswer>("/api/tls/key", "", passwordHeader(secret)),
+  );
+
+export const tlsCertificateOptions = (qc: QueryClient) =>
+  tlsOptions(
+    qc,
+    "tls_certificate",
+    ({ certificate, key, secret }: Keyed<{ certificate: string; key: string }>) =>
+      request<TlsAnswer>("/api/tls/certificate", { certificate, key }, passwordHeader(secret)),
+  );
+
+export const tlsSelfSignedOptions = (qc: QueryClient) =>
+  tlsOptions(qc, "tls_self_signed", ({ secret }: Keyed<object>) =>
+    request<TlsAnswer>("/api/tls/self-signed", "", passwordHeader(secret)),
+  );
+
+export const useSshHostKey = () => useMutation(sshHostKeyOptions(useQueryClient()));
+export const useSshKeyAdd = () => useMutation(sshKeyAddOptions(useQueryClient()));
+export const useSshKeyRemove = () => useMutation(sshKeyRemoveOptions(useQueryClient()));
+export const useSshKeysOnly = () => useMutation(sshKeysOnlyOptions(useQueryClient()));
+export const useTlsKey = () => useMutation(tlsKeyOptions(useQueryClient()));
+export const useTlsCertificate = () => useMutation(tlsCertificateOptions(useQueryClient()));
+export const useTlsSelfSigned = () => useMutation(tlsSelfSignedOptions(useQueryClient()));
 
 /*
  * A copy of the whole flash, as a file the browser saves. It needs root's

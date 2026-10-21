@@ -14,6 +14,7 @@ import type {
   Link,
   Live,
   Network,
+  Ssh,
   TcRules,
   Tls,
 } from "../api/types";
@@ -590,6 +591,7 @@ export const FIRMWARE: Firmware = {
 /* The panel's certificate at the address of the mock, made up. */
 export const TLS: Tls = {
   https: true,
+  own: null,
   certificates: [
     {
       address: "localhost",
@@ -598,8 +600,20 @@ export const TLS: Tls = {
         "3F:49:08:62:85:06:F8:87:2D:21:FD:56:14:40:BC:16:E4:A8:88:86:D4:54:C6:48:88:B2:33:9E:56:D7:AF:02",
       not_before: "2026-01-01T00:00:00Z",
       not_after: "2028-04-04T23:59:59Z",
+      named: true,
     },
   ],
+};
+
+/* The ssh server as a stick that has no key of its owner's yet has it. */
+export const SSH: Ssh = {
+  host_key: {
+    type: "ssh-ed25519",
+    fingerprint: "SHA256:7oXBkEw0ZJtJ1gq0kz9Yx0p3Yb1oQe3f0bX9Wb6s8nE",
+  },
+  keys_only: false,
+  keys_max: 8,
+  keys: [],
 };
 
 /* The clock as timed keeps it from a PTP master on the management link, NTP from the router beside it. */

@@ -2,13 +2,14 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The stick itself, in three tabs. Resources: the processor, the memory and
+ * The stick itself, in four tabs. Resources: the processor, the memory and
  * the flash, as gauges, the last ten minutes of the first two, and a map of
  * the flash with what each partition holds. Software: the two systems of
  * the flash and the update of the one that does not run. Settings: the
  * stick's name and the name the panel shows for the system, its clock,
- * security with the panel's certificate, a restart and a report of every
- * figure.
+ * the connection to the panel, the password and the sign-out, a restart
+ * and a report of every figure. Access: the keys of the ssh server and of
+ * the panel's HTTPS (system/Access.tsx).
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -41,7 +42,6 @@ import {
   useProductChange,
   useRestart,
   useReturnBank,
-  useTls,
   useTryBank,
 } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
@@ -68,8 +68,9 @@ import { DEFAULT_PRODUCT, PRODUCT_MAX, productField, productSlug } from "../lib/
 import { reason } from "../lib/read";
 import { z } from "../lib/schemas";
 import { memory, type Tone } from "../lib/state";
+import { AccessTab } from "./system/Access";
 
-const TABS = ["resources", "software", "settings"] as const;
+const TABS = ["resources", "software", "settings", "access"] as const;
 
 /* What each partition of the flash is, in words. */
 const PARTITION: Record<string, Key> = {
@@ -776,15 +777,11 @@ function ProductForm({ name }: { name: string }) {
 }
 
 /*
- * The connection to the panel, and the certificate of the address it was
- * opened at, which the stick signed itself: its fingerprint is what a person
- * compares with the browser's, and with the one the console shows at boot.
+ * The connection to the panel: the certificate, its fingerprint and its key,
+ * and the ssh server's keys, are under Access.
  */
 function Certificate() {
-  const { t, lang } = useI18n();
-  const tls = useTls();
-  const here = window.location.hostname;
-  const cert = tls.data?.certificates.find((c) => c.address === here);
+  const { t } = useI18n();
   const secure = window.location.protocol === "https:";
   return (
     <>
@@ -796,17 +793,9 @@ function Certificate() {
               {t(secure ? "system.connectionHttps" : "system.connectionHttp")}
             </Badge>,
           ],
-          cert && [
-            t("system.certificate"),
-            <span key="fp" className="break-all font-mono text-xs">
-              {cert.sha256}
-            </span>,
-          ],
-          cert && [t("system.certificateUntil"), day(Date.parse(cert.not_after) / 1000, lang)],
         ]}
       />
-      {cert && <p className="text-xs text-base-content/70">{t("system.certificateHint")}</p>}
-      <QueryNote reads={tls} />
+      <p className="text-xs text-base-content/70">{t("system.accessHint")}</p>
     </>
   );
 }
@@ -1044,6 +1033,7 @@ export function System() {
             { id: "resources", label: t("system.tabResources") },
             { id: "software", label: t("system.tabSoftware") },
             { id: "settings", label: t("system.tabSettings") },
+            { id: "access", label: t("system.tabAccess") },
           ]}
           value={tab}
           onChange={setTab}
@@ -1054,6 +1044,7 @@ export function System() {
       {tab === "resources" && <ResourcesTab />}
       {tab === "software" && <Updates />}
       {tab === "settings" && <SettingsTab />}
+      {tab === "access" && <AccessTab />}
     </Page>
   );
 }
