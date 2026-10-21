@@ -2007,6 +2007,32 @@ static void test_panel_values(void)
 	      "the logical ONU ID is served, its password only as set or not");
 	check(strstr(s, "\"sw_version0\":\"V1.0.0\"") && strstr(s, "\"sw_version1\":\"\""),
 	      "each software image's version is a field of its own");
+	check(strstr(s, "\"uni_report\":\"both\"") && strstr(s, "\"uni_ports\":1") &&
+		      strstr(s, "\"pots_ports\":0") && strstr(s, "\"olt_login\":null"),
+	      "without them, an Ethernet UNI and the VEIP, no phone socket, no login from the OLT");
+	put("/run/onu-identity",
+	    "serial=XXXXXXXXXXXX\nuni_report=veip\nuni_ports=4\npots_ports=2\n", 0600);
+	mkdir(prov_path("/run/ubus", file, sizeof(file)), 0755);
+	put("/run/ubus/omcid.login",
+	    "{\"user\":\"abc@isp.example\",\"secret\":\"example-secret\",\"realm\":\"\"}\n", 0644);
+	s = render(prov_identity, buf, sizeof(buf), &e);
+	check(!e && strstr(s, "\"uni_report\":\"veip\"") && strstr(s, "\"uni_ports\":4") &&
+		      strstr(s, "\"pots_ports\":2"),
+	      "the ports told to the OLT are served as the identity holds them");
+	check(strstr(s, "\"olt_login\":{\"user\":\"abc@isp.example\",\"password_set\":true}") &&
+		      !strstr(s, "example-secret"),
+	      "the OLT's login is served, its password only as set");
+	put("/run/onu-identity", "uni_report=other\nuni_ports=9\npots_ports=x\n", 0600);
+	put("/run/ubus/omcid.login", "{}\n", 0644);
+	s = render(prov_identity, buf, sizeof(buf), &e);
+	check(strstr(s, "\"uni_report\":\"both\"") && strstr(s, "\"uni_ports\":1") &&
+		      strstr(s, "\"pots_ports\":0") && strstr(s, "\"olt_login\":null"),
+	      "values out of their range are the defaults, and a login without a user is none");
+	unlink(prov_path("/run/ubus/omcid.login", file, sizeof(file)));
+	put("/run/onu-identity",
+	    "serial=XXXXXXXXXXXX\nvendor_id=XXXX\nversion=V1.0\n"
+	    "ploam_password=0123456789\nmodel=EXAMPLE\nloid=example-line\n"
+	    "loid_password=lpw00000\nsw_version0=V1.0.0\n", 0600);
 
 	/* onu-config is the stand-in for the identity alone. */
 	snprintf(onu_config, sizeof(onu_config), "%s", getenv("POND_ONU_CONFIG") ?: "");
@@ -2030,6 +2056,19 @@ static void test_panel_values(void)
 	      "a number beyond its attribute is refused");
 	check(prov_identity_set("LOID_PASSWORD=thirteen-long", err, sizeof(err)) == -EINVAL,
 	      "a logical password longer than twelve characters is refused");
+	check(prov_identity_set("UNI_REPORT=all", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "UNI_REPORT") &&
+		      prov_identity_set("UNI_PORTS=0", err, sizeof(err)) == -EINVAL &&
+		      prov_identity_set("UNI_PORTS=9", err, sizeof(err)) == -EINVAL &&
+		      prov_identity_set("UNI_PORTS=12", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "1 to 8") &&
+		      prov_identity_set("POTS_PORTS=3", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "0 to 2"),
+	      "ports out of their range are refused");
+	rc = prov_identity_set("UNI_REPORT=pptp\nUNI_PORTS=4\nPOTS_PORTS=1\n", err, sizeof(err));
+	check(rc == 0 &&
+		      file_has("/stored-identity", "UNI_REPORT=pptp\nUNI_PORTS=4\nPOTS_PORTS=1\n"),
+	      "the ports told to the OLT go to onu-config");
 	rc = prov_identity_set("SERIAL=000000000000\nPLOAM=\nVERSION=V2.0\n", err, sizeof(err));
 	check(rc == 0 && file_has("/stored-identity", "SERIAL=000000000000\nVERSION=V2.0\n") &&
 		      !file_has("/stored-identity", "PLOAM"),

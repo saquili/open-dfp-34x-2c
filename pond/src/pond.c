@@ -19,6 +19,8 @@
  *   /api/set/ID        a POST: change a value to the body of the request
  *   /api/set/changes   a POST: keep the changes on trial, or take them back
  *                      (changes.c)
+ *   /api/identity/olt-login a POST, with root's password: the PPPoE login
+ *                      the OLT sent, its password with it
  *   /api/system/restart a POST: restart the stick
  *   /api/firmware/upload   a POST of an update file: into the other bank
  *   /api/firmware/download the running bank as an update file
@@ -557,6 +559,29 @@ static void api_end_others(struct mg_connection *c, struct mg_http_message *hm,
 	reply_json(c, 200, body);
 }
 
+/*
+ * The PPPoE login the OLT sent, its password with it, with root's password
+ * (the X-Pond-Password of the updates, firmware.h): omcid's answer as it is,
+ * {"user","secret","realm"}, or 404 when the OLT sent none.
+ */
+static void api_olt_login(struct mg_connection *c, struct mg_http_message *hm)
+{
+	char pw[AUTH_SECRET_MAX + 1], text[512];
+	int n;
+
+	if (!firmware_confirmed(c, hm, pw, sizeof(pw)))
+		return;
+	explicit_bzero(pw, sizeof(pw));
+	n = bus_call("omcid", "login", NULL, 0, text, sizeof(text));
+	if (n < 0)
+		reply_err(c, 503, "no omcid", "omcid does not answer");
+	else if (!strstr(text, "\"user\""))
+		reply_err(c, 404, "no login", "the OLT sent no PPPoE login");
+	else
+		reply_json(c, 200, text);
+	explicit_bzero(text, sizeof(text));
+}
+
 /* Whether a token of scripts is in force; never the token. */
 static void api_token(struct mg_connection *c)
 {
@@ -766,6 +791,11 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 			api_restart(c);
 		else
 			reply_err(c, 405, "use POST", "restart with a POST");
+	} else if (mg_match(hm->uri, mg_str("/api/identity/olt-login"), NULL)) {
+		if (post)
+			api_olt_login(c, hm);
+		else
+			reply_err(c, 405, "use POST", "ask for the OLT's login with a POST");
 	} else if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL)) {
 		reply_err(c, 405, "use POST", "upload an update file with a POST");
 	} else if (mg_match(hm->uri, mg_str("/api/firmware/download"), NULL)) {

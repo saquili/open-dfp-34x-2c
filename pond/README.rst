@@ -462,10 +462,20 @@ more than 32 KiB, 423 and 429 as the updates do.
   ``LOID``, the logical ONU ID, ``SW_VERSION0`` and ``SW_VERSION1``, each
   software image's version, ``PACK_VERSION``, and ``PLOAM`` (ten characters or
   twenty hex digits) and ``LOID_PASSWORD`` (up to twelve), each kept when
-  empty. It goes to ``onu-config identity``, then ``onu-apply reidentify``
-  registers again. A read is ``onu-config identity-current`` through
-  onu-act, which never gives either password, only whether one is set: root
-  alone reads ``/run/onu-identity``.
+  empty; and the subscriber ports it tells the OLT of, as the ONT it stands
+  in for had them: ``UNI_REPORT``, ``both``, ``pptp`` (the Ethernet UNIs
+  alone) or ``veip`` (the VEIP alone), ``UNI_PORTS``, 1 to 8 Ethernet UNIs,
+  and ``POTS_PORTS``, 0 to 2 phone sockets, which omcid takes up once it
+  knows the classes of the phone. It goes to ``onu-config identity``, then
+  ``onu-apply reidentify`` registers again. A read is ``onu-config
+  identity-current`` through onu-act, which never gives either password,
+  only whether one is set: root alone reads ``/run/onu-identity``. It gives
+  the ports as ``uni_report``, ``uni_ports`` and ``pots_ports``, the
+  defaults for none, and ``olt_login``, the PPPoE login the OLT sent
+  (omcid's method ``login``, class 148), its ``user`` and whether it has a
+  password, ``password_set``, or null for none; ``POST
+  /api/identity/olt-login``, with root's password in ``X-Pond-Password``,
+  gives its ``user``, ``secret`` and ``realm``.
 * ``hostname``: the stick's name, ``HOSTNAME``, a name of RFC 1123; it goes to
   ``onu-config system`` and to the kernel.
 * ``product``: the name the panel shows for the system, ``PRODUCT_NAME``: 1 to

@@ -651,6 +651,26 @@ def sessions_and_token(pond, workdir):
         status, _, body = ask("GET", "/api/token", first)
         check(status == 200 and body == {"set": False}, "and none is in force")
 
+        print("  the PPPoE login the OLT sent")
+        ubus = os.path.join(root, "run", "ubus")
+        os.makedirs(ubus, exist_ok=True)
+        login = os.path.join(ubus, "omcid.login")
+        status, _, body = ask("POST", "/api/identity/olt-login", mine, "")
+        check(status == 403, "it needs root's password")
+        status, _, body = ask("POST", "/api/identity/olt-login", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 503 and body.get("error") == "no omcid", "without omcid, it says so")
+        write(login, "{}\n")
+        status, _, body = ask("POST", "/api/identity/olt-login", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 404 and body.get("error") == "no login", "an OLT that sent none")
+        write(login, '{"user":"abc@isp.example","secret":"example-secret","realm":""}\n')
+        status, _, body = ask("POST", "/api/identity/olt-login", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 200 and body == {"user": "abc@isp.example", "secret": "example-secret",
+                                         "realm": ""},
+              "with it, the user and the password, as omcid gives them")
+        status, _, _ = ask("GET", "/api/identity/olt-login", first)
+        check(status == 405, "it is a POST")
+        os.unlink(login)
+
         print("  wrong passwords")
         for _ in range(5):
             ask("POST", "/api/token/off", dict(mine, **{CONFIRM: "wrong"}), "")

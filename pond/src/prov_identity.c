@@ -17,6 +17,8 @@
 #include "prov.h"
 #include "providers.h"
 
+#include "mongoose.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <signal.h>
@@ -77,6 +79,69 @@ static void field(const char *text, const char *name, char *out, size_t cap)
 	}
 }
 
+/* A number of the identity of @lo to @hi, or @dflt for none or another. */
+static unsigned long ranged(const char *text, const char *name, unsigned long lo,
+			    unsigned long hi, unsigned long dflt)
+{
+	char v[8], *end;
+	unsigned long n;
+
+	field(text, name, v, sizeof(v));
+	n = strtoul(v, &end, 10);
+	return *v && !*end && n >= lo && n <= hi ? n : dflt;
+}
+
+/*
+ * The subscriber ports the stick tells the OLT of (omcid's
+ * hw_kernel.c, identity_ports()): uni_report, "both", "pptp" or "veip";
+ * uni_ports, 1 to 8 Ethernet UNIs; pots_ports, 0 to 2 phone sockets.
+ */
+static void ports(const char *text, struct prov_buf *out)
+{
+	char v[8];
+
+	field(text, "uni_report", v, sizeof(v));
+	pv_key(out, "uni_report");
+	pv_str(out, !strcmp(v, "pptp") || !strcmp(v, "veip") ? v : "both");
+	pv_comma(out);
+	pv_key(out, "uni_ports");
+	pv_num(out, (long long)ranged(text, "uni_ports", 1, 8, 1));
+	pv_comma(out);
+	pv_key(out, "pots_ports");
+	pv_num(out, (long long)ranged(text, "pots_ports", 0, 2, 0));
+}
+
+/*
+ * The PPPoE login the OLT sent (omcid's method "login", class 148): its
+ * user and whether it has a password, never the password, which
+ * /api/identity/olt-login gives with root's password; null for none.
+ */
+static void olt_login(struct prov_buf *out)
+{
+	char text[512];
+	int n = bus_call("omcid", "login", NULL, 0, text, sizeof(text));
+	char *user = n > 0 ? mg_json_get_str(mg_str_n(text, (size_t)n), "$.user") : NULL;
+	char *secret = n > 0 ? mg_json_get_str(mg_str_n(text, (size_t)n), "$.secret") : NULL;
+
+	pv_key(out, "olt_login");
+	if (user && *user) {
+		pv_open(out, '{');
+		pv_key(out, "user");
+		pv_str(out, user);
+		pv_comma(out);
+		pv_key(out, "password_set");
+		pv_bool(out, secret && *secret);
+		pv_close(out, '}');
+	} else {
+		pv_null(out);
+	}
+	if (secret)
+		explicit_bzero(secret, strlen(secret));
+	free(user);
+	free(secret);
+	explicit_bzero(text, sizeof(text));
+}
+
 int prov_identity(struct prov_buf *out)
 {
 	char text[2048], v[256];
@@ -113,6 +178,10 @@ int prov_identity(struct prov_buf *out)
 		pv_str(out, v);
 	else
 		pv_null(out);
+	pv_comma(out);
+	ports(text, out);
+	pv_comma(out);
+	olt_login(out);
 	pv_close(out, '}');
 	return 0;
 }
@@ -224,6 +293,23 @@ int prov_identity_write(const char *val, char *err, size_t errcap,
 					return -EINVAL;
 				}
 				name = "PLOAM_PASSWORD";
+			} else if (!strcmp(line, "UNI_REPORT")) {
+				if (strcmp(eq + 1, "both") && strcmp(eq + 1, "pptp") &&
+				    strcmp(eq + 1, "veip")) {
+					snprintf(err, errcap, "UNI_REPORT: both, pptp or veip");
+					return -EINVAL;
+				}
+				name = "UNI_REPORT";
+			} else if (!strcmp(line, "UNI_PORTS") || !strcmp(line, "POTS_PORTS")) {
+				const bool uni = line[0] == 'U';
+
+				if (strlen(eq + 1) != 1 || eq[1] < (uni ? '1' : '0') ||
+				    eq[1] > (uni ? '8' : '2')) {
+					snprintf(err, errcap, uni ? "UNI_PORTS: 1 to 8" :
+								    "POTS_PORTS: 0 to 2");
+					return -EINVAL;
+				}
+				name = uni ? "UNI_PORTS" : "POTS_PORTS";
 			} else if (!strcmp(line, "LOID_PASSWORD")) {
 				if (!printable(eq + 1, 12)) {
 					snprintf(err, errcap,

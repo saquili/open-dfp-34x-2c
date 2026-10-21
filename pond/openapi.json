@@ -377,6 +377,64 @@
         }
       }
     },
+    "/api/identity/olt-login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The PPPoE login the OLT sent (class 148), its password with it",
+        "description": "The identity value gives its user alone, and whether it has a password.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XPond"
+          },
+          {
+            "$ref": "#/components/parameters/XPondPassword"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OltLogin"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "403": {
+            "$ref": "#/components/responses/WrongPassword"
+          },
+          "404": {
+            "description": "The OLT sent no PPPoE login",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooMany"
+          },
+          "503": {
+            "description": "omcid does not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/token": {
       "get": {
         "tags": [
@@ -7204,6 +7262,26 @@
         },
         "required": [
           "rules"
+        ]
+      },
+      "OltLogin": {
+        "description": "The PPPoE login the OLT sent, with its password (secret), which root's password shows.",
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string",
+            "description": "The realm the OLT sent beside them, empty for none."
+          }
+        },
+        "required": [
+          "user",
+          "secret"
         ]
       },
       "LaneMode": {
