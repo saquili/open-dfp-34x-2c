@@ -180,7 +180,7 @@ void iptv_test(struct mg_connection *c, struct mg_http_message *hm)
 	g_test.addr = ntohl(a.s_addr);
 	g_test.vlan = 0;
 	if (body_value(hm->body, "VLAN", vlan, sizeof(vlan)) && *vlan &&
-	    !number(vlan, 1, 4094, &g_test.vlan)) {
+	    strcmp(vlan, "none") && !number(vlan, 1, 4094, &g_test.vlan)) {
 		reply(c, 400, "iptv", "VLAN: 1 to 4094, or none for untagged");
 		return;
 	}

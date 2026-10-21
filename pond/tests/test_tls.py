@@ -714,10 +714,12 @@ def sessions_and_token(pond, workdir):
               and body.get("rate_bps") == 1000000 and 0 <= (body.get("first_ms") or -1) < 1000,
               "the bytes of the group in the seconds asked, and when the first came")
         write(tv, '{"ok":true,"running":true,"bytes":0}\n')
-        status, _, body = ask("POST", "/api/iptv/test", mine, "GROUP=239.1.1.6\nSECONDS=1\n")
-        check(status == 200 and body.get("vlan") is None and body.get("bytes") == 0
-              and body.get("first_ms", 0) is None,
-              "untagged, and nothing came")
+        for vlan in ("", "VLAN=\n", "VLAN=none\n"):
+            status, _, body = ask("POST", "/api/iptv/test", mine,
+                                  f"GROUP=239.1.1.6\n{vlan}SECONDS=1\n")
+            check(status == 200 and body.get("vlan") is None and body.get("bytes") == 0
+                  and body.get("first_ms", 0) is None,
+                  f"untagged ({vlan.strip() or 'no VLAN'}), and nothing came")
         status, _, _ = ask("GET", "/api/iptv/test", first)
         check(status == 405, "it is a POST")
         os.unlink(tv)
