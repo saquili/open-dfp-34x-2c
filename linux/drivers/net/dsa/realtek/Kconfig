@@ -89,6 +89,7 @@ config NET_DSA_RTL9602C
 	depends on I2C
 	depends on PTP_1588_CLOCK_OPTIONAL
 	depends on RTL9602C_ETH || !RTL9602C_ETH
+	depends on HWMON || HWMON=n
 	select AUXILIARY_BUS
 	select MFD_SYSCON
 	select NET_DSA_TAG_RTL9602C
@@ -101,6 +102,7 @@ config NET_DSA_RTL9602C
 	  RTL9602C_ETH driver. Besides the switch itself (bridging, VLANs, the
 	  address table, ACL and classifier rules, QoS, storm control and
 	  L3/NAT offload). It also registers the switch's IEEE 1588 clock,
+	  reports the SoC's die temperature through hwmon as "rtl9602c",
 	  and decides whether the optics may be written, whose I2C master
 	  has a driver of its own, I2C_RTL9602C, and their laser driver
 	  another, such as PON_GN25L95. The chip's GPON MAC, with the PON

@@ -2,7 +2,8 @@
 /*
  * KUnit tests of the pure functions of rtl9602c-main.c, which includes this
  * file when CONFIG_NET_DSA_RTL9602C_KUNIT_TEST is set: the checks of the
- * search for the host's setting of the SerDes lane.
+ * search for the host's setting of the SerDes lane, and the die temperature
+ * read from the sensor's status word.
  */
 
 #include <kunit/test.h>
@@ -138,11 +139,25 @@ static void rtl9602c_test_sds_wait(struct kunit *test)
 			KUNIT_EXPECT_EQ(test, rtl9602c_sds_tries[i].checks, 1);
 }
 
+/*
+ * The die temperature comes from bits 22:16 of the sensor's status word
+ * alone, in whole degrees: the bits around them, set here, do not reach it.
+ */
+static void rtl9602c_test_tsense_mdeg(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, rtl9602c_tsense_mdeg(0), 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_tsense_mdeg(0x032d002a), 45000);
+	KUNIT_EXPECT_EQ(test, rtl9602c_tsense_mdeg(0x007f0000), 127000);
+	KUNIT_EXPECT_EQ(test, rtl9602c_tsense_mdeg(0xff80ffff), 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_tsense_mdeg(0xffffffff), 127000);
+}
+
 static struct kunit_case rtl9602c_main_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_sds_auto),
 	KUNIT_CASE(rtl9602c_test_sds_found_lost),
 	KUNIT_CASE(rtl9602c_test_sds_one),
 	KUNIT_CASE(rtl9602c_test_sds_wait),
+	KUNIT_CASE(rtl9602c_test_tsense_mdeg),
 	{ }
 };
 

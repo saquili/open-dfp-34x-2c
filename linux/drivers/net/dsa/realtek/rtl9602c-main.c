@@ -13,9 +13,10 @@
  * handles the switch's interrupt; reads the per-port counters; and offers
  * devlink parameters for the DoS checks, the storm-control classes tc cannot
  * describe, loop detection, the frame capture and the ONU's serial number,
- * with a devlink region that reads the frame capture. It also holds the
- * register accessors and the access to the indirect table engine that the
- * other files go through, and sets up their blocks at the end of setup.
+ * with a devlink region that reads the frame capture; and reports the SoC's
+ * die temperature through hwmon. It also holds the register accessors and the
+ * access to the indirect table engine that the other files go through, and
+ * sets up their blocks at the end of setup.
  *
  * A warm restart of the CPU or a reload of the module does not reset the
  * switch, which keeps running with its registers and tables as they were.
@@ -38,6 +39,7 @@
 #include <linux/math64.h>
 #include <linux/if_bridge.h>
 #include <linux/etherdevice.h>
+#include <linux/hwmon.h>
 #include <linux/if_vlan.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
@@ -1081,6 +1083,97 @@ static void rtl9602c_irq_setup(struct rtl9602c_priv *p)
 			", and a deliberate learning limit" : "");
 }
 
+static_assert(RTL9602C_TSENSE_CTRL_INIT & RTL9602C_TSENSE_CTRL_EN);
+
+/*
+ * The die temperature in millidegrees Celsius from a status word of the
+ * sensor, whose reading is taken to count whole degrees from 0 (not
+ * verified).
+ */
+static long rtl9602c_tsense_mdeg(u32 stat)
+{
+	return (long)FIELD_GET(RTL9602C_TSENSE_STAT_TEMP, stat) * 1000;
+}
+
+/*
+ * One measurement: write the control word whole, with the enable, wait, and
+ * read the status word. That the write starts a measurement, and the wait it
+ * needs, are not verified. The word is written for every measurement, since
+ * nothing shows that the sensor goes on measuring after one write.
+ */
+static u32 rtl9602c_tsense_sample(struct rtl9602c_priv *p)
+{
+	rtl9602c_w(p, RTL9602C_TSENSE_CTRL, RTL9602C_TSENSE_CTRL_INIT);
+	fsleep(RTL9602C_TSENSE_SETTLE_US);
+	return rtl9602c_r(p, RTL9602C_TSENSE_STAT);
+}
+
+#if IS_ENABLED(CONFIG_HWMON)
+/* temp1_input: one measurement per read; the hwmon core serialises them. */
+static int rtl9602c_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
+			       u32 attr, int channel, long *val)
+{
+	struct rtl9602c_priv *p = dev_get_drvdata(dev);
+
+	if (type != hwmon_temp || attr != hwmon_temp_input)
+		return -EOPNOTSUPP;
+	*val = rtl9602c_tsense_mdeg(rtl9602c_tsense_sample(p));
+	return 0;
+}
+
+static umode_t rtl9602c_hwmon_is_visible(const void *data,
+					 enum hwmon_sensor_types type, u32 attr,
+					 int channel)
+{
+	return 0444;
+}
+
+static const struct hwmon_channel_info * const rtl9602c_hwmon_info[] = {
+	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT),
+	NULL,
+};
+
+static const struct hwmon_ops rtl9602c_hwmon_ops = {
+	.is_visible	= rtl9602c_hwmon_is_visible,
+	.read		= rtl9602c_hwmon_read,
+};
+
+static const struct hwmon_chip_info rtl9602c_hwmon_chip = {
+	.ops	= &rtl9602c_hwmon_ops,
+	.info	= rtl9602c_hwmon_info,
+};
+
+/* The hwmon device "rtl9602c"; a failure is logged and setup goes on. */
+static void rtl9602c_hwmon_register(struct rtl9602c_priv *p)
+{
+	struct device *hwmon;
+
+	hwmon = devm_hwmon_device_register_with_info(p->dev, "rtl9602c", p,
+						     &rtl9602c_hwmon_chip, NULL);
+	if (IS_ERR(hwmon))
+		pr_warn("no hwmon device for the die temperature: %pe\n", hwmon);
+}
+#else
+static void rtl9602c_hwmon_register(struct rtl9602c_priv *p) { }
+#endif
+
+/*
+ * Turn the die temperature sensor on, log its first reading with the control
+ * word as found, and register the hwmon device, whose temp1_input is the die
+ * temperature. The sensor's alarm, a source of the switch's interrupt, is
+ * left masked.
+ */
+static void rtl9602c_tsense_init(struct rtl9602c_priv *p)
+{
+	u32 found = rtl9602c_r(p, RTL9602C_TSENSE_CTRL);
+	u32 stat = rtl9602c_tsense_sample(p);
+
+	pr_info("die temperature %ld C (sensor control %08x, found %08x, %s; status %08x)\n",
+		rtl9602c_tsense_mdeg(stat) / 1000, RTL9602C_TSENSE_CTRL_INIT,
+		found, found & RTL9602C_TSENSE_CTRL_EN ? "on" : "off", stat);
+	rtl9602c_hwmon_register(p);
+}
+
 /*
  * Arm the frame capture. RTL9602C_PKTDBG_LATCH freezes the parser's view of
  * one frame and the switch's verdict on it: the mode chooses the frame, the
@@ -1629,6 +1722,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 		pr_err("the indirect table port did not answer as expected; the FDB and VLAN table cannot be trusted\n");
 
 	rtl9602c_irq_setup(p);
+	rtl9602c_tsense_init(p);
 
 	/*
 	 * One DSCP-to-priority table serves the whole switch, and no port

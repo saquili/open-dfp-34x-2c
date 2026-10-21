@@ -108,6 +108,20 @@
 #define RTL9602C_GPHY_CTRL_PATCH_DONE	BIT(0)
 
 /*
+ * The SoC's die temperature sensor. CTRL holds the sensor's enable, EN, among
+ * settings of its analog part; INIT, written whole, sets EN with the analog
+ * settings the driver uses. STAT's TEMP is the last reading. A write of CTRL
+ * is taken to start a measurement whose result is in STAT SETTLE_US later,
+ * and TEMP to count whole degrees Celsius from 0; neither is verified.
+ */
+#define RTL9602C_TSENSE_CTRL		0x000138
+#define RTL9602C_TSENSE_CTRL_EN		BIT(16)
+#define RTL9602C_TSENSE_CTRL_INIT		0x00034ad7
+#define RTL9602C_TSENSE_STAT		0x00013c
+#define RTL9602C_TSENSE_STAT_TEMP		GENMASK(22, 16)
+#define RTL9602C_TSENSE_SETTLE_US		1000
+
+/*
  * In-band auto-negotiation (IEEE 802.3 clause 37), one bit per SerDes lane in
  * FORCE and RESTART; a set FORCE bit turns it off. A change reaches a running
  * link only when the lane is next parked and restarted. INIT turns it off on

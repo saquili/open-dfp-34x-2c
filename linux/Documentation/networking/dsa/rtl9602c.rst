@@ -28,8 +28,9 @@ has a driver of its own too, ``gn25l95``
 (Documentation/networking/device_drivers/pon/gn25l95.rst). This page describes the switch core as the
 driver sets it up: probe and identification, the forced MAC ability of the
 ports, the SerDes lane to the host and phylink, the switch's half of the CPU
-tag, the frame length limit, the switch's interrupt, the per-port counters,
-restart and teardown, the order of setup, and the enable in the system
+tag, the frame length limit, the switch's interrupt, the die temperature
+sensor, the per-port counters, restart and teardown, the order of setup, and
+the enable in the system
 controller in front of the PON packet buffer. The other blocks have pages of
 their own (see "Where to read next").
 
@@ -203,8 +204,9 @@ Configuration
      - Effect
    * - ``CONFIG_NET_DSA_RTL9602C``
      - Tristate, "Realtek RTL9602C switch"; depends on ``NET_DSA``,
-       ``HAS_IOMEM`` and ``RTL9602C_ETH || !RTL9602C_ETH`` (when the conduit is
-       a module, the switch driver is a module too), selects
+       ``HAS_IOMEM``, ``RTL9602C_ETH || !RTL9602C_ETH`` (when the conduit is
+       a module, the switch driver is a module too) and ``HWMON || HWMON=n``
+       (likewise for hwmon), selects
        ``MFD_SYSCON``, ``NET_DSA_TAG_RTL9602C`` and ``AUXILIARY_BUS``, and
        implies ``I2C_RTL9602C`` and ``PON_RTL9602C``. Builds
        ``rtl9602c-main.o``, ``rtl9602c-l2.o``, ``rtl9602c-pon-host.o``,
@@ -230,6 +232,10 @@ Configuration
    * - ``CONFIG_PTP_1588_CLOCK``
      - The PTP hardware clock exists only with it; without it no clock is
        registered.
+   * - ``CONFIG_HWMON``
+     - The hwmon device ``rtl9602c`` exists only with it; without it the die
+       temperature is only logged at setup. ``rtl9602c_defconfig`` takes the
+       symbol's default, which is on.
 
 ``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver, the
 conduit and DSA in (``CONFIG_NET_DSA_RTL9602C=y``, ``CONFIG_RTL9602C_ETH=y``
@@ -361,8 +367,9 @@ next".
      - Probe and remove, ``rtl9602c_setup()`` and ``rtl9602c_teardown()``, the
        register accessors and the access to the indirect table engine, the
        SerDes lane and phylink, the forced MAC ability, the switch's
-       interrupt, the per-port counters, the devlink parameters, region and
-       info, and the debugfs directory.
+       interrupt, the die temperature sensor and its hwmon device, the
+       per-port counters, the devlink parameters, region and info, and the
+       debugfs directory.
      - This page; *devlink*
    * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``
      - The address table, flooding, isolation, spanning tree, VLANs, ageing,
@@ -510,6 +517,11 @@ Interfaces to user space
   ``rtl9602c-ptp``, which the *PON* and *ptp* pages describe. The optics'
   hwmon device, ``gn25l95``, and their debugfs views are those of the laser
   driver's driver (Documentation/networking/device_drivers/pon/gn25l95.rst).
+- The hwmon device ``rtl9602c``, whose ``temp1_input`` is the die temperature
+  of the SoC in millidegrees Celsius (see "The die temperature sensor")::
+
+      cat /sys/class/hwmon/hwmon*/name
+      cat /sys/class/hwmon/hwmonN/temp1_input   # N of the rtl9602c line
 - Through the PON class: the OMCI port ``/dev/pon0omci0``, the ``gem``
   interfaces and the ``pon`` generic netlink family (*PON class*).
 - The kernel log lines that begin ``rtl9602c-switch:``. The lines of the blocks
@@ -1581,6 +1593,77 @@ subscribed. The steps are checked by the board booting to a shell and the
 SerDes link recovering after host-side link bounces: at idle the count in
 ``/proc/interrupts`` does not move over 20 s, and a host bounce adds 2.
 
+The die temperature sensor
+==========================
+
+The SoC has a temperature sensor on its die, in the global registers at the
+bottom of the switch's window. The driver turns it on at setup and reports the
+die temperature through hwmon, as the device ``rtl9602c`` with one input,
+``temp1_input``, in millidegrees Celsius. Each read of the input takes one
+measurement: the driver writes the sensor's control word whole, with its
+enable, waits ``RTL9602C_TSENSE_SETTLE_US`` (1 ms), and reads the status word.
+The hwmon core serialises the reads. The sensor's alarm, a source of the
+switch's interrupt, stays masked, and no limit is programmed.
+
+Setup logs the first reading, with the control word written, the one found
+before it and whether that one had the enable set, and the status word::
+
+    die temperature N C (sensor control 00034ad7, found X, on|off; status Y)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_TSENSE_CTRL`` (``0x000138``) holds the sensor's enable,
+       ``RTL9602C_TSENSE_CTRL_EN`` (bit 16), among settings of its analog part.
+       The driver writes ``RTL9602C_TSENSE_CTRL_INIT`` (``0x00034ad7``) whole:
+       the enable, with the analog settings in the other bits.
+     - I
+     - The setup log line, which gives the word found and the word written.
+       That the other bits are the analog settings the sensor needs is not
+       established; the readings, compared with another sensor as below,
+       would show whether they read true.
+   * - ``RTL9602C_TSENSE_STAT`` (``0x00013c``):
+       ``RTL9602C_TSENSE_STAT_TEMP`` (bits 22:16) is the last reading, seven
+       bits. A write of the control word starts a measurement, whose result is
+       there 1 ms later.
+     - I
+     - Readings that change with the die's temperature; two reads 1 ms and
+       10 ms after a write that agree.
+   * - The reading counts whole degrees Celsius from 0, so that 0 to 127 read
+       0 to 127 degrees; ``temp1_input`` is the reading times 1000
+       (``rtl9602c_tsense_mdeg()``).
+     - I
+     - Assumption, load-bearing for the value: the calibration below. The
+       conversion itself takes bits 22:16 alone (the KUnit case
+       ``rtl9602c_test_tsense_mdeg``, T).
+   * - The other fields of ``RTL9602C_TSENSE_STAT``, among them bits 25 and 24
+       and bits 6:0, and the register that follows it, which are taken to hold
+       a measurement's state, the reading at power-on and the extremes seen,
+       are not used.
+     - I
+     - The status word in the setup log line, against the readings.
+
+The calibration against the optics' own sensor, at two temperatures:
+
+1. Leave the stick unpowered until it has the room's temperature, then boot
+   it. The setup log line gives the die's first reading; the optics' reading,
+   ``temp1_input`` of the hwmon device ``gn25l95``, taken right after boot,
+   gives the room's temperature within the module's accuracy. The two should
+   agree within a few degrees: that is the offset.
+2. Bring the PON up and let the stick run, in its cage, with upstream and
+   downstream traffic, until both readings stop rising, or warm the cage from
+   outside. Read both inputs again.
+3. The die's rise over the optics' rise between the two points is the scale:
+   1 if the reading counts whole degrees. The die runs warmer than the
+   module, so only the rise is compared at the second point, not the values.
+
+A scale or an offset that the calibration finds goes into
+``rtl9602c_tsense_mdeg()`` and its KUnit case.
+
 Per-port counters
 =================
 
@@ -2011,7 +2094,10 @@ A step that belongs to another page is named and handed over.
 5. Run the indirect table self-test (*bridging*). Purpose: check that the
    table engine reaches the VLAN entries where the driver expects them. A
    failure is logged and setup continues. (T)
-6. Set up the interrupt (see "Interrupt setup"). (T)
+6. Set up the interrupt (see "Interrupt setup"). (T) Then turn the die
+   temperature sensor on, log its first reading and register the hwmon device
+   ``rtl9602c`` (see "The die temperature sensor"); a failed registration is
+   logged and setup goes on. (I)
 7. Mark the DSCP map switch-wide, forget the apptrust owner and write the
    classifier's two patterns (*acl-qos*). (T; the patterns I, see *acl-qos*)
 8. Report the memory self-test (see "Access and identification"). (T)
@@ -2065,7 +2151,8 @@ The steps are checked as follows. Step 1 by the SerDes link to the host coming
 up. Steps 2 and 3 by bridged traffic passing both ways, sourced from the host.
 Steps 4 and 5 by VLAN filtering, FDB learning and ageing working, and by the
 board booting to a shell. Steps 6 to 8 by the board booting to a shell and the
-SerDes link recovering after host-side link bounces. Steps 9, 10, 15 and 17 to
+SerDes link recovering after host-side link bounces, and the die temperature
+of step 6 by its log line and ``temp1_input``. Steps 9, 10, 15 and 17 to
 19 by the ACL hit counters, the policer and the storm-control rates matching
 their settings, and by the board booting to a shell; step 11 by the ``qos`` and
 ``cf`` views after a warm reboot, step 12 by the CPU's share of a flood, and
@@ -2164,6 +2251,10 @@ Known limitations
 - Without in-band negotiation nothing tells one side of the lane that the
   other has synchronised: the host sees carrier from the lane's transmitter
   alone, so the link can be up on one side and down on the other.
+- The die temperature is read only when ``temp1_input`` is read: no limit is
+  programmed and the sensor's alarm stays masked, so nothing in the driver
+  acts on a hot die. The reading's scale and offset are not yet calibrated
+  (see "The die temperature sensor").
 
 Open questions
 ==============
@@ -2201,6 +2292,12 @@ Assumptions the driver depends on
        counters").
      - Passing more than 4 GiB through a port and comparing ``rx_octets`` with
        frames times size.
+   * - The die temperature sensor's reading counts whole degrees Celsius from
+       0; a write of its control word, with the analog settings the driver
+       writes, starts a measurement that is ready 1 ms later ("The die
+       temperature sensor"). The value of ``temp1_input`` depends on it.
+     - The calibration against the optics' sensor at two temperatures; two
+       reads 1 ms and 10 ms after a write.
 
 Questions the code does not depend on
 -------------------------------------
@@ -2261,3 +2358,9 @@ Questions the code does not depend on
        ("The system-controller enable in front of the PON packet buffer").
      - Leaving the bit clear and seeing whether the packet buffer still reports
        itself initialised.
+   * - What the other fields of the die temperature sensor's status word and
+       of the word after it hold, and how its alarm, taken to be bit 14 of
+       ``RTL9602C_IRQ_PENDING``, is armed and raised ("The die temperature
+       sensor"). The driver uses neither.
+     - The status words against the readings; a limit below the die's
+       temperature, with the source unmasked.
