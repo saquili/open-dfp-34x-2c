@@ -277,6 +277,17 @@ printf 'FW_OUT=allow\n' >"$ONU_ROOT/run/onu.conf"
 check '[ -e "$ONU_ROOT/run/omcid/rules" ] && [ ! -s "$ONU_ROOT/run/omcid/rules" ]'
 teardown
 
+echo "the priority of IGMP, for omcid: auto, or host where it is chosen"
+setup
+conf FW_OUT=allow
+"$MODE_SCRIPT" start 2>/dev/null
+check 'echo auto | cmp -s - "$ONU_ROOT/run/omcid/igmp-priority"'
+check 'ls -l "$ONU_ROOT/run/omcid/igmp-priority" | grep -q "^-rw-r--r--"'
+printf 'IGMP_PRIORITY=host\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'echo host | cmp -s - "$ONU_ROOT/run/omcid/igmp-priority"'
+teardown
+
 echo "a local network, routed out by a session that keeps its address"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"

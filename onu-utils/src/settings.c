@@ -844,11 +844,17 @@ static const struct {
 	[SET_F_PING_LANS] = { "FW_PING_LANS", "block" },
 };
 
+/* The priority of the subscriber's IGMP where the OLT leaves it, and its default. */
+#define IGMP_PRIORITY "IGMP_PRIORITY"
+#define IGMP_PRIORITY_DEFAULT "auto"
+
 void settings_defaults(struct settings *s)
 {
 	memset(s, 0, sizeof(*s));
 	for (int k = 0; k < SETTINGS_NFKEYS; k++)
 		snprintf(s->fw[k], sizeof(s->fw[k]), "%s", g_fkeys[k].dflt);
+	snprintf(s->igmp_priority, sizeof(s->igmp_priority), "%s",
+		 IGMP_PRIORITY_DEFAULT);
 	for (int k = 0; k < SETTINGS_NKEYS; k++)
 		snprintf(s->val[k], SETTINGS_VALUE_MAX, "%s", g_keys[k].dflt);
 	for (int n = 0; n < SETTINGS_SESSIONS; n++)
@@ -1011,6 +1017,14 @@ int settings_line(struct settings *s, const char *line, char *err,
 			return -1;
 		}
 		snprintf(s->fw[k], sizeof(s->fw[k]), "%s", v);
+		return 0;
+	}
+	if (!strcmp(key, IGMP_PRIORITY)) {
+		if (strcmp(v, "auto") && strcmp(v, "host")) {
+			snprintf(err, errcap, "%s: not a value of it", key);
+			return -1;
+		}
+		snprintf(s->igmp_priority, sizeof(s->igmp_priority), "%s", v);
 		return 0;
 	}
 	if (!strcmp(key, LEGACY_LAN)) {
@@ -1695,6 +1709,9 @@ size_t settings_format_defaults(char *out, size_t cap)
 		len += (size_t)snprintf(out + (len < cap ? len : cap),
 					len < cap ? cap - len : 0, "%s=%s\n",
 					g_fkeys[k].name, g_fkeys[k].dflt);
+	len += (size_t)snprintf(out + (len < cap ? len : cap),
+				len < cap ? cap - len : 0, "%s=%s\n",
+				IGMP_PRIORITY, IGMP_PRIORITY_DEFAULT);
 	return len;
 }
 
@@ -1793,5 +1810,9 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 			len += (size_t)snprintf(out + (len < cap ? len : cap),
 						len < cap ? cap - len : 0, "%s=%s\n",
 						g_fkeys[k].name, s->fw[k]);
+	if (strcmp(s->igmp_priority, IGMP_PRIORITY_DEFAULT))
+		len += (size_t)snprintf(out + (len < cap ? len : cap),
+					len < cap ? cap - len : 0, "%s=%s\n",
+					IGMP_PRIORITY, s->igmp_priority);
 	return len;
 }

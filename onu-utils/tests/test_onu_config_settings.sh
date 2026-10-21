@@ -55,7 +55,7 @@ check '[ $rc -eq 0 ] && grep -qx "SESSION2_VLAN=40" "$T/out" && grep -q "^SESSIO
 echo "defaults: the table's default of every key, which a session with nothing set has"
 "$ONUCFG" defaults </dev/null >"$T/dflt" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 0 ] && [ ! -s "$T/err" ] && [ "$(wc -l <"$T/dflt")" -eq 49 ]'
+check '[ $rc -eq 0 ] && [ ! -s "$T/err" ] && [ "$(wc -l <"$T/dflt")" -eq 50 ]'
 check 'grep -qx "WAN_GEM=auto" "$T/dflt" && grep -qx "SESSION7_FAMILY=both" "$T/dflt"'
 check 'grep -qx "SESSION4_PASS=on" "$T/dflt" && grep -qx "SESSION2_HOST_VLAN=" "$T/dflt"'
 check 'grep -qx "FW_OUT=allow" "$T/dflt" && grep -qx "FW_BETWEEN=block" "$T/dflt"'

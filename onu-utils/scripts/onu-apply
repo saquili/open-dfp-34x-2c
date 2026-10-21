@@ -538,6 +538,19 @@ omcid_rules() {
 		log "omcid cannot read the rules of the services"
 }
 
+# The priority the subscriber's IGMP goes up with where the OLT leaves it,
+# IGMP_PRIORITY, as omcid reads it from $RUN/omcid/igmp-priority at each
+# message (its target/hw_kernel.c): host, or auto, the default.
+omcid_igmp() {
+	[ -d "$RUN/omcid" ] || return 0
+	oi=$(sed -n 's/^IGMP_PRIORITY=//p' "$CONF" 2>/dev/null | tail -n 1)
+	[ "$oi" = host ] || oi=auto
+	echo "$oi" >"$RUN/omcid/igmp-priority.new" &&
+		chmod 644 "$RUN/omcid/igmp-priority.new" &&
+		mv "$RUN/omcid/igmp-priority.new" "$RUN/omcid/igmp-priority" ||
+		log "omcid cannot read the priority of IGMP"
+}
+
 # The identity omcid reads, a copy of the unit's without the PLOAM password,
 # which root alone and the PON driver need: omcid is an account of its own.
 omcid_identity() {
@@ -2264,6 +2277,7 @@ apply() {
 		load_mode
 	fi
 	omcid_rules
+	omcid_igmp
 	omcid_sync "$(omcid_want)"
 	echo "$MODE" >"$RUN/onu-mode"
 	[ "$MODE" != passthrough ] || pass_up

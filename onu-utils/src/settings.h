@@ -90,6 +90,10 @@
  * or to the VEIP alone. omcid applies them to the OLT's VLAN rules (its
  * me/svcrule.h); no two are of one service, nor do two moves give one host
  * VLAN. An empty SVCn removes one.
+ *
+ * IGMP_PRIORITY says what priority the subscriber's IGMP and MLD go up with
+ * where the OLT leaves it to the subscriber: auto, the default, one the
+ * operator's rules take, which omcid finds; or host, the one the host gave.
  */
 
 #ifndef SETTINGS_H
@@ -226,6 +230,7 @@ struct settings_account {
  * @rule: the firewall's rules, in their order
  * @svc: the rules of the services, SVCn: "FIBRE/ACTION[/HOST]", empty for none
  * @fw: what the firewall does where no rule decides, allow or block
+ * @igmp_priority: IGMP_PRIORITY, auto or host
  * @legacy_lan: LAN_VLAN, the one link of before, when @had_legacy_lan
  * @had_legacy_lan: whether the set named LAN_VLAN
  */
@@ -241,6 +246,7 @@ struct settings {
 	struct settings_rule rule[SETTINGS_RULES];
 	char svc[SETTINGS_SVCS][16];
 	char fw[SETTINGS_NFKEYS][8];
+	char igmp_priority[8];
 	char legacy_lan[SETTINGS_VALUE_MAX];
 	bool had_legacy_lan;
 	/*

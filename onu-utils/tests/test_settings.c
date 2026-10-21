@@ -275,10 +275,12 @@ static void test_defaults_format(void)
 			bad++;
 	}
 	CHECK(bad == 0);
-	CHECK(lines == SET_WAN_MAC + 1 + SETTINGS_SESSIONS * SETTINGS_NSKEYS + SETTINGS_NFKEYS);
+	CHECK(lines == SET_WAN_MAC + 1 + SETTINGS_SESSIONS * SETTINGS_NSKEYS + SETTINGS_NFKEYS + 1);
 	CHECK(strstr(out, "FW_OUT=allow\n") && strstr(out, "FW_BETWEEN=block\n"));
 	/* The stick answers a ping from neither side unless told to. */
 	CHECK(strstr(out, "FW_PING_IN=block\n") && strstr(out, "FW_PING_LANS=block\n"));
+	/* omcid gives IGMP a priority the operator's rules take unless told not to. */
+	CHECK(strstr(out, "IGMP_PRIORITY=auto\n") != NULL);
 	/* The values given are the ones the table starts from. */
 	CHECK(strstr(out, "WAN_MAC=\n") != NULL);
 	need = settings_format_defaults(small, sizeof(small));
@@ -862,6 +864,10 @@ static void test_rules(void)
 	CHECK(judge(&s, "FW_PING_IN=allow\nFW_PING_LANS=allow\n") == 0 &&
 	      !strcmp(g_out, "FW_PING_IN=allow\nFW_PING_LANS=allow\n"));
 	CHECK(judge(&s, "FW_PING_IN=block\nFW_PING_LANS=block\n") == 0 && !*g_out);
+	/* The priority of IGMP: the host's is written, the default is not, another is none. */
+	CHECK(judge(&s, "IGMP_PRIORITY=host\n") == 0 && !strcmp(g_out, "IGMP_PRIORITY=host\n"));
+	CHECK(judge(&s, "IGMP_PRIORITY=auto\n") == 0 && !*g_out);
+	CHECK(judge(&s, "IGMP_PRIORITY=olt\n") == -1 && strstr(g_err, "IGMP_PRIORITY"));
 
 	/* From somewhere to somewhere else. */
 	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_internet_internet:10.0.0.0/8_any__any_on\n") == -2 &&
