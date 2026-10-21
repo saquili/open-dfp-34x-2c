@@ -30,9 +30,10 @@ I2C client driver bound by the IC's device tree node. It does five things:
   releases it from O3 on, prepares the transmitter before every activation, and
   asks for the transmit power levels that the OLT sets and that the ONU takes
   itself before it is ranged.
-- Before every activation it turns the laser driver's automatic
-  extinction-ratio loop off, so that the modulation of the laser runs from the
-  value the module loads at power-up. This is the modulation hold.
+- Before every activation it puts back the configuration the laser driver
+  loads from its EEPROM at power-up: the automatic extinction-ratio loop on,
+  and the power control's set point of transmit power level mode 0. This is
+  the factory configuration.
 - It offers two debugfs views that only read, ``a2`` and ``eeblocks``, a third,
   ``tables``, that selects each table of the upper page to read it, and, with
   ``CONFIG_PON_GN25L95_STORE``, an entry, ``t2write``, that stores a byte of the
@@ -40,8 +41,8 @@ I2C client driver bound by the IC's device tree node. It does five things:
   root writes to it.
 
 The driver writes nothing to the laser driver at probe. Its only writes are
-those of the modulation hold, at PON bring-up, those of the transmit power
-levels, those a read of the ``tables`` view makes and those a write to
+those of the factory configuration, at PON bring-up, those of the transmit
+power levels, those a read of the ``tables`` view makes and those a write to
 ``t2write`` asks for. Whether they reach the part is the bus's to decide: the
 switch driver, ``rtl9602c``, lets the adapter pass writes on only for a module
 it has identified as the one this page was measured on, and never with
@@ -164,8 +165,8 @@ Where the code is
        ``gn25l95_lock()``), the numbering of the part's registers
        (``GN25L95_A2*``), the hwmon device (``gn25l95_hwmon_register()``), the
        optics' operations, TX_DISABLE (``gn25l95_tx_disable()``), the
-       modulation hold (``gn25l95_start()``) with the ``GN25L95_TBL2_*`` macros
-       of the configuration table it writes and the transmit power levels
+       factory configuration (``gn25l95_start()``) with the ``GN25L95_TBL2_*``
+       macros of the configuration table it writes and the transmit power levels
        (``gn25l95_set_power_level()``), level mode 0 put back at shutdown
        (``gn25l95_shutdown()``), and the debugfs views
        (``gn25l95_debugfs_init()``).
@@ -234,10 +235,10 @@ Interfaces to user space
   TX_DISABLE is asserted). Its level follows the ONU state, so
   ``ip link set pon up`` and ``ip link set pon down`` are the commands that
   move it (see "TX_DISABLE").
-- ``ip link set pon up`` also runs the modulation hold, whose writes the
-  adapter refuses with ``CONFIG_RTL9602C_OPTICS_RO`` or for a module the switch
-  driver does not know (see "The modulation hold" and "The modules the driver
-  writes").
+- ``ip link set pon up`` also puts the factory configuration back, whose
+  writes the adapter refuses with ``CONFIG_RTL9602C_OPTICS_RO`` or for a module
+  the switch driver does not know (see "The factory configuration" and "The
+  modules the driver writes").
 - The kernel log lines of the driver, which begin with ``gn25l95 N-0050:``, and
   those of the switch's side, which begin with ``rtl9602c-switch:`` (see
   "Logging").
@@ -308,11 +309,11 @@ below.
    * - Every user of the part holds the driver's lock for its whole sequence
        of transfers, and the adapter's bus lock inside it (``gn25l95_lock()``):
        a hwmon read, the ``a2``, ``eeblocks`` and ``tables`` views, the
-       modulation hold, the transmit power levelling, the restore at shutdown
-       and the store view. A transfer of another client of the adapter takes
-       the bus lock alone, so none can come between two transfers of a
-       sequence. The hwmon core and the I2C core serialise only their own
-       callers, and the modulation hold switches the page of A2h 128-255 and
+       factory configuration, the transmit power levelling, the restore at
+       shutdown and the store view. A transfer of another client of the
+       adapter takes the bus lock alone, so none can come between two
+       transfers of a sequence. The hwmon core and the I2C core serialise only
+       their own callers, and a bring-up switches the page of A2h 128-255 and
        puts it back, which no other user may see.
      - I
      - Read from the code; in a kernel with lockdep, the transfer function
@@ -323,9 +324,9 @@ below.
        ``CONFIG_RTL9602C_OPTICS_RO``; otherwise it refuses it with ``-EPERM``,
        which the driver of this page takes for a bus on which it only reads.
      - I
-     - Before the split into a driver of its own, the modulation hold wrote on
-       the module the switch knows and returned without a write on one it did
-       not; the split has not been run on the board.
+     - Before the split into a driver of its own, the bring-up wrote on the
+       module the switch knows and returned without a write on one it did
+       not; since the split, only the module the switch knows has been run.
    * - A client of the adapter has not been run: the I2C core can reach the
        addresses through ``/dev/i2c-N`` with ``CONFIG_I2C_CHARDEV`` and
        ``I2C_SLAVE_FORCE``.
@@ -399,9 +400,10 @@ the module maker) and ``GN25L95_A2_PAGE`` (``0x7f``, the page select, byte
      - T
      - The optics diagnostics read.
    * - The part runs from the configuration and calibration in its own EEPROM,
-       and the driver writes nothing to it at probe: with the modulation hold
-       as the only write, it transmits at +2.3 dBm, receives an OLT at -20 dBm,
-       and the ONU reaches O5.
+       and the driver writes nothing to it at probe: with the bring-up's
+       writes alone, it transmits at +2.3 dBm, receives an OLT at -20 dBm,
+       and the ONU reaches O5. That was measured with the automatic loop off;
+       with it on, the ONU reached O5 sending 1687 uW (2026-10-21).
      - M
      - The hwmon attributes and the ``a2`` view in O5 on an OLT.
    * - A0h and A2h bytes 0-127 take writes without any password, and what is
@@ -420,10 +422,12 @@ the module maker) and ``GN25L95_A2_PAGE`` (``0x7f``, the page select, byte
    * - On this module, writing ``02h`` to A2h byte 127 shows the laser driver's
        configuration table at A2h 128-255 (the code's "table 2").
      - T
-     - The modulation hold's log after a module power-up, with the text
-       ``automatic ER e3 -> e2``, reads that table before and after its write.
-   * - The modulation hold writes A2h byte 127 on a PON bring-up only when it
-       holds another page than ``02h``, and restores it to the value it found.
+     - The bring-up's log reads that table before and after its writes:
+       ``automatic ER e3 -> e2`` after each module power-up while the driver
+       turned the loop off, and ``ER control e2 -> e3`` when a test build
+       turned it on again (2026-10-21).
+   * - A PON bring-up writes A2h byte 127 only when it holds another page than
+       ``02h``, and restores it to the value it found.
        That byte is kept across a power cycle; whether the part skips
        rewriting a byte that already holds the value is not known (see "Known
        limitations").
@@ -456,14 +460,15 @@ What the driver reads and writes of the part:
      - Nothing in the driver.
    * - ``0x51`` (A2h), bytes 0-127
      - The ``a2`` view; the hwmon device reads bytes 0-39 and 96-105 only.
-     - The modulation hold: ``02h`` to byte 127 when it holds another page, and
-       byte 127 again to restore it. The ``t2write`` view: ``0xff`` to bytes
-       123-126, and its reset key there.
+     - The bring-up and the transmit power levels: ``02h`` to byte 127 when it
+       holds another page, and byte 127 again to restore it. The ``t2write``
+       view: ``0xff`` to bytes 123-126, and its reset key there.
    * - ``0x51`` (A2h), bytes 128-255
      - The ``eeblocks`` view, whichever page byte 127 selects at that moment;
-       the modulation hold reads the configuration table there.
-     - The modulation hold, in the configuration table with byte 127 at
-       ``02h`` (see "The modulation hold").
+       the bring-up and the transmit power levels read the configuration
+       table there.
+     - The bring-up and the transmit power levels, in the configuration table
+       with byte 127 at ``02h`` (see "The factory configuration").
    * - ``0x52`` and ``0x53``, bytes 0-255
      - The ``eeblocks`` view.
      - Nothing in the driver.
@@ -553,9 +558,10 @@ units.
        Table 9-6.
    * - Bias and transmitted power read 0 while the transmitter is not emitting,
        as below O3, where TX_DISABLE is asserted and no burst is sent; in O5
-       they read the burst values (7 mA and 1697 uW in the measurement of the
-       hwmon device below). SFF-8472 declares the transmitted power not valid
-       while the transmitter is disabled.
+       they read the burst values (13.8 mA and 1687 uW with the factory
+       configuration; 7 mA and 1697 uW with the automatic loop off, in the
+       measurement of the hwmon device below). SFF-8472 declares the
+       transmitted power not valid while the transmitter is disabled.
      - M
      - The ``a2`` view below O3: bias 0 uA, transmitted power 0.0 uW;
        SFF-8472 Rev 12.4 clause 9.2, item 4.
@@ -582,8 +588,10 @@ the SFP modules it manages.
        diagnostics`` and binds without it. Without
        ``CONFIG_HWMON`` nothing is registered.
      - M
-     - In O5 on an OLT: 46.8 degC, 3.217 V, 7 mA, 1697 uW (+2.3 dBm) and 10 uW,
-       the same values the ``a2`` view showed.
+     - In O5 on an OLT, with the automatic loop off as the driver then left
+       it: 46.8 degC, 3.217 V, 7 mA, 1697 uW (+2.3 dBm) and 10 uW, the same
+       values the ``a2`` view showed. With the loop on, 13.8 mA and 1687 uW
+       (2026-10-21).
 
 To read the five measurements, in the directory of the device::
 
@@ -676,7 +684,8 @@ The blocks follow for ``0x51`` (image ``0x100``), ``0x52`` (``0x200``) and
 ``0x53`` (``0x300``). A block in which every read went unanswered is replaced by
 the word ``silent``. An unanswered read shows as ``00`` in the dump. The view
 never writes byte 127, so A2h bytes 128 to 255 show the page that byte selects
-at that moment, which is page ``02h`` while the modulation hold runs.
+at that moment, which is page ``02h`` while a bring-up or a transmit power
+level runs.
 
 The ``sfpslave`` view reads the SoC's SFP slave: an I2C slave that can serve
 a 512-byte RAM to the host as a module's identity, A0h then A2h. It prints
@@ -809,8 +818,9 @@ Worked example
 --------------
 
 Each word below is one raw value that converts to a reading measured in O5 on
-an OLT (46.8 degC, 3.217 V, 7 mA, 1697 uW and 10 uW, as in the table of the
-hwmon device); the raw values themselves are examples. The ``a2`` view prints
+an OLT (46.8 degC, 3.217 V, 7 mA, 1697 uW and 10 uW, with the automatic loop
+off, as in the table of the hwmon device); the raw values themselves are
+examples. The ``a2`` view prints
 the value in the SFF-8472 unit, and hwmon the rounded integer of its own unit:
 
 .. list-table::
@@ -955,20 +965,39 @@ At each ONU state change the GPON MAC asks the optics for the line
    Purpose: no light below O3, where an ONU does not transmit. (I for the
    line, P for the states)
 
-The modulation hold
-===================
+The factory configuration
+=========================
 
-The part runs an automatic extinction-ratio loop. On this board, in burst
-operation, the loop lowers the modulation current, and the OLT then needs a
-longer preamble to lock onto the bursts of the ONU (see the measurements
-below). At every PON bring-up, before the first O3, the driver turns the loop
-off, so that the modulation runs from the value the module loads at power-up.
-The change is to registers only: the module's persistence control keeps it out
-of the EEPROM, and a power cycle gives the module its own configuration back.
-Whether activation needs the hold is not verified; the GPON bring-up logs a
-failed hold and carries on.
+The laser driver loads its configuration table from its EEPROM at power-up and
+runs from it, the automatic extinction-ratio loop on among it: the loop sets
+the modulation current, and the power control loop moves the bias to hold the
+transmitted power at its set point. The shipped firmware is taken to
+leave the part so (see the rows below). At every PON bring-up, before the
+first O3, this driver puts that configuration back: it turns the loop on and
+writes the set point of transmit power level mode 0. It writes both because the
+table's registers keep what is written to them across a warm reboot of the
+SoC, so a kernel can find the loop off, or a lower set point, left by an
+earlier one. The writes are to registers only: the module's persistence
+control keeps them out of the EEPROM, and a power cycle gives the module its
+own configuration back.
 
-The hold works in a configuration table that the module shows at A2h bytes
+Until 2026-10-21 the driver turned the loop off at every bring-up instead, so
+that the modulation ran from the value the module loads at power-up: the
+modulation hold. A measurement of 2026-09-22 had found the OLT provisioning
+no activation with the loop on at a long burst overhead. That no longer
+reproduces: activations with the loop on and with it off came out the same,
+down to a burst overhead of 12 bytes (see the rows below).
+
+The set point of mode 0 is the one the first bring-up since probe finds. The
+driver cannot tell whether that is the module's own: after a reset that shut
+no device down while the ONU sent at a lower level, it is that level's (see
+"Transmit power levelling"). The module's own is in the EEPROM, which the SoC
+does not read (``0x52`` and ``0x53`` read ``0xff``, see "The management
+interface"); only the part's reset loads it into the table again, and that
+reset writes bytes the module may keep (see the rows below). So the bring-up
+uses plain register writes, and does not reset the part.
+
+The bring-up works in a configuration table that the module shows at A2h bytes
 128-255 while A2h byte 127 holds ``02h``. The driver calls it table 2. The
 registers it uses are listed by their A2h byte numbers (the driver's macros are
 defined in ``gn25l95.c``):
@@ -982,16 +1011,14 @@ defined in ``gn25l95.c``):
      - What the driver does with it
    * - ``0xa5``
      - ``GN25L95_TBL2_ER_CTRL``
-     - The extinction-ratio control. Reads it, clears bit 0
-       (``GN25L95_TBL2_ER_CTRL_AUTO``, the automatic loop) and reads it
-       back. Bits 3:2 (``GN25L95_TBL2_ER_CTRL_MOD_RANGE``) only decide
-       how the log shows the modulation.
-   * - ``0xab``, ``0xac``
-     - ``GN25L95_TBL2_MOD_DAC``
-     - The modulation DAC, 16 bits, most significant byte first. Reads it.
-   * - ``0xaf``
-     - ``GN25L95_TBL2_MOD_LIMIT``
-     - The limit on the modulation DAC. Reads it; ``0xff`` means no limit.
+     - The extinction-ratio control. Reads it, writes it with bit 0
+       (``GN25L95_TBL2_ER_CTRL_AUTO``, the automatic loop) set, and reads it
+       back.
+   * - ``0xa8``
+     - ``GN25L95_TBL2_APCSET``
+     - The power control's set point. Reads it, keeps the value found at the
+       first bring-up since probe as that of level mode 0, writes that value
+       and reads it back.
    * - ``0xc7``
      - ``GN25L95_TBL2_PERSIST``
      - The persistence control. Reads it; bits 1:0 both set
@@ -1007,40 +1034,71 @@ defined in ``gn25l95.c``):
      - Checked by
    * - The registers of the configuration table that the driver uses are, as A2h
        addresses with byte 127 at ``02h``: ``GN25L95_TBL2_ER_CTRL``
-       ``0xa5``, ``GN25L95_TBL2_MOD_DAC`` ``0xab`` and ``0xac``,
-       ``GN25L95_TBL2_MOD_LIMIT`` ``0xaf`` and
+       ``0xa5``, ``GN25L95_TBL2_APCSET`` ``0xa8`` and
        ``GN25L95_TBL2_PERSIST`` ``0xc7``.
      - T
-     - The hold's log after each module power-up, ``modulation held at 39.0 mA
-       (modulation DAC 5f80, ...); automatic ER e3 -> e2``, reads back what it
-       wrote.
+     - The bring-up reads back what it wrote, and the transmit power levels
+       move the power with ``0xa8`` ("Transmit power levelling").
    * - ``GN25L95_TBL2_ER_CTRL_AUTO``, bit 0 of ER_CTRL, turns the
        automatic extinction-ratio loop on; ER_CTRL reads ``0xe3`` after a
        module power-up. Cleared (``0xe2``), the loop stays off until the module
-       loses power: a warm reboot of the SoC does not restore it, and a power
-       cycle does.
+       loses power or the bit is set again: a warm reboot of the SoC does not
+       restore it. Set again with PERSIST at ``03h``, register only, it turned
+       the loop on within the activation: ER_CTRL read ``e3`` and the bias rose
+       from 7 mA to 13-14 mA.
      - M
-     - The hold's log: ``e3 -> e2`` at the first bring-up after each module
-       power-up, ``e2 -> e2`` after a warm reboot.
-   * - With the loop on, the modulation current falls from its power-up value:
-       MOD_DAC read ``0x48c0`` against ``0x5f80``, about 24 % lower, while the
-       transmitted power stayed at +2.3 dBm (the power-control loop
-       compensates) and the bias rose (13.2 mA against 7.1 mA). The extinction
-       ratio falls with the modulation, and the OLT needs a longer preamble to
-       lock onto a burst: at 88 bytes of burst overhead, none of three fresh
-       activations to O5 was provisioned by the OLT with the loop on, and both
-       of two were with the modulation held.
+     - The modulation hold's log: ``e3 -> e2`` at the first bring-up after
+       each module power-up, ``e2 -> e2`` after a warm reboot. A test build
+       that set the bit at bring-up (2026-10-21): ``e2 -> e3`` in its log, and
+       hwmon ``curr1_input``.
+   * - The shipped firmware writes nothing to the laser driver, so that under
+       it the module runs the configuration it loads at power-up, the loop on.
+     - I
+     - The shipped firmware's start-up says so on the console of this stick.
+       Through this driver: ER control ``e3``, as after a module power-up, in
+       the bring-up's first log line after a warm restart from the shipped
+       firmware.
+   * - With the loop on, activation and OMCI go as with it off: of 11
+       activations with the loop off and 12 with it on, taken in turn at the
+       OLT's own burst overhead (63 bytes once ranged), each reached O5 in
+       1.8 s, was provisioned over OMCI 4.8 s after O5 with the same count of
+       OMCC frames, none sent again, and stayed in O5. With the loop on the
+       bias read 13.8 mA against 7.1 mA, and the transmitted power 1687 uW
+       against 1681 uW.
+     - M
+     - On the lab OLT, 2026-10-21, a test build with a debugfs switch between
+       the two: the kernel log, the OMCC frame counts, hwmon ``curr1_input``
+       and ``power1_input``.
+   * - The burst overhead the OLT can lock on is as short with the loop on as
+       with it off: with the burst overhead of O5 forced to 48, 40, 32, 24, 20,
+       16 and 12 bytes in place of the 63 the OLT asks for, every activation of
+       both reached O5 and was provisioned over OMCI.
+     - M
+     - Fresh sessions on the lab OLT, 2026-10-21, with a test build that set
+       the burst overhead of O5: the kernel log and the provisioning.
+   * - Measured 2026-09-22, and in part no longer holding. With the loop on,
+       the bias rose (13.2 mA against 7.1 mA) while the transmitted power
+       stayed at +2.3 dBm, the power control making up for a lower modulation
+       current; MOD_DAC read ``0x48c0`` against ``0x5f80`` then, which the row
+       below does not bear out. At 88 bytes of burst overhead, none of three
+       fresh activations to O5 was provisioned by the OLT with the loop on, and
+       both of two were with the modulation held. The modulation hold rested
+       on that last part, which no longer holds: the two rows above found no
+       difference between the loop on and off, down to 12 bytes.
      - M
      - On an OLT: the ``a2`` view, MOD_DAC read back, provisioned activations
-       counted.
-   * - ``GN25L95_TBL2_MOD_DAC`` (``0xab`` and ``0xac``) is 16 bits, most
-       significant byte first. With the loop off the modulation runs from it.
-       After hours with the loop on, turning the loop off read back ``0x5f80``,
-       the value the hold reads at every first bring-up after a module
-       power-up.
+       counted; on 2026-10-21, the two rows above.
+   * - ``0xab`` and ``0xac`` hold the modulation DAC, 16 bits, most
+       significant byte first, which takes its two bytes together when
+       ``0xac`` is written: ``5f`` written to ``0xab`` alone read back as the
+       old ``2f``. With the loop off the modulation runs from it, and it reads
+       the value the module loads at power-up, ``0x5f80`` on this module, also
+       after hours with the loop on. With the loop on it reads ``0000``. The
+       driver neither reads nor writes it.
      - M
-     - MOD_DAC read back after hours of loop operation; the hold's log after
-       power-ups (``modulation DAC 5f80``).
+     - The modulation hold's log after power-ups (``modulation DAC 5f80``);
+       the table read back after each byte written; a test build's read with
+       the loop on (2026-10-21).
    * - ``GN25L95_TBL2_PERSIST`` (``0xc7``): with bits 1:0 both set
        (``GN25L95_TBL2_PERSIST_OFF``, ``0x03``) register changes are not
        copied into the module's EEPROM, so a power cycle restores the stored
@@ -1050,21 +1108,30 @@ defined in ``gn25l95.c``):
      - M
      - Table writes made at ``0x00`` were still there after a module reset, and
        reads went unanswered at a drifting address while the part copied; at
-       ``0x03`` the hold's ER_CTRL write is gone after every module power cycle
-       (the ``e3 -> e2`` line above).
-   * - ``GN25L95_TBL2_MOD_LIMIT`` (``0xaf``) is a limit on the
-       modulation DAC, ``0xff`` meaning none; the driver refuses a MOD_DAC whose
-       high byte exceeds a limit other than ``0xff``.
-     - I
-     - Unverified; the check only guards against an implausible value. Not
-       load-bearing.
-   * - ``GN25L95_TBL2_ER_CTRL_MOD_RANGE`` (bits 3:2 of ER_CTRL): when it
-       is 0 the driver logs the held modulation in mA as (DAC + 8) / 10, with
-       DAC = bits 15:6 of MOD_DAC; otherwise it logs the raw register. This
-       module reads 0 there.
-     - I
-     - The field, the DAC position and the conversion are unverified; they
-       affect only the log line.
+       ``0x03`` the modulation hold's ER_CTRL write was gone after every module
+       power cycle (the ``e3 -> e2`` line above).
+   * - The part's reset gives back the whole configuration the module loads at
+       power-up, the set point of mode 0 among it, but it writes its key to A2h
+       bytes 123-126 and ``0Bh`` to byte 127, in the range whose writes the
+       module keeps across a power cycle; with the reset at every boot, byte
+       127 would be written twice each time. So the bring-up does not reset
+       the part.
+     - M, I
+     - M: table 2 bytes changed with C7h at ``03`` read their stored values
+       again after ``reset`` ("Storing table 2 bytes"), and the reset turned
+       the loop back on (the password row below). I: whether byte 127 is
+       stored ("Questions the code does not depend on"), and bytes 123-126,
+       which read ``00`` whatever is written.
+   * - The set point found at the first bring-up since probe is the module's
+       own after a module power-up, and after a warm reboot the one the earlier
+       kernel left: the module's own when that kernel put mode 0 back or never
+       left it, a lower one after a reset that shut no device down while the
+       ONU sent at a lower level. Nothing in the table tells the two apart.
+     - M, I
+     - M: ``0xa8`` read ``ab`` at mode 0, and the table kept a lower level
+       across a warm reboot ("Transmit power levelling"). I: that nothing
+       tells them apart; the ``tables`` view after ``reset`` of ``t2write``
+       shows the module's own.
    * - The table takes writes with nothing else written. The text of the
        GN25L95's datasheet places the access control of the upper page at
        ``0xcc``, and the driver used to clear bits 3:2 there before writing the
@@ -1074,7 +1141,7 @@ defined in ``gn25l95.c``):
      - I
      - On this module ``0xc4`` reads ``00h``, and ``0xcc`` ``ffh``, or ``f3h``
        after the old step. A table that refused the writes would show in the
-       hold's read-back of ER_CTRL (``modulation DAC seed ... is unusable``)
+       bring-up's read-back (``the factory configuration did not take``)
        after a module power-up.
    * - A2h bytes 120-126 are left by SFF-8472 to the module maker, for example
        for a password field.
@@ -1089,19 +1156,19 @@ defined in ``gn25l95.c``):
        tables from the EEPROM as at power-up and turns the automatic ER loop
        back on, and after a power cycle of the module, with nothing written to
        bytes 123-126 the table read as before (PERSIST ``03h``), and the
-       hold's writes took (``automatic ER e3 -> e2``), so the driver writes no
-       password outside the ``t2write`` view.
+       modulation hold's writes took (``automatic ER e3 -> e2``), so the driver
+       writes no password outside the ``t2write`` view.
      - M
-     - The hold's log line and table 2 as read before it: after ``echo reset``
-       to ``t2write`` in a build that left out every write of the password
-       bytes, and after the module was taken out of its cage for 34 s and put
-       back (2026-10-13), the stick starting from its flash image, which
-       writes no password byte. ER_CTRL read ``e3`` before the hold, which only
-       a module that lost power gives, and the stick went on to O5 with the
-       transmitted power at +2.2 dBm.
+     - The modulation hold's log line and table 2 as read before it: after
+       ``echo reset`` to ``t2write`` in a build that left out every write of
+       the password bytes, and after the module was taken out of its cage for
+       34 s and put back (2026-10-13), the stick starting from its flash image,
+       which writes no password byte. ER_CTRL read ``e3`` before the hold,
+       which only a module that lost power gives, and the stick went on to O5
+       with the transmitted power at +2.2 dBm.
 
-The hold runs at ``ip link set pon up``, after the GPON MAC reset and before the
-first O3, when the GPON MAC prepares the optics (``gn25l95_start()``). On a
+The bring-up runs at ``ip link set pon up``, after the GPON MAC reset and before
+the first O3, when the GPON MAC prepares the optics (``gn25l95_start()``). On a
 bus that refuses writes, with ``CONFIG_RTL9602C_OPTICS_RO`` or for a module the
 switch driver does not know, its first write is refused and it returns 0
 having written nothing. Its steps:
@@ -1109,34 +1176,33 @@ having written nothing. Its steps:
 1. Read A2h byte 127 and keep the value; write ``02h`` to it unless it holds
    ``02h`` already. Purpose: show the configuration table at A2h 128-255, and
    remember the page to restore. (T)
-2. Read PERSIST, MOD_LIMIT and ER_CTRL. Purpose: the three values the next steps
-   decide on. (T)
+2. Read PERSIST, ER_CTRL and the set point. Purpose: the values the next steps
+   decide on and log. (T)
 3. If bits 1:0 of PERSIST are not both set, log ``EEPROM updates are enabled``
    and give up with ``-EPERM``. Purpose: a table write now would be copied into
    the EEPROM, so none is made. (M) By then step 1 has written the page select,
    when it held another page, which the module keeps.
-4. If a lower transmit power level is set, put the module's own modulation and
-   set point back (see "Transmit power levelling") and log ``transmit power
-   back at level mode 0``. Purpose: every session starts at mode 0. (T)
-5. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
-   the loop off, and see the value the modulation now runs from. (M)
-6. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
-   and the high byte of MOD_DAC exceeds it: write ER_CTRL back as it was, so
-   that the loop keeps running, log ``modulation DAC seed ... is unusable`` and
-   give up with ``-EINVAL``. Purpose: do not leave the modulation at a value
-   that cannot be right. (I)
-7. At the first hold since probe, read the set point (``0xa8``) and keep it
-   with MOD_DAC as the settings of transmit power level mode 0. Purpose: the
-   lower levels are made from them, and mode 0 puts them back. (M)
-8. Log the held modulation. Purpose: show the value the modulation runs from.
-   (I)
-9. Write the value kept in step 1 back to byte 127. Purpose: leave the page
+4. Take the set point of level mode 0: the one kept since the first bring-up
+   since probe, or, at that first bring-up, the one read in step 2. Purpose:
+   the level the module came with, as far as its registers tell. (M, I)
+5. Write that set point, then ER_CTRL with bit 0 set, and read both back.
+   Purpose: the power at mode 0, which undoes a lower level left by an earlier
+   session, and the loop on, which undoes a loop turned off by an earlier
+   kernel. Both are written at every bring-up, so that a bus that refuses
+   writes shows here. (M)
+6. If bit 0 does not read back set, or the set point reads back otherwise, log
+   ``the factory configuration did not take`` and give up with ``-EIO``.
+   Purpose: say that the module may not run as it loads itself. (I)
+7. Keep the set point as that of mode 0, count the optics at mode 0, and log
+   ER_CTRL and the set point as found and as left. Purpose: the lower levels
+   are made from that set point, and mode 0 puts it back. (T)
+8. Write the value kept in step 1 back to byte 127. Purpose: leave the page
    selection as it was found. This follows every step after the write of
    step 1, whatever its outcome; only a transfer that fails in the read of
    step 1 returns before it, when the page select has not been written. (T)
 
-A failed hold is logged by the GPON bring-up (``modulation not held``), and the
-bring-up carries on.
+A failed bring-up of the optics is logged by the GPON bring-up (``the optics
+did not prepare the transmitter``), and the bring-up carries on.
 
 Transmit power levelling
 ========================
@@ -1148,14 +1214,18 @@ unanswered serial-number requests, and the OLT moves it between them with
 Change_Power_Level (see "Transmit power level" in
 Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst). The driver
 makes level mode 0 the power the module came with and sets the lower modes
-from it, in the configuration table of "The modulation hold", shown and kept
-out of the EEPROM in the same way.
+from it, in the configuration table of "The factory configuration", shown and
+kept out of the EEPROM in the same way.
 
 The part's power control loop moves the bias until the monitor photodiode
 reaches a set point, so the transmitted power follows the set point while the
-bias has room. With the modulation held it has little: the bias reaches its
-floor about 1.5 dB down. So a lower level takes a lower modulation too, scaled
-by the same factor, and then a lower set point.
+bias has room, and the automatic extinction-ratio loop sets the modulation for
+the bias it finds. So a lower level is set by the set point alone. Whether the
+loops reach 6 dB down before the bias reaches its floor is not measured. With
+the loop off and the modulation held, as until 2026-10-21, the bias reached
+its floor about 1.5 dB down, and the driver lowered the modulation by the same
+factor as the power before it lowered the set point; the measurements of that
+driver are kept in the rows below.
 
 The set point of a lower level is found by measuring, and the module measures
 the power only in bursts, which come often only from O4 on. So the MAC says
@@ -1174,18 +1244,11 @@ unset, with the optics where they are.
      - What the driver does with it
    * - ``0xa8``
      - ``GN25L95_TBL2_APCSET``
-     - The power control's set point. Keeps the module's own value at the
-       first hold since probe; writes lower values for modes 1 and 2, never a
-       higher one, and the module's own back for mode 0. Keeps the value at
-       which each lower mode was last measured, and writes it again for that
-       mode without measuring.
-   * - ``0xab``, ``0xac``
-     - ``GN25L95_TBL2_MOD_DAC``
-     - The modulation DAC. Keeps the module's own value, read with the
-       automatic loop off, at the first hold since probe; writes it with its
-       DAC field, bits 15:6 (``GN25L95_TBL2_MOD_DAC_FIELD``), halved
-       for mode 1 and quartered for mode 2, and the module's own back for mode
-       0.
+     - The power control's set point. Keeps the value found at the first
+       bring-up since probe as that of mode 0; writes lower values for modes
+       1 and 2, never a higher one, and mode 0's back for mode 0. Keeps the
+       value at which each lower mode was last measured, and writes it again
+       for that mode without measuring.
    * - 100-101 and 102-103
      - (diagnostics)
      - The bias and the transmitted power, read
@@ -1204,41 +1267,50 @@ unset, with the optics where they are.
        within the new mode's range.
      - P
      - ITU-T G.984.2 clause 8.3.2 and Appendix II.
-   * - Byte ``0xa8`` is the power control's set point. With the modulation
-       held, the set point at ``ab`` (the module's own) gave 1667 uW at a bias
-       of 7.1 mA; ``90`` gave 1217 uW with the bias at its floor, 0.77 mA;
-       ``78`` and ``60`` gave 645 uW; at ``55`` the laser went out (bias and
-       power 0) and the OLT lost the ONU, which was back in O5 once the set
-       point was ``ab`` again (1697 uW). Bytes ``0xa9`` and ``0xaa`` change by
-       themselves: ``0f 80``, then ``10 00`` and ``10 80`` with nothing
-       written.
+   * - Byte ``0xa8`` is the power control's set point. With the loop off and
+       the modulation held, the set point at ``ab`` (the module's own) gave
+       1667 uW at a bias of 7.1 mA; ``90`` gave 1217 uW with the bias at its
+       floor, 0.77 mA; ``78`` and ``60`` gave 645 uW; at ``55`` the laser went
+       out (bias and power 0) and the OLT lost the ONU, which was back in O5
+       once the set point was ``ab`` again (1697 uW). Bytes ``0xa9`` and
+       ``0xaa`` change by themselves: ``0f 80``, then ``10 00`` and ``10 80``
+       with nothing written.
      - M
      - The table and the diagnostics read back after each write, on an OLT.
-   * - With the set point at ``78`` and the modulation lowered, the loop holds
-       the set point's power with more bias: MOD_DAC ``1fc0`` gave a bias of
-       4.7 mA and 552 uW, ``17c0`` 9.65 mA and 549 uW.
+   * - With the loop off, the set point at ``78`` and the modulation lowered,
+       the power control loop holds the set point's power with more bias:
+       MOD_DAC ``1fc0`` gave a bias of 4.7 mA and 552 uW, ``17c0`` 9.65 mA and
+       549 uW.
      - M
      - The same reads.
-   * - MOD_DAC takes its two bytes together when the less significant one,
-       ``0xac``, is written: ``5f`` written to ``0xab`` alone read back as the
-       old ``2f``, and the pair read ``5f 80`` once ``80`` was written to
-       ``0xac``. The driver writes ``0xab`` first.
-     - M
-     - The table read back after each byte.
-   * - Change_Power_Level injected in O5 took the transmitted power from 1672
-       uW to 823 uW at mode 1 (3.1 dB down, bias 9 mA) and 423 uW at mode 2
-       (6.0 dB down, bias 10 mA), and back up to 833 uW and 1697 uW, with the
-       ONU in O5 throughout; a step past either end changed nothing, and the
-       PON taken down and up from mode 2 came back at mode 0, at 1672 uW.
+   * - With the loop on, as the driver now runs the part, the set point alone
+       takes the power 3 dB and 6 dB down with the bias above its floor; the
+       power read 20 ms after each step is the settled one; and a set point
+       kept from a measurement gives the mode's power again when it is written
+       later without measuring.
+     - I
+     - Change_Power_Level injected in O5, down, down, up and up: the logged
+       power about a half and a quarter of mode 0's, hwmon ``curr1_input``
+       above 0 and ``power1_input`` a few seconds on equal to the logged
+       power, the ONU in O5 throughout; then Upstream_Overhead naming modes 1
+       and 2 in O2, as below. Not run.
+   * - With the loop off and the modulation lowered with the power, as the
+       driver set the levels until 2026-10-21: Change_Power_Level injected in
+       O5 took the transmitted power from 1672 uW to 823 uW at mode 1 (3.1 dB
+       down, bias 9 mA) and 423 uW at mode 2 (6.0 dB down, bias 10 mA), and
+       back up to 833 uW and 1697 uW, with the ONU in O5 throughout; a step
+       past either end changed nothing, and the PON taken down and up from
+       mode 2 came back at mode 0, at 1672 uW.
      - T
      - The hwmon readings after each injected message, on an OLT.
-   * - A set point kept from a measurement gives the mode's power again when
-       it is written later without measuring, in another activation and before
-       the laser has sent a burst at it: the power control loop holds the
-       monitor photodiode's current at the set point whatever the bias, so the
-       power follows the set point while the photodiode tracks the laser, and
-       the loop settles within the ONU's first answers to serial-number
-       requests.
+   * - With the loop off and the modulation lowered with the power, as the
+       driver set the levels until 2026-10-21: a set point kept from a
+       measurement gives the mode's power again when it is written later
+       without measuring, in another activation and before the laser has sent
+       a burst at it: the power control loop holds the monitor photodiode's
+       current at the set point whatever the bias, so the power follows the
+       set point while the photodiode tracks the laser, and the loop settles
+       within the ONU's first answers to serial-number requests.
      - M
      - Change_Power_Level injected in O5, down, down, up and up: mode 1 at
        838.3 uW, bias 8.85 mA, set point ``8a``; mode 2 at 415.3 uW, bias
@@ -1249,17 +1321,17 @@ unset, with the optics where they are.
        Upstream_Overhead injected naming mode 1, mode 2 and the reserved
        value: the OLT ranged the ONU to O5 at 843 uW, 408 uW and 1672 uW,
        against the 848.4 uW and 415.3 uW measured before.
-   * - That the extinction ratio stays as it is at modes 1 and 2: scaling the
-       modulation with the power keeps it while the light grows linearly with
-       the current above the laser's threshold, which is not verified.
+   * - That the extinction ratio stays as it is at modes 1 and 2: the
+       automatic loop holds it while the bias falls, which is not verified.
      - I
      - The eye of the transmitted light at each mode, with an optical
        instrument.
    * - The module keeps its registers across a warm reboot of the SoC, and the
-       next kernel takes the settings it finds for the module's own: booted
-       with the optics at mode 2, a kernel logged ``modulation held at 19.8 mA
-       (modulation DAC 2f80, ...)``. At an orderly restart, power-off or
-       halt the driver puts mode 0 back (``gn25l95_shutdown()``), and the
+       next kernel takes the set point its first bring-up finds for the
+       module's own: booted with the optics at mode 2, a kernel of the
+       modulation hold logged ``modulation held at 19.8 mA (modulation DAC
+       2f80, ...)``, the modulation of mode 2. At an orderly restart, power-off
+       or halt the driver puts mode 0 back (``gn25l95_shutdown()``), and the
        GPON MAC asks for mode 0 whenever the ONU stops sending, below O3 and
        in O7; a reset that shuts no device down, such as the watchdog's, taken
        while the ONU sends at a lower level leaves that level until the module
@@ -1282,37 +1354,34 @@ which says whether the power can be measured):
 
 1. Take the mode the MAC asks for; if the optics are already at it, stop.
    Purpose: one work item serves every request. (T)
-2. Before a hold has kept the module's own settings, as when the bus refuses
+2. Before a bring-up has kept the set point of mode 0, as when the bus refuses
    writes, give up with ``-EOPNOTSUPP``. Purpose: nothing is written that could
    not be put back. (I)
 3. When the power cannot be measured, give up with ``-ENODATA`` for a lower
    mode that has no set point kept, writing nothing. Purpose: no set point is
    guessed; the optics stay where they are, and the MAC declares that. (M)
-4. Show the table and check PERSIST as the hold does, giving up with
+4. Show the table and check PERSIST as the bring-up does, giving up with
    ``-EPERM`` when register changes would reach the EEPROM. Purpose: the
    writes stay in registers. (M)
-5. For mode 0, write the module's modulation and then its set point. (M)
-6. For a lower mode when the power cannot be measured, write the scaled
-   modulation and then the set point kept for the mode. Purpose: the level the
-   last measurement found, before the ONU is ranged. (M)
-7. For a lower mode when it can, read the transmitted power while the optics
-   are still at mode 0: the module measures the bursts, so the power read is
-   that of mode 0 (no power read gives ``-ENODATA``). The target is that power
-   divided by 2 for mode 1 and by 4 for mode 2. Purpose: the level is made from
-   this module's own power. (T)
-8. Write the scaled modulation. Purpose: going down, the loop then holds the
-   power with more bias, which the set point lowers next; going up, the bias
-   falls first. (M)
-9. Move the set point one step at a time towards the target, reading the
+5. For mode 0, write the set point of mode 0. (M)
+6. For a lower mode when the power cannot be measured, write the set point
+   kept for the mode. Purpose: the level the last measurement found, before
+   the ONU is ranged. (I with the loop on)
+7. For a lower mode when it can, read the set point and the transmitted
+   power; while the optics are at mode 0 the module measures the bursts of
+   mode 0, so the power read is that of mode 0 (no power read gives
+   ``-ENODATA``). The target is that power divided by 2 for mode 1 and by 4
+   for mode 2. Purpose: the level is made from this module's own power. (T)
+8. Move the set point one step at a time towards the target, reading the
    power and the bias after each, until the power crosses the target, and keep
-   the set point it crossed at for the mode. A set point above the module's
-   own, a power of 0 or a bias above ``GN25L95_LEVEL_BIAS_MAX`` (40 mA) gives
+   the set point it crossed at for the mode. A set point above that of mode 0,
+   a power of 0 or a bias above ``GN25L95_LEVEL_BIAS_MAX`` (40 mA) gives
    ``-ERANGE``. Purpose: the power lands at the level without the laser going
-   out. (T)
-10. On a failure, put mode 0 back; when even that fails, log it and count the
-    optics at no known level, which the next request and the next hold try to
-    leave. (I)
-11. Write the page select back, log the level, with the power, the bias and
+   out. (I with the loop on)
+9. On a failure, put mode 0 back; when even that fails, log it and count the
+   optics at no known level, which the next request and the next bring-up try
+   to leave. (I)
+10. Write the page select back, log the level, with the power, the bias and
     the set point when the power was measured and with the set point alone,
     rate-limited, when it was not, and tell the MAC what was set, which
     declares it in Serial_Number_ONU. (T)
@@ -1328,7 +1397,7 @@ the SFP cage, and drops the trailing spaces. The adapter passes writes on only
 when the name is ``ODI`` and the part number begins with ``DFP-34X-2C``, the
 module this page was measured on. For any other module, and while the header
 cannot be read, the adapter refuses every write with ``-EPERM``, as in the
-read-only build below, and this driver only reads the part: the modulation hold
+read-only build below, and this driver only reads the part: the bring-up
 returns 0 having written nothing and logs the refusal once, no transmit power
 level is set, and the switch driver logs one line (see "Logging"). A header
 that cannot be read is read again every five seconds until it reads, so that a
@@ -1367,8 +1436,11 @@ The read-only build
 adapter refuse every write with ``-EPERM``, from this driver and from any other
 client, user space through ``i2c-dev`` included. Nothing on the board then
 changes the module: the page select, the bytes 123 to 126 and the configuration
-table stay as the module has them, and the automatic loop keeps running. The
-modulation hold returns 0 having written nothing and logs the refusal once. No
+table stay as the module has them. After a module power-up that is the factory
+configuration; after a warm reboot from a kernel that wrote the table, a loop
+it turned off or a lower set point it left stays so until the module loses
+power. The bring-up returns 0 having written nothing and logs the refusal once.
+No
 transmit power level is set: a request for one gives ``-EOPNOTSUPP``, and the
 ONU stays at level mode 0. The hwmon device and the ``a2`` and ``eeblocks``
 views only read, and they are unchanged; the ``tables`` view shows the table
@@ -1417,26 +1489,24 @@ prefix ``rtl9602c-switch:``, and the GPON MAC with ``<GPON>``.
        reads
      - ``rtl9602c-switch: optics: the module's header could not be read
        (<error>); writes to the laser driver are refused until it reads``
-   * - Bring-up, the bus refused the hold's writes, once
+   * - Bring-up, the bus refused the writes, once
      - ``the bus refuses writes; the laser driver is only read``
-   * - Bring-up, the hold succeeded
-     - ``modulation held at <m>.<d> mA (modulation DAC <hhhh>, the module's
-       calibration); automatic ER <hh> -> <hh>``. When bits 3:2 of ER_CTRL are
-       not 0: ``modulation held at modulation DAC <hhhh> (the module's
-       calibration); automatic ER <hh> -> <hh>``. The two ER values are
-       ER_CTRL before and after the hold.
+   * - Bring-up, the factory configuration was put back
+     - ``the module runs its factory configuration: automatic ER loop on (ER
+       control <hh> -> <hh>), set point <hh> -> <hh>``. Each pair is the
+       register as found and as left: ER control ``e3`` after a module
+       power-up, ``e2`` when an earlier kernel turned the loop off; a set point
+       found below the one left when a lower level was set.
    * - Bring-up, PERSIST lets register changes reach the EEPROM
-     - ``EEPROM updates are enabled (C7h <hh>); modulation left alone rather
-       than written to the EEPROM``
-   * - Bring-up, the hold cannot use MOD_DAC
-     - ``modulation DAC seed <hhhh> is unusable (modulation max <hh>, ER control
-       <hh>); modulation left to the module``
-   * - Bring-up, the hold failed for any reason
+     - ``EEPROM updates are enabled (C7h <hh>); the configuration table is left
+       alone rather than written to the EEPROM``
+   * - Bring-up, the loop or the set point does not read back as written
+     - ``the factory configuration did not take: ER control <hh>, set point
+       <hh>``, the two as read back.
+   * - Bring-up, the optics failed for any reason
      - ``<GPON> the optics did not prepare the transmitter (<error>)``, from the
-       GPON bring-up. When the hold gave up for a reason of its own, the two
-       rows above, this line follows the line of that reason.
-   * - Bring-up, a lower power level was set
-     - ``transmit power back at level mode 0``
+       GPON bring-up. When the bring-up gave up for a reason of its own, the
+       two rows above, this line follows the line of that reason.
    * - A power level was set, measured
      - ``transmit power level mode <n>: <uW>.<d> uW, bias <mA>.<dd> mA, set
        point <hh>``
@@ -1487,9 +1557,9 @@ of a step is the tag of the fact the step rests on (see the tables above).
    at every later one, the MAC drives TX_DISABLE (see "TX_DISABLE"). Purpose:
    follow the activation state. (T)
 6. In the GPON bring-up, after the MAC reset and before the first O3, the MAC
-   prepares the optics: the modulation hold (see "The modulation hold").
-   Purpose: the modulation runs from the value the module loads at power-up.
-   (M)
+   prepares the optics: the factory configuration (see "The factory
+   configuration"). Purpose: the module runs as it loads itself at power-up,
+   whatever an earlier kernel left in its registers, at level mode 0. (M)
 
 At shutdown, restart or halt the driver puts level mode 0 back
 (``gn25l95_shutdown()``).
@@ -1510,12 +1580,24 @@ Known limitations
   and the addresses this driver holds with ``I2C_SLAVE_FORCE``.
 - A watchdog reset, or any reset that shuts no device down, with the
   transmit power at level mode 1 or 2 leaves the module there, and the next
-  kernel takes that level for the module's own until the module loses power
-  (see "Transmit power levelling"): a level asked for then is counted down
-  from the lower one. The ONU sends at a lower level only from O3 to O6, at
-  the mode the OLT names or asks for or, in O3, at the one it took itself
-  after unanswered serial-number requests; below O3 and in O7 the GPON MAC
-  asks for mode 0. The extinction ratio at the lower levels is not measured.
+  kernel takes that level's set point for the module's own until the module
+  loses power (see "Transmit power levelling"): a level asked for then is
+  counted down from the lower one. The module's own set point is in its
+  EEPROM, which only the part's reset loads into the table again, and the
+  bring-up does not use the reset, which writes bytes the module may keep
+  (see "The factory configuration"). The power at mode 0 then reads below the
+  module's own, about 1690 uW on this board, in hwmon ``power1_input``; a
+  module power cycle ends it. The ONU sends at a lower level only from O3 to
+  O6, at the mode the OLT names or asks for or, in O3, at the one it took
+  itself after unanswered serial-number requests; below O3 and in O7 the GPON
+  MAC asks for mode 0. The extinction ratio at the lower levels is not
+  measured. A loop turned off by an earlier kernel is turned on again by the
+  bring-up.
+- The transmit power levels were measured only with the automatic loop off.
+  With the loop on, as the driver now runs the part, whether the set point
+  alone reaches modes 1 and 2 is not measured (see "Transmit power
+  levelling"); a level the search cannot reach gives ``-ERANGE``, and the
+  ONU stays at mode 0 and says so.
 - Before the ONU is ranged a lower level is set only at a set point kept from
   a measurement since probe, and the module measures a level only when the
   OLT asks for it with Change_Power_Level in O4 or O5. Until it has, the
@@ -1523,8 +1605,8 @@ Known limitations
   at mode 0, and Serial_Number_ONU says so. A kept set point is not measured
   again until Change_Power_Level asks for its mode.
 - A PON bring-up writes a byte that the module keeps only when A2h byte 127
-  holds another page than ``02h``: before it has read PERSIST, the modulation
-  hold writes ``02h`` there, and it puts the page back at the end. At rest the
+  holds another page than ``02h``: before it has read PERSIST, the bring-up
+  writes ``02h`` there, and it puts the page back at the end. At rest the
   byte holds ``02h`` on this board, so a bring-up writes nothing the module
   keeps.
 
@@ -1560,9 +1642,23 @@ Assumptions the driver depends on
      - Reading the received-power word in a tight loop while the level changes,
        looking for jumps of about 256 counts.
    * - That the extinction ratio stays as it is at transmit power level modes
-       1 and 2 ("Transmit power levelling").
+       1 and 2, the automatic loop holding it while the bias falls ("Transmit
+       power levelling").
      - The eye of the transmitted light at each mode, with an optical
        instrument.
+   * - That with the automatic loop on the set point alone takes the power
+       3 dB and 6 dB down before the bias reaches its floor, that the power
+       read 20 ms after a step is the settled one, and that a kept set point
+       gives its mode's power again without measuring ("Transmit power
+       levelling").
+     - Change_Power_Level injected in O5, down twice and up twice, then
+       Upstream_Overhead naming modes 1 and 2 in O2: the logged power and
+       hwmon ``power1_input`` and ``curr1_input`` at each mode.
+   * - That the set point the first bring-up since probe finds is the module's
+       own ("The factory configuration").
+     - The bring-up's first log line after a module power cycle against the
+       one after a warm reboot; the ``tables`` view after ``reset`` of
+       ``t2write`` in a test build.
    * - The read-only build still exposes a writable adapter ("The read-only
        build").
      - Checking the image's configuration for ``CONFIG_I2C_CHARDEV`` settles
@@ -1592,16 +1688,13 @@ Questions the code does not depend on
        observed on this board.
    * - Whether the part is a GN25L95 ("The management interface").
      - The package marking.
-   * - Whether ``GN25L95_TBL2_MOD_LIMIT`` limits the modulation DAC, and
-       what bits 3:2 of ER_CTRL and the conversion of the logged current mean
-       ("The modulation hold").
-     - Nothing the driver needs: the first guards against an implausible value
-       and the others only change the log line.
    * - That the table takes writes after a module power-up with nothing
-       written to ``0xcc`` ("The modulation hold").
-     - The hold's log after a module power cycle: ``modulation held at``, not
-       ``modulation DAC seed ... is unusable``.
-   * - Whether activation needs the modulation hold ("The modulation hold").
-     - Repeated activations from a module power-up with the hold (the default)
-       and without it (``CONFIG_RTL9602C_OPTICS_RO``), counting those that the
-       OLT provisions.
+       written to ``0xcc`` ("The factory configuration").
+     - The bring-up's log after a module power cycle: ``the module runs its
+       factory configuration``, not ``the factory configuration did not
+       take``.
+   * - Whether the shipped firmware writes the laser driver ("The factory
+       configuration").
+     - The bring-up's first log line after a warm restart from the shipped
+       firmware: ER control ``e3``, and the set point found after a module
+       power-up.
