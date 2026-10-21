@@ -86,7 +86,8 @@ $(BUILD)/test_cert: $(BUILD)/tests/test_cert.o $(BUILD)/src/cert.o $(BUILD)/mong
 
 # The settings' rules are onu-config's, of onu-utils (ADR 0011): the tests of
 # the settings run it, built here from its sources.
-ONU_CONFIG_SRC := $(addprefix $(ONU_UTILS)/src/,onu-config.c cfgstore.c settings.c password.c sha256.c)
+ONU_CONFIG_SRC := $(addprefix $(ONU_UTILS)/src/,onu-config.c cfgstore.c settings.c password.c sha256.c \
+	sshkey.c)
 
 $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
 	@mkdir -p $(dir $@)
