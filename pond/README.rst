@@ -425,6 +425,15 @@ more than 32 KiB, 423 and 429 as the updates do.
   address taken away, the device's. They take no entry of the switch's
   ACL table: netfilter translates a connection's first packet, and its
   flowtable then offers the flow to the switch as any other.
+* ``service_rule``: a rule of a service the OLT set up, by ``FIBRE``, its
+  VLAN on the fibre: ``ACTION`` ``move`` with ``HOST``, the VLAN towards the
+  host, ``off``, ``only_uni`` or ``only_veip``, or ``auto``, which takes the
+  service's rule away for the stick's own way. It is onu-config's ``SVCn``,
+  in place of the service's rule or in the first free one of 32, on trial as
+  the other settings are; omcid applies it (its README, the rules of the
+  services). The settings value leaves the ``SVCn`` out: the rules in force,
+  a person's and the moves omcid made for clashes, are the value
+  ``service_rules``, omcid's answer on ubus (method ``rules``).
 * ``rule``: a rule of the firewall, the first that traffic matches deciding:
   ``ID`` (none adds one at the end, with the ID after the largest),
   ``NAME``, ``ACTION`` (``allow`` or ``block``; empty removes the rule),
@@ -558,9 +567,10 @@ onu-act's table, which it builds from ``../onu-utils``, each program from
 ``$POND_<PROGRAM>`` when set: those of the identity and the stick's own
 settings start stand-ins for onu-config, onu-apply, onu-lane, onu-mgmt and
 hostname (``POND_ONU_CONFIG``, ``POND_ONU_APPLY``, ``POND_ONU_LANE``,
-``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those of ``omci`` and
-``omci_frames`` read omcid's answers from ``run/ubus/omcid.mib`` and
-``run/ubus/omcid.frames``.
+``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those of ``omci``,
+``omci_frames`` and ``service_rules`` read omcid's answers from
+``run/ubus/omcid.mib``, ``run/ubus/omcid.frames`` and
+``run/ubus/omcid.rules``.
 The tests of the sign-in run onu-config, behind a stand-in that keeps a new
 password, and check the default password, the stop after wrong passwords,
 the end of sessions, their list and the end of the others, a change of

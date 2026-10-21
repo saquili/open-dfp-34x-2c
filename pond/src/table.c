@@ -111,6 +111,13 @@ const struct prov pond_provs[] = {
 
 	{ "gem_counters", "Data path", "Per-GEM-port counters from the PON MAC",
 	  prov_gem_counters, NULL, 0 },
+	{ "service_rules", "GPON",
+	  "The stick's rules for the OLT's services: moved to another VLAN, off, "
+	  "or kept to one output; a person's, and those it made for clashes",
+	  prov_service_rules, NULL, PROV_VOLATILE },
+	{ "service_rule", "Mode",
+	  "A rule of a service the OLT set up: moved, off, one output alone, or "
+	  "the stick's own way", NULL, prov_service_rule_write, 0 },
 	{ "omci", "OMCI",
 	  "What the OLT set up: the managed entities omcid holds, and its "
 	  "counts of the frames", prov_omci, NULL, PROV_SLOW },

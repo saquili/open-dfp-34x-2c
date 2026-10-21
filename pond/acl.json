@@ -16,7 +16,7 @@
 			"token_new", "token_off",
 			"restart"
 		] },
-		"omcid": { "methods": [ "status", "mib", "frames" ] },
+		"omcid": { "methods": [ "status", "mib", "frames", "rules" ] },
 		"network.interface.*": { "methods": [ "status" ] },
 		"dhcp6d.*": { "methods": [ "status" ] }
 	}

@@ -122,3 +122,23 @@ int prov_omci_frames(struct prov_buf *out)
 {
 	return prov_omci_frames_from(out, 0);
 }
+
+/*
+ * The rules of the services in force, as omcid applies them to the OLT's
+ * VLAN rules (its method "rules", me/svcrule.h): a person's, then the moves
+ * omcid made for clashes of two outputs. 32 of each at most, a few dozen
+ * bytes of JSON text each.
+ */
+#define RULES_TEXT 4096u
+
+int prov_service_rules(struct prov_buf *out)
+{
+	int n;
+
+	pv_reserve(out, RULES_TEXT);
+	n = bus_call("omcid", "rules", NULL, 0, out->buf + out->len, pv_room(out));
+	if (n < 0)
+		return n;
+	out->len += (size_t)n;
+	return 0;
+}

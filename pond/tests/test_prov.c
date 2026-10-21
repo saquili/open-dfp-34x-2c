@@ -2485,6 +2485,90 @@ static void test_session_pass(void)
 	unsetenv("POND_ONU_APPLY");
 }
 
+/*
+ * The rules of the services: a person's, as onu-config's SVCn, which the
+ * settings value leaves to omcid's value; and the value omcid serves.
+ */
+#define OMCID_RULES                                                            \
+	"{\"rules\":[{\"fibre\":500,\"action\":\"move\",\"host\":411,"             \
+	"\"auto\":false},{\"fibre\":600,\"action\":\"move\",\"host\":600,"        \
+	"\"auto\":true}]}"
+
+static void test_service_rules(void)
+{
+	static char buf[16384];
+	char file[512], err[256], stub[512], path[512];
+	const char *s;
+	FILE *f;
+	int rc;
+
+	puts("the rules of the services");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+
+	rc = prov_service_rule_set("FIBRE=500\nACTION=move\nHOST=411\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SVC1=500/move/411") && !strstr(s, "SVC1"),
+	      "a move is SVC1, which the settings value does not show");
+	rc = prov_service_rule_set("FIBRE=200\nACTION=off\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SVC2=200/off"), "another service is SVC2");
+	rc = prov_service_rule_set("FIBRE=500\nACTION=only_veip\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SVC1=500/only_veip") &&
+		      !file_has("/run/onu.conf", "SVC3"),
+	      "a service's new rule takes the place of its rule");
+	rc = prov_service_rule_set("FIBRE=500\nACTION=auto\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "SVC1") && file_has("/run/onu.conf", "SVC2"),
+	      "auto takes a service's rule away");
+	rc = prov_service_rule_set("FIBRE=700\nACTION=auto\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0, "auto for a service without a rule changes nothing");
+	check(prov_service_rule_set("ACTION=off\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "FIBRE"),
+	      "a rule without its service is refused");
+	check(prov_service_rule_set("FIBRE=0500\nACTION=off\n", err, sizeof(err)) == -EINVAL &&
+		      prov_service_rule_set("FIBRE=4095\nACTION=off\n", err, sizeof(err)) == -EINVAL,
+	      "a service that is no VLAN is refused");
+	check(prov_service_rule_set("FIBRE=500\nACTION=drop\n", err, sizeof(err)) == -EINVAL &&
+		      prov_service_rule_set("FIBRE=500\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "ACTION"),
+	      "an action that is none is refused");
+	check(prov_service_rule_set("FIBRE=500\nACTION=move\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "HOST"),
+	      "a move without its VLAN towards the host is refused");
+	for (int n = 1; n <= 31; n++) {
+		char line[64];
+
+		snprintf(line, sizeof(line), "FIBRE=%d\nACTION=off\n", 1000 + n);
+		rc = prov_service_rule_set(line, err, sizeof(err));
+		s = settled(buf, sizeof(buf));
+	}
+	check(rc == 0 && file_has("/run/onu.conf", "SVC32=1031/off"), "32 rules fit");
+	check(prov_service_rule_set("FIBRE=900\nACTION=off\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "all 32"),
+	      "a 33rd is refused");
+	(void)s;
+	unsetenv("POND_ONU_APPLY");
+
+	mkdir(prov_path("/run/ubus", path, sizeof(path)), 0755);
+	f = fopen(prov_path("/run/ubus/omcid.rules", path, sizeof(path)), "w");
+	check(f != NULL, "omcid's answer is in place");
+	if (!f)
+		return;
+	fputs(OMCID_RULES "\n", f);
+	fclose(f);
+	s = render(prov_service_rules, buf, sizeof(buf), &rc);
+	check(rc == 0 && !strcmp(s, OMCID_RULES), "omcid's rules are the value as they are");
+	unlink(path);
+	s = render(prov_service_rules, buf, sizeof(buf), &rc);
+	check(rc < 0, "without omcid the value is an error");
+}
+
 static void test_forwards(void)
 {
 	static char buf[16384];
@@ -3531,6 +3615,7 @@ int main(void)
 	test_session_pass();
 	test_largest_settings();
 	test_forwards();
+	test_service_rules();
 	test_rules();
 	test_omci();
 	test_omci_frames();

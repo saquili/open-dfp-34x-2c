@@ -86,6 +86,8 @@
 #define FORWARDS 96
 #define DMZS CONNS
 #define RULES 96
+/* The rules of the services, as onu-config keeps them (its SETTINGS_SVCS). */
+#define SVCS 32
 /* A rule's value and its name, 40 characters of UTF-8, as onu-config takes them. */
 #define RULE_MAX 128
 #define RULE_NAME_MAX 164
@@ -1043,6 +1045,7 @@ int prov_settings(struct prov_buf *out)
 		if (!eq || !strncmp(p, "SESSION", 7) || !strncmp(p, "FIXED", 5) ||
 		    !strncmp(p, "IPOE", 4) || !strncmp(p, "FORWARD", 7) ||
 		    !strncmp(p, "DMZ", 3) || !strncmp(p, "RULE", 4) || !strncmp(p, "FW_", 3) ||
+		    !strncmp(p, "SVC", 3) ||
 		    (!strncmp(p, "LAN", 3) && p[3] >= '1' && p[3] <= '9'))
 			continue;
 		klen = (size_t)(eq - p);
@@ -1858,6 +1861,105 @@ int prov_dmz_set(const char *val, char *err, size_t errcap)
 	struct prov_wait w = { .err = err, .errcap = errcap };
 
 	return prov_wait(prov_dmz_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/* A VLAN, 1 to 4094, in decimal without a leading zero. */
+static bool svc_vid(const char *v)
+{
+	size_t n = v ? strlen(v) : 0;
+
+	return n && n <= 4 && strspn(v, "0123456789") == n && *v != '0' &&
+	       strtoul(v, NULL, 10) <= 4094;
+}
+
+/* A rule of a service of the settings, SVCn=FIBRE/...: its n and FIBRE; false for none. */
+static bool svc_of(const char *line, int *n, char fibre[8])
+{
+	size_t d = strspn(line + 3, "0123456789"), f;
+
+	if (strncmp(line, "SVC", 3) || !d || line[3 + d] != '=')
+		return false;
+	*n = atoi(line + 3);
+	f = strcspn(line + 4 + d, "/\n");
+	if (!f || f >= 8 || line[4 + d + f] != '/')
+		return false;
+	memcpy(fibre, line + 4 + d, f);
+	fibre[f] = '\0';
+	return true;
+}
+
+/*
+ * A rule of a service the OLT set up (onu-config's SVCn, omcid's
+ * me/svcrule.h): FIBRE, the service's VLAN on the fibre, with ACTION move
+ * and HOST, the VLAN towards the host, or off, only_uni or only_veip; or
+ * ACTION auto, no rule of a person's, the stick's own way. It takes the
+ * place of the service's rule, or the first free one.
+ */
+int prov_service_rule_write(const char *val, char *err, size_t errcap,
+			    prov_done done, void *ctx)
+{
+	static char text[TEXT_MAX], change[TEXT_MAX];
+	char fv[VALUE_MAX], av[VALUE_MAX], hv[VALUE_MAX], f[8];
+	const char *fibre = line_value(val, "FIBRE", fv, sizeof(fv));
+	const char *action = line_value(val, "ACTION", av, sizeof(av));
+	const char *host = line_value(val, "HOST", hv, sizeof(hv));
+	bool used[SVCS + 1] = { false };
+	size_t len = 0;
+	int n = 0, rc;
+
+	if (!svc_vid(fibre)) {
+		snprintf(err, errcap, "FIBRE: a VLAN, 1 to 4094");
+		return -EINVAL;
+	}
+	if (!action || (strcmp(action, "auto") && strcmp(action, "move") &&
+			strcmp(action, "off") && strcmp(action, "only_uni") &&
+			strcmp(action, "only_veip"))) {
+		snprintf(err, errcap, "ACTION: move, off, only_uni, only_veip or auto");
+		return -EINVAL;
+	}
+	if (!strcmp(action, "move") && !svc_vid(host)) {
+		snprintf(err, errcap, "HOST: a VLAN, 1 to 4094");
+		return -EINVAL;
+	}
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int d;
+
+		if (!svc_of(p, &d, f) || d < 1 || d > SVCS)
+			continue;
+		used[d] = true;
+		if (!strcmp(f, fibre))
+			n = d;
+	}
+	change[0] = '\0';
+	if (!strcmp(action, "auto")) {
+		if (n)
+			append(change, sizeof(change), &len, "SVC%d=\n", n);
+		return prov_settings_write(change, err, errcap, done, ctx);
+	}
+	for (int k = 1; k <= SVCS && !n; k++)
+		if (!used[k])
+			n = k;
+	if (!n) {
+		snprintf(err, errcap, "all %d rules of the services are taken", SVCS);
+		return -EINVAL;
+	}
+	if (!strcmp(action, "move"))
+		append(change, sizeof(change), &len, "SVC%d=%s/move/%s\n", n, fibre, host);
+	else
+		append(change, sizeof(change), &len, "SVC%d=%s/%s\n", n, fibre, action);
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_service_rule_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_service_rule_write(val, err, errcap, prov_waited, &w), &w);
 }
 
 /*
