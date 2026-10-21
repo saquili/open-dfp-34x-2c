@@ -855,8 +855,28 @@ static bool rule_takes_ethertype(const struct omci_hw_vlan_xlate *r,
 }
 
 /*
- * The upstream tag the extended VLAN tagging operation gives a frame: the
- * first rule in force that matches it, as the switch takes them, or none.
+ * Whether one of the @n rules @r discards the frames of C-VID @vid and
+ * priority @pcp. The switch's ACL drops them before its classifier applies
+ * the other rules, whatever their order, but for the priorities that the
+ * rules before the discard take from its VID.
+ */
+static bool vid_discarded(const struct omci_hw_vlan_xlate *r, size_t n,
+			  unsigned int vid, unsigned int pcp)
+{
+	for (size_t i = 0; i < n; i++)
+		if (r[i].kind == OMCI_HW_VLAN_DISCARD_VID &&
+		    r[i].match_cvid == vid &&
+		    (!r[i].match_has_pri || r[i].match_pri == pcp) &&
+		    !((r[i].keep_pri >> pcp) & 1u))
+			return true;
+	return false;
+}
+
+/*
+ * The upstream tag the extended VLAN tagging operation gives a frame: none
+ * for a frame that a discard of its VID drops, which decides first, as in
+ * the switch; otherwise that of the first rule in force that matches it, as
+ * the switch takes them, or none.
  * Returns the frame's new length, or 0 for a frame that a rule discards, or
  * a tagged frame that no rule takes while the rules discard such frames.
  */
@@ -870,11 +890,14 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 	const unsigned int type = frame_ethertype(f, len);
 	bool discard = false;
 
+	if (ctag && vid_discarded(r, n, vid, pcp))
+		return 0;
 	for (size_t i = 0; i < n; i++) {
 		const unsigned int pri =
 			r[i].assign_pri <= 7u ? r[i].assign_pri : pcp;
 
-		if (!rule_takes_ethertype(&r[i], type))
+		if (r[i].kind == OMCI_HW_VLAN_DISCARD_VID ||
+		    !rule_takes_ethertype(&r[i], type))
 			continue;
 		if (r[i].kind == OMCI_HW_VLAN_DISCARD_TAGGED) {
 			discard = true;
@@ -902,11 +925,6 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 		if (!ctag || vid != r[i].match_cvid ||
 		    (r[i].match_has_pri && pcp != r[i].match_pri))
 			continue;
-		if (r[i].kind == OMCI_HW_VLAN_DISCARD_VID) {
-			if ((r[i].keep_pri >> pcp) & 1u)
-				continue;
-			return 0;
-		}
 		if (r[i].kind == OMCI_HW_VLAN_CVID_XLATE) {
 			omci_be16_store(&f[14], pri << 13 | (tci & 0x1000u) |
 							r[i].assign_cvid);

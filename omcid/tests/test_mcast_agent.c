@@ -2053,6 +2053,42 @@ static void test_a_vlan_rule_discards_the_messages_of_its_vid(void)
 }
 
 /*
+ * A discard of a VID decides before the other rules, as the switch's ACL
+ * does: a rule on one EtherType ahead of it keeps none of its priorities
+ * from it, and a message in the VID goes nowhere, though the rule takes its
+ * EtherType and priority. A message in another VID passes the discard by.
+ */
+static void test_a_discard_of_a_vid_decides_before_the_rules(void)
+{
+	static const uint32_t discard[][4] = {
+		/* C-VID 410 at priority 5, IPv4, to 1410 */
+		{ 0xf8000000u, (5u << 28) | (410u << 15) | 1u, 0x400f0000u,
+		  (5u << 16) | (1410u << 3) },
+		/* C-VID 410, any priority: discard */
+		{ 0xf8000000u, (8u << 28) | (410u << 15), 0xc00f0000u,
+		  0x000f0000u },
+	};
+	unsigned int tpid, tci;
+	uint8_t f[256], out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	rules(discard, ARRAY_SIZE(discard));
+
+	hear(f, igmp(f, 410, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	CHECK_EQ(sent_count(), 0u);
+	CHECK_EQ(join_up(411, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 411u));
+	rules(discard, 0);
+	down();
+}
+
+/*
  * A rule that gives untagged frames two tags gives a message both, the S-tag
  * in front; one that puts an S-tag in front of a C-tag whose priority it
  * changes sends the message with that C-tag's new priority behind the S-tag.
@@ -2594,6 +2630,7 @@ int main(void)
 	RUN(test_the_vlan_rules_tag_the_messages);
 	RUN(test_the_vlan_rules_discard_messages_they_do_not_take);
 	RUN(test_a_vlan_rule_discards_the_messages_of_its_vid);
+	RUN(test_a_discard_of_a_vid_decides_before_the_rules);
 	RUN(test_the_vlan_rules_that_write_two_tags);
 	RUN(test_the_vlan_rules_on_an_ethertype);
 	RUN(test_the_gem_port_of_a_message);
