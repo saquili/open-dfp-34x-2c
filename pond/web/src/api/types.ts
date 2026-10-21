@@ -709,8 +709,8 @@ export interface ServiceRule {
   /** The service, by its VLAN on the fibre; null for the one that filters none. */
   fibre: number | null;
   action: "move" | "off" | "only_uni" | "only_veip";
-  /** The VLAN towards the host, of a move. */
-  host: number | null;
+  /** The VLAN towards the host, of a move alone. */
+  host?: number;
   /** Made by the stick, for a clash; a person's own when false. */
   auto: boolean;
 }

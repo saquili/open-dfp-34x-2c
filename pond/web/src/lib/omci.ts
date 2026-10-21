@@ -421,7 +421,7 @@ export function withRules(list: Service[], rules: ServiceRule[]): Service[] {
     if (!rule) return s;
     switch (rule.action) {
       case "move":
-        return { ...s, rule, oltHostVlans: s.hostVlans, hostVlans: [rule.host] };
+        return { ...s, rule, oltHostVlans: s.hostVlans, hostVlans: [rule.host ?? null] };
       case "off":
         return { ...s, rule, off: true };
       case "only_uni":

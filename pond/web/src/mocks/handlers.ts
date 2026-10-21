@@ -1746,7 +1746,7 @@ const stick = [
       if (!(host >= 1 && host <= 4094)) return refuse("HOST: 1 to 4094");
       ownRules.set(fibre, { fibre, action: "move", host, auto: false });
     } else if (b.ACTION === "off" || b.ACTION === "only_uni" || b.ACTION === "only_veip")
-      ownRules.set(fibre, { fibre, action: b.ACTION, host: null, auto: false });
+      ownRules.set(fibre, { fibre, action: b.ACTION, auto: false });
     else return refuse("ACTION: move, off, only_uni, only_veip or auto");
     return HttpResponse.json({ id: "service_rule", ok: true });
   }),
