@@ -874,8 +874,9 @@ The ten steps of ``rtl9602c_serdes_init()``, in order:
 5. Clear ``RTL9602C_SERDES_FIBER_CTRL_PDOWN`` (bit 11 of
    ``RTL9602C_SERDES_FIBER_CTRL``, ``0x021c00``). Purpose: take the fibre PHY
    out of power-down. (T)
-6. Set ``RTL9602C_PHY_CTRL_PATCH_DONE`` (bit 0 of ``RTL9602C_PHY_CTRL``,
-   ``0x000110``). Purpose: set the patch-done flag of the fibre PHY. (T)
+6. Set ``RTL9602C_GPHY_CTRL_PATCH_DONE`` (bit 0 of ``RTL9602C_GPHY_CTRL``,
+   ``0x000110``), the patch-done flag of the switch's embedded copper PHY,
+   which is not the lane's. Purpose: none established for the lane. (I)
 7. Write ``RTL9602C_SERDES_RESET`` (``0x021500``) three times with
    ``RTL9602C_SERDES_RESET_SEQ``: ``0x10``, ``0x30``, ``0x00``. Purpose: a reset
    pulse for the lane. (T)
@@ -934,7 +935,7 @@ The analog words of step 3, in the order they are written:
      - ``0x0215e4``
      - ``0xfc00``
 
-Three things about the bring-up are assumptions:
+Four things about the bring-up are assumptions:
 
 .. list-table::
    :header-rows: 1
@@ -958,11 +959,20 @@ Three things about the bring-up are assumptions:
        parks the lane first.
    * - Whether steps 5 and 6 are needed is not known: after the boot loader,
        ``RTL9602C_SERDES_FIBER_CTRL`` already reads ``0x1140`` (power-down
-       clear) and ``RTL9602C_PHY_CTRL`` reads ``0x1`` (``PATCH_DONE`` set), so
+       clear) and ``RTL9602C_GPHY_CTRL`` reads ``0x1`` (``PATCH_DONE`` set), so
        on this board both writes change nothing.
      - I
      - Omit each and bring the lane up after a full chip reset with a boot
        loader that does not configure the SerDes. Not load-bearing.
+   * - ``RTL9602C_GPHY_CTRL`` belongs to the switch's embedded copper PHY,
+       taken to be the PHY of port 1, which this board does not wire, and not
+       to the SerDes lane or the fibre PHY of step 5. ``PATCH_DONE`` is taken
+       to tell that PHY that its set-up is complete, so that it starts; the
+       lane is not expected to depend on it.
+     - I
+     - Not load-bearing. A board image whose bring-up clears the bit instead
+       of setting it, with the lane in each mode: the lane should still link
+       and carry traffic both ways.
 
 In-band auto-negotiation
 ------------------------
@@ -1935,7 +1945,8 @@ the boot loader's environment.
        on: ``RTL9602C_SERDES_CTRL`` read ``0x0004801f`` (lane parked) after one
        boot and ``0x00260016`` (2500BaseX, ``LINK_UP``) after another. The rest
        of the inherited state is in the rows for the port force words, the
-       fibre PHY control and ``PATCH_DONE``, ``RTL9602C_CPUTAG_CTRL``, the
+       fibre PHY control and the copper PHY's ``PATCH_DONE``,
+       ``RTL9602C_CPUTAG_CTRL``, the
        frame length limit, the pending and link detail words of the interrupt
        block and the header-capture latch (*acl-qos*).
      - M
@@ -2222,9 +2233,11 @@ Questions the code does not depend on
      - Skipping steps 1 and 2 of the bring-up with step 9 in place and watching
        ``RTL9602C_SERDES_CTRL_LINK_UP``.
    * - Whether steps 5 and 6 of the bring-up, the fibre PHY out of power-down
-       and ``PATCH_DONE``, are needed ("Bring-up").
+       and the embedded copper PHY's ``PATCH_DONE``, are needed, and whether
+       the lane depends on the copper PHY's bit at all ("Bring-up").
      - Omitting each and bringing the lane up after a full chip reset with a
-       boot loader that does not configure the SerDes.
+       boot loader that does not configure the SerDes; a bring-up that clears
+       ``PATCH_DONE`` instead of setting it.
    * - Whether ``RTL9602C_CPUTAG_CTRL_PARSE`` is needed ("The CPU tag, switch
        side"). Setup always sets it.
      - Clearing the bit and repeating the measurement of the port mask of

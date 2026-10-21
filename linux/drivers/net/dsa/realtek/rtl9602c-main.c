@@ -496,12 +496,13 @@ void rtl9602c_serdes_init(struct rtl9602c_priv *p, u32 sds_mode)
 		     sds_mode);
 
 	/*
-	 * Take the fibre PHY out of power-down and set PATCH_DONE. After the
-	 * bootloader both already read so on this board; whether either
-	 * write is needed is not verified.
+	 * Take the fibre PHY out of power-down, and set PATCH_DONE of the
+	 * embedded copper PHY, which is not the lane's. After the bootloader
+	 * both already read so on this board; whether either write is needed
+	 * is not verified.
 	 */
 	rtl9602c_rmw(p, RTL9602C_SERDES_FIBER_CTRL, RTL9602C_SERDES_FIBER_CTRL_PDOWN, 0);
-	rtl9602c_rmw(p, RTL9602C_PHY_CTRL, 0, RTL9602C_PHY_CTRL_PATCH_DONE);
+	rtl9602c_rmw(p, RTL9602C_GPHY_CTRL, 0, RTL9602C_GPHY_CTRL_PATCH_DONE);
 
 	/* A reset pulse for the lane. */
 	for (i = 0; i < ARRAY_SIZE(rst); i++)

@@ -89,16 +89,23 @@
 }
 
 /*
- * The fibre PHY's power-down and PATCH_DONE: the bootloader leaves both as
- * the bring-up writes them, and whether either write is needed is not
- * verified. RESET_SEQ, written in turn, pulses the lane's reset.
+ * The fibre PHY's power-down: the bootloader leaves it as the bring-up writes
+ * it, and whether the write is needed is not verified. RESET_SEQ, written in
+ * turn, pulses the lane's reset.
  */
 #define RTL9602C_SERDES_FIBER_CTRL		0x021c00
 #define RTL9602C_SERDES_FIBER_CTRL_PDOWN		BIT(11)
-#define RTL9602C_PHY_CTRL		0x000110
-#define RTL9602C_PHY_CTRL_PATCH_DONE	BIT(0)
 #define RTL9602C_SERDES_RESET		0x021500
 #define RTL9602C_SERDES_RESET_SEQ		{ 0x10, 0x30, 0x00 }
+
+/*
+ * A word of the switch's embedded copper PHY, taken to be port 1's, which
+ * this board does not wire; it is no part of the SerDes lane. PATCH_DONE is
+ * taken to tell that PHY its set-up is complete. The bootloader leaves it
+ * set, and whether the lane's bring-up needs it is not verified.
+ */
+#define RTL9602C_GPHY_CTRL		0x000110
+#define RTL9602C_GPHY_CTRL_PATCH_DONE	BIT(0)
 
 /*
  * In-band auto-negotiation (IEEE 802.3 clause 37), one bit per SerDes lane in
