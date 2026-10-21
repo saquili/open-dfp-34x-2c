@@ -379,6 +379,26 @@ hands it to a new PPPoE connection of the stick's own; otherwise the
 router behind the stick needs it from the operator. The stick has no
 phone socket that takes a wire.
 
+Television
+==========
+
+Under Operator, Television the panel shows the channels watched now, with
+who watches them and the stream's rate, the channels the operator's rules
+refused and why, the streams that stopped, and the latest events. The card
+"The operator's rules" shows what the OLT allows.
+
+A set-top box asks for a channel with IGMP, and the operator's rules may take
+those messages at one priority alone. Where the OLT leaves the priority to
+the box, the stick gives the messages the one the rules take, so the router
+behind the stick needs no IGMP priority of its own: the card "IGMP priority"
+says who gives it. Turn "The stick gives the priority" off to keep the
+router's own; the card then counts the messages lost for a priority the
+rules do not take.
+
+"Test a channel" joins a channel from the stick itself, in the VLAN a box
+would use, for ten seconds, and says when the stream came and at what rate,
+with no box at hand. The stream does not reach the router during the test.
+
 Updating to a newer release
 ===========================
 
