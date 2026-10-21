@@ -142,7 +142,7 @@ static void done_reply(struct mg_connection *c, enum keys_kind kind, const char 
 	} else if (kind == K_ADD && key) {
 		pv_comma(&b);
 		pv_key(&b, "key");
-		ssh_key_json(&b, key + 4);
+		ssh_key_json(&b, key + 4, "panel");
 	} else if (kind == K_TLS) {
 		pv_comma(&b);
 		pv_key(&b, "tls");

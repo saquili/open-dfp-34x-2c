@@ -204,6 +204,7 @@ case "$1 ${2:-}" in
 	[ -e "$D/fail" ] && exit 1
 	[ -e "$D/nohost" ] || printf 'TYPE=ssh-ed25519\nFINGERPRINT=SHA256:host\n'
 	printf 'ONLY=1\nKEY=ssh-ed25519 256 SHA256:one me@laptop\nKEY=garbled\n'
+	printf 'IMAGE=ecdsa-sha2-nistp256 256 SHA256:bench bench@lab\nIMAGE=unknown 0 -\n'
 	;;
 "ssh new")
 	printf 'TYPE=ssh-ed25519\nFINGERPRINT=SHA256:new\n'
@@ -368,9 +369,17 @@ def servers_keys(pond, workdir, certs):
         check(status == 200 and v.get("host_key") == {"type": "ssh-ed25519", "fingerprint": "SHA256:host"}
               and v.get("keys_only") is True and v.get("keys_max") == 8
               and v.get("keys", [{}])[0] == {"type": "ssh-ed25519", "bits": 256,
-                                              "fingerprint": "SHA256:one", "comment": "me@laptop"}
+                                              "fingerprint": "SHA256:one", "comment": "me@laptop",
+                                              "source": "panel"}
               and v["keys"][1]["type"] == "garbled" and v["keys"][1]["comment"] == "",
               "the host key, the keys and keys alone, as onu-config says them")
+        check(len(v.get("keys", [])) == 4
+              and v["keys"][2] == {"type": "ecdsa-sha2-nistp256", "bits": 256,
+                                   "fingerprint": "SHA256:bench", "comment": "bench@lab",
+                                   "source": "image"}
+              and v["keys"][3] == {"type": "unknown", "bits": 0, "fingerprint": "-",
+                                   "comment": "", "source": "image"},
+              "the image's keys after them, of the source image, one the panel cannot read too")
         write(os.path.join(d, "nohost"), "")
         status, ssh = ask("GET", "/api/get/ssh", headers=auth)
         check(status == 200 and ssh["value"]["host_key"] is None, "no host key: null")
@@ -388,7 +397,7 @@ def servers_keys(pond, workdir, certs):
         status, body = ask("POST", "/api/ssh/keys", "ssh-ed25519 AAAA me@desk\n")
         check(status == 200 and body.get("key") == {"type": "ssh-ed25519", "bits": 256,
                                                     "fingerprint": "SHA256:two",
-                                                    "comment": "me@desk"},
+                                                    "comment": "me@desk", "source": "panel"},
               "a key added, said back")
         check("ssh-keys add" in read(os.path.join(d, "calls")) and "admin" not in read(os.path.join(d, "calls")),
               "onu-config ssh-keys add, the password never among its arguments")

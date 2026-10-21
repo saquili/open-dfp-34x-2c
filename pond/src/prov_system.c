@@ -497,7 +497,7 @@ int prov_clock(struct prov_buf *out)
 	return 0;
 }
 
-void ssh_key_json(struct prov_buf *out, const char *line)
+void ssh_key_json(struct prov_buf *out, const char *line, const char *source)
 {
 	char type[40] = "", fp[64] = "";
 	unsigned int bits = 0;
@@ -518,6 +518,9 @@ void ssh_key_json(struct prov_buf *out, const char *line)
 	pv_comma(out);
 	pv_key(out, "comment");
 	pv_strn(out, line + at, strcspn(line + at, "\r\n"));
+	pv_comma(out);
+	pv_key(out, "source");
+	pv_str(out, source);
 	pv_close(out, '}');
 }
 
@@ -552,13 +555,17 @@ int prov_ssh(struct prov_buf *out)
 	pv_comma(out);
 	pv_key(out, "keys");
 	pv_open(out, '[');
+	/* The store's, which the panel changes, then the image's, which it shows. */
 	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
-		if (strncmp(p, "KEY=", 4))
+		const char *source = !strncmp(p, "KEY=", 4) ? "panel" :
+				     !strncmp(p, "IMAGE=", 6) ? "image" : NULL;
+
+		if (!source)
 			continue;
 		if (!first)
 			pv_comma(out);
 		first = false;
-		ssh_key_json(out, p + 4);
+		ssh_key_json(out, strchr(p, '=') + 1, source);
 	}
 	pv_close(out, ']');
 	pv_close(out, '}');

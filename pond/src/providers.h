@@ -42,7 +42,11 @@ int prov_tls(struct prov_buf *out);
  * with and whether the server takes them alone, as onu-config ssh show says,
  * through onu-act (the method ssh_state), which alone reads them; and
  * SSH_KEYS_MAX, the most keys onu-config keeps (SSHKEY_MAX of
- * onu-utils/src/sshkey.h). Its answer is at most SSH_STATE_MAX bytes.
+ * onu-utils/src/sshkey.h). The keys are those of the store, which the panel
+ * changes, of the source "panel", and those of the image, which the server
+ * takes too and nothing on the stick changes, of the source "image", which
+ * do not count towards SSH_KEYS_MAX. Its answer is at most SSH_STATE_MAX
+ * bytes.
  */
 #define SSH_KEYS_MAX 8
 #define SSH_STATE_MAX 8192
@@ -50,9 +54,10 @@ int prov_ssh(struct prov_buf *out);
 
 /*
  * A key of onu-config ssh-keys, the line "TYPE BITS FINGERPRINT COMMENT"
- * after its "KEY=", as {"type", "bits", "fingerprint", "comment"}.
+ * after its "KEY=" or "IMAGE=", as {"type", "bits", "fingerprint",
+ * "comment", "source"}, @source "panel" or "image".
  */
-void ssh_key_json(struct prov_buf *out, const char *line);
+void ssh_key_json(struct prov_buf *out, const char *line, const char *source);
 int prov_image(struct prov_buf *out);
 int prov_kernel(struct prov_buf *out);
 int prov_log(struct prov_buf *out);

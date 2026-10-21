@@ -261,9 +261,10 @@ in force, and the answer comes when it has ended:
     takes the new one.
 ``POST /api/ssh/keys``, the body a public key, one line ``TYPE BASE64 [COMMENT]``
     The key added. ``{"ok": true, "key": {"type", "bits", "fingerprint",
-    "comment"}}``. onu-config takes ed25519, ECDSA of nistp256, nistp384 and
-    nistp521 and RSA of 2048 to 4096 bits, eight keys at most, and says why
-    not: a type, a size, a key kept already, a ninth, a store with no room.
+    "comment", "source"}}``, the source ``panel``. onu-config takes ed25519,
+    ECDSA of nistp256, nistp384 and nistp521 and RSA of 2048 to 4096 bits,
+    eight keys at most, and says why not: a type, a size, a key kept already,
+    a ninth, a store with no room.
 ``POST /api/ssh/keys/remove``, the body a key's fingerprint
     The key removed; refused for the last key while the server takes keys
     alone. ``{"ok": true}``.
@@ -463,10 +464,14 @@ alternative names), and, for each address it serves over HTTPS, the port, the
 certificate's SHA-256 as browsers show it, the start and end of its validity
 and whether it names the address (``named``, always for the daemon's own);
 ``ssh``, the ssh server's host key (its type and fingerprint, or null), the
-public keys root logs in with (``keys``: type, bits, fingerprint and
-comment), whether it takes them alone (``keys_only``) and how many it may
-keep (``keys_max``), as ``onu-config ssh show`` says them through onu-act,
-which alone reads them; ``clock``, the time
+public keys root logs in with (``keys``: type, bits, fingerprint, comment and
+``source``, ``panel`` for those of the store, which the routes below change,
+``image`` for those of the image's ``/root/.ssh/authorized_keys``, which the
+server takes too and nothing on the stick changes, the type ``unknown`` for
+a line of that file the store would not take), whether it takes them alone
+(``keys_only``) and how many of the store's it may keep (``keys_max``), as
+``onu-config ssh show`` says them through onu-act, which alone reads them;
+``clock``, the time
 the stick's clock reads and what timed says of it in ``/run/timed/state``
 (``timed/README.rst``): the source in use, ``ptp``, ``ntp``, ``olt`` or
 ``none``, the state (``locked``, ``syncing``, ``set``, ``holdover`` or
