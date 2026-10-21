@@ -144,9 +144,13 @@ frames, by hand, 2026-10-20). The search did not find a host at 1000BASE-X
 without negotiation then: its third setting ran with the negotiation of the
 second. With the lane re-latched after every setting it still did not, as
 that setting takes 8.1 to 8.7 s to synchronise with such a host and the search
-gave it one second (M, 2026-10-21). The driver now gives it twelve, which is
-not measured yet (``linux/Documentation/networking/dsa/rtl9602c.rst``,
-"phylink and the lane").
+gave it one second (M, 2026-10-21). The driver now gives it twelve checks, and
+the search found such a host 10.4 and 11.3 s after the host's change. The
+twelve checks lie on the way from either 1000BASE-X setting to 2500BASE-X, so
+a host taken back to 2500BASE-X is found 12.7 to 14.1 s after its change,
+against about 1 to 6 s before (M: a RAM image on a lab OLT, the host's carrier
+sampled every 0.2 s, 2026-10-21;
+``linux/Documentation/networking/dsa/rtl9602c.rst``, "phylink and the lane").
 
 Two things on the host's side matter to whoever tests the lane (M, a Linux
 host, 2026-10-20):
@@ -165,7 +169,9 @@ For a developer it is the way in and out of the board. The host sends images to
 the boot loader over it, reaches the running board over it, and sends the test
 traffic over it. The boot loader runs the lane at 2500BASE-X only, so the bench
 needs a cage that links at 2500BASE-X; once Linux runs, a cage of 1000BASE-X
-works too, one without in-band negotiation once ``sfp_lane`` names that mode.
+works too, with or without in-band negotiation. On an image from before the
+twelve checks, the first release among them, one without negotiation needs
+``sfp_lane`` to name that mode.
 
 The boot loader's network interface is the same lane. The boot loader leaves
 the lane switched off, so a transfer at its prompt works only after the lane

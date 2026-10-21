@@ -87,8 +87,9 @@ tried; the rest is read from the kernel's source. Of the lane's modes, this
 system finds 2500BASE-X by itself, and 1000BASE-X with auto-negotiation;
 1000BASE-X without auto-negotiation, and 2500BASE-X with it, it runs when the
 panel's SFP page sets them, and each of the four linked with a host in the
-same mode (2026-10-20). Finding 1000BASE-X without auto-negotiation by itself
-is not measured yet (step 2).
+same mode (2026-10-20). A fix that came after the first release finds
+1000BASE-X without auto-negotiation by itself too (a test image, 2026-10-21;
+step 2).
 
 In short: on the sticks this system was tested on, the change of byte 65 is
 what lets a Linux host bring the 2.5 Gb/s link up every time, and keep it up
@@ -128,12 +129,13 @@ without auto-negotiation it stayed up (``updating.rst``, "From the shipped
 firmware's web page"). If the router lets you set the port's mode, set it to
 1000BASE-X without auto-negotiation for this step. This system finds
 2500BASE-X, and 1000BASE-X with auto-negotiation, by itself; it did not find
-1000BASE-X without auto-negotiation in a test of 2026-10-20, and the fix is
-not measured yet. So once the page has taken the package (step 3), set the
-port back to 2500BASE-X, or to 1000BASE-X with auto-negotiation, before you
-reach the panel (step 4). A Linux host of 6.12 or later takes 2500BASE-X from
-the stick's page ("The host's view of the stick"): there, wait out the
-drops.
+1000BASE-X without auto-negotiation in a test of 2026-10-20. A fix that finds
+it, 10.4 and 11.3 s after the port's change in a test of 2026-10-21, came
+after the first release. So with the first release, once the page has taken
+the package (step 3), set the port back to 2500BASE-X, or to 1000BASE-X with
+auto-negotiation, before you reach the panel (step 4). A Linux host of 6.12
+or later takes 2500BASE-X from the stick's page ("The host's view of the
+stick"): there, wait out the drops.
 
 Open ``192.168.1.1`` in a browser and sign in to the shipped firmware's page
 with its administrator's account. If it does not answer, wait a minute and
