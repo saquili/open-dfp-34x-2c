@@ -108,7 +108,7 @@ setup
 mkdir -p "$ONU_ROOT/run/pond"
 echo 0123 >"$ONU_ROOT/run/pond/tls.key"
 run pond
-check 'logged "pond -u pond -l https://198.51.100.2:443 -l http://198.51.100.2:80 -l https://192.0.2.2:443 -l http://192.0.2.2:80 -k $ONU_ROOT/run/pond/tls.key -t $ONU_ROOT/run/pond/token"'
+check 'logged "pond -u pond -l https://198.51.100.2:443 -l http://198.51.100.2:80 -l https://192.0.2.2:443 -l http://192.0.2.2:80 -k $ONU_ROOT/run/pond/tls.key -c $ONU_ROOT/run/pond/tls.own -t $ONU_ROOT/run/pond/token"'
 check '! grep -q "no key for HTTPS" "$ONU_ROOT/run/pond/log"'
 teardown
 

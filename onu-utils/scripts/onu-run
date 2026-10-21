@@ -12,7 +12,9 @@
 #                   management address and on the host link's, if any
 #   onu-run pond    the status daemon and its panel, on the same, over HTTPS
 #                   on port 443 with the key of /run/pond/tls.key, the boot
-#                   script's copy of onu-config's, and on port 80 to send
+#                   script's copy of onu-config's, or the own certificate of
+#                   /run/pond/tls.own while onu-config keeps one (onu-config
+#                   tls own), and on port 80 to send
 #                   browsers there; without the key, over HTTP on port 80.
 #                   It runs as the account pond that procd starts it as (ADR
 #                   0011), which may listen on these ports as the boot script
@@ -217,10 +219,12 @@ pond)
 	token=$RUN/pond/token
 	# Started as root, the daemon runs as the account pond, with the one
 	# power to listen on ports 80 and 443 (pond -u).
+	# An own certificate, when onu-config tls install handed one over,
+	# takes the place of those the daemon makes from the key (pond -c).
 	if [ -r "$RUN/pond/tls.key" ]; then
 		exec pond -u pond -l "https://$mgmt:443" -l "http://$mgmt:80" \
 			${data:+-l "https://$data:443" -l "http://$data:80"} \
-			-k "$RUN/pond/tls.key" -t "$token" >>"$log" 2>&1
+			-k "$RUN/pond/tls.key" -c "$RUN/pond/tls.own" -t "$token" >>"$log" 2>&1
 	fi
 	echo "onu-run: no key for HTTPS: the panel over HTTP" >>"$log"
 	exec pond -u pond -l "http://$mgmt:80" ${data:+-l "http://$data:80"} \

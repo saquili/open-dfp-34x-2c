@@ -882,7 +882,9 @@ by its whole path where procd starts it.
    listens on the new one, the ssh server with the public keys of
    ``/run/dropbear/authorized_keys`` (its ``-D``) and without passwords
    (``-s``) while the default password is in force, none is known, or
-   ``/run/dropbear/keys-only`` is there (``onu-config ssh-keys``); omcid, in the mode ``onu-apply`` last gave it
+   ``/run/dropbear/keys-only`` is there (``onu-config ssh-keys``), and the
+   status daemon with the panel's key and the own certificate of
+   ``/run/pond/tls.own``, when there is one (``pond -c``); omcid, in the mode ``onu-apply`` last gave it
    (``/run/omcid.mode``), so that one started again after a crash comes up in
    the mode the stick is in; ``timed``, which sets the clock and keeps it, by
    NTP from ``NTP_SERVER`` of ``/run/onu-system`` or, without one, from the
