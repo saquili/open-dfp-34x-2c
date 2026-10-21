@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The keys of the stick's two servers, changed from the panel:
+ * The keys of the stick's two servers, and the token of scripts, changed
+ * from the panel:
  *
  *   POST /api/ssh/host-key     a new host key for the ssh server
  *   POST /api/ssh/keys         the public key of the body, for root's login
@@ -14,10 +15,14 @@
  *   POST /api/tls/certificate  an own certificate, {"certificate", "key"},
  *                              each in PEM, served in place of those
  *   POST /api/tls/self-signed  back to the certificates of the panel's key
+ *   POST /api/token/new        a new token of scripts, in place of the one
+ *                              in force, in the answer once, as "token"
+ *   POST /api/token/off        no token of scripts
  *
  * Each needs root's password in X-Pond-Password as well as a session or the
- * token: a key to log in with gives root, and the servers' keys are what a
- * person checks a connection by. onu-act has onu-config do the change (the
+ * token: a key to log in with gives root, the servers' keys are what a
+ * person checks a connection by, and the token signs a script in as a
+ * session does. onu-act has onu-config do the change (the
  * methods of onu-utils/src/act.c), which checks the password again and keeps
  * the change in the configuration store; pond does not wait for it, and
  * answers when it has ended (later.h). An own certificate is checked here
@@ -52,7 +57,7 @@
 /* The most a body takes: a chain of 8 KiB in PEM, its key and their JSON. */
 #define KEYS_BODY_MAX (32u * 1024u)
 
-enum keys_kind { K_HOST, K_ADD, K_REMOVE, K_ONLY, K_TLS };
+enum keys_kind { K_HOST, K_ADD, K_REMOVE, K_ONLY, K_TLS, K_TOKEN_NEW, K_TOKEN_OFF };
 
 static const struct {
 	const char *path;
@@ -66,7 +71,12 @@ static const struct {
 	{ "/api/tls/key", "tls_key_new", K_TLS },
 	{ "/api/tls/certificate", "tls_own_store", K_TLS },
 	{ "/api/tls/self-signed", "tls_own_remove", K_TLS },
+	{ "/api/token/new", "token_new", K_TOKEN_NEW },
+	{ "/api/token/off", "token_off", K_TOKEN_OFF },
 };
+
+/* The token of scripts: 64 hexadecimal digits (onu-config token). */
+#define TOKEN_LEN 64
 
 /* A change under way: the connection that asked, by its id, and of what. */
 struct pending {
@@ -117,12 +127,37 @@ static void failed(struct mg_connection *c, int code, const char *said)
 	       code != -EACCES ? (code < 0 ? "not done" : "refused") : "wrong password", why);
 }
 
+/* @s of @n bytes, all of them of @chars. */
+static bool all_of(const char *s, size_t n, const char *chars)
+{
+	for (size_t i = 0; i < n; i++)
+		if (!s[i] || !strchr(chars, s[i]))
+			return false;
+	return true;
+}
+
+/*
+ * The token onu-config token new printed in @said, among its complaints, a
+ * line of TOKEN_LEN hexadecimal digits, into @out: whether there is one.
+ */
+static bool token_of(const char *said, char out[TOKEN_LEN + 1])
+{
+	for (const char *p = said; *p; p += strcspn(p, "\n"), p += *p == '\n') {
+		if (strcspn(p, "\r\n") == TOKEN_LEN && all_of(p, TOKEN_LEN, "0123456789abcdef")) {
+			memcpy(out, p, TOKEN_LEN);
+			out[TOKEN_LEN] = '\0';
+			return true;
+		}
+	}
+	return false;
+}
+
 /* The answer to a change that ended well: what it made. */
 static void done_reply(struct mg_connection *c, enum keys_kind kind, const char *said)
 {
 	static char body[8192];
 	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
-	char type[64] = "", fp[64] = "";
+	char type[64] = "", fp[64] = "", token[TOKEN_LEN + 1] = "";
 	const char *key = strstr(said, "KEY=");
 
 	pv_open(&b, '{');
@@ -147,9 +182,16 @@ static void done_reply(struct mg_connection *c, enum keys_kind kind, const char 
 		pv_comma(&b);
 		pv_key(&b, "tls");
 		prov_tls(&b);
+	} else if (kind == K_TOKEN_NEW && token_of(said, token)) {
+		pv_comma(&b);
+		pv_key(&b, "token");
+		pv_str(&b, token);
 	}
 	pv_close(&b, '}');
 	reply(c, 200, b.overflow ? "{\"ok\":true}" : body);
+	/* The token goes in the answer once, and stays nowhere of the daemon's. */
+	explicit_bzero(token, sizeof(token));
+	explicit_bzero(body, sizeof(body));
 }
 
 static void ended(void *ctx, int code, const char *said)
@@ -167,15 +209,6 @@ static void ended(void *ctx, int code, const char *said)
 	else if (c)
 		done_reply(c, p->kind, said);
 	free(p);
-}
-
-/* @s of @n bytes, all of them of @chars. */
-static bool all_of(const char *s, size_t n, const char *chars)
-{
-	for (size_t i = 0; i < n; i++)
-		if (!s[i] || !strchr(chars, s[i]))
-			return false;
-	return true;
 }
 
 /*

@@ -12,6 +12,7 @@
  *   /api/auth/sessions the sessions open, without their ids
  *   /api/auth/sessions/others  a POST, with root's password: end all but
  *                      the one that asks
+ *   /api/token         whether a token of scripts is in force
  *   /api/schema        the list of values
  *   /api/get/ID        one value; ?since=N from a point on, for a log
  *   /api/getm?ids=A,B  several values at once, slow ones left out
@@ -28,7 +29,7 @@
  *   /api/ssh/...           POSTs: the ssh server's host key, the keys root
  *                          logs in with, and whether it takes them alone
  *   /api/tls/...           POSTs: the panel's key and an own certificate
- *                          (keys.c)
+ *   /api/token/new, /off   POSTs: a new token of scripts, or none (keys.c)
  *
  * Over HTTPS (tls.h), a request that comes over HTTP is sent on to the same
  * path over HTTPS, but for /api/health. Every other route of /api needs a
@@ -556,6 +557,13 @@ static void api_end_others(struct mg_connection *c, struct mg_http_message *hm,
 	reply_json(c, 200, body);
 }
 
+/* Whether a token of scripts is in force; never the token. */
+static void api_token(struct mg_connection *c)
+{
+	load_token();
+	reply_json(c, 200, g_token[0] ? "{\"set\":true}" : "{\"set\":false}");
+}
+
 /* Restart the stick a moment after the reply has gone. */
 static void api_restart(struct mg_connection *c)
 {
@@ -743,6 +751,10 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 			api_end_others(c, hm, sid);
 		else
 			reply_err(c, 405, "use POST", "end the other sessions with a POST");
+		return;
+	}
+	if (mg_match(hm->uri, mg_str("/api/token"), NULL)) {
+		api_token(c);
 		return;
 	}
 	/* The servers' keys: answered now, or once onu-act has done the change. */

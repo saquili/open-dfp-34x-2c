@@ -161,7 +161,7 @@ def main():
     downloads(pond, os.path.dirname(key), token)
     own_file(pond, os.path.dirname(key), sys.argv[3])
     servers_keys(pond, os.path.dirname(key), sys.argv[3])
-    sessions(pond)
+    sessions_and_token(pond, os.path.dirname(key))
 
 
 # A second scalar of P-256, for a new key of the panel.
@@ -207,6 +207,19 @@ case "$1 ${2:-}" in
 	printf 'ONLY=1\nKEY=ssh-ed25519 256 SHA256:one me@laptop\nKEY=garbled\n'
 	printf 'IMAGE=ecdsa-sha2-nistp256 256 SHA256:bench bench@lab\nIMAGE=unknown 0 -\n'
 	;;
+"token new")
+	if [ -e "$D/fail" ]; then
+		echo "onu-config: the token of scripts is not kept: the store refused it" >&2
+		exit 1
+	fi
+	echo "onu-config: the token of scripts is not kept: no store" >&2
+	[ -e "$D/silent" ] && exit 0
+	echo @NEW_TOKEN@ >"@TOKEN_FILE@"
+	echo @NEW_TOKEN@
+	;;
+"token off")
+	rm -f "@TOKEN_FILE@"
+	;;
 "ssh new")
 	printf 'TYPE=ssh-ed25519\nFINGERPRINT=SHA256:new\n'
 	;;
@@ -229,6 +242,19 @@ case "$1 ${2:-}" in
 	;;
 esac
 """
+
+
+# The token of scripts the stand-in makes, and the file of -t it writes it
+# to, as onu-config token install does, under POND_ROOT.
+NEW_TOKEN = "f" * 64
+TOKEN_FILE = "/sessions-token"
+
+
+def stub_text(d):
+    """The stand-in for onu-config, of the directory @d."""
+    return (STUB.replace("@DIR@", d).replace("@REAL@", os.environ["POND_ONU_CONFIG"])
+            .replace("@NEW_TOKEN@", NEW_TOKEN)
+            .replace("@TOKEN_FILE@", os.environ["POND_ROOT"] + TOKEN_FILE))
 
 
 def read(path):
@@ -328,7 +354,7 @@ def servers_keys(pond, workdir, certs):
     keyf, ownf, stub = os.path.join(d, "tls.key"), os.path.join(d, "tls.own"), os.path.join(d, "stub")
     write(keyf, KEY + "\n")
     write(os.path.join(d, "next.key"), KEY2 + "\n")
-    write(stub, STUB.replace("@DIR@", d).replace("@REAL@", os.environ["POND_ONU_CONFIG"]))
+    write(stub, stub_text(d))
     os.chmod(stub, 0o755)
     env = dict(os.environ, POND_ONU_CONFIG=stub)
     fp = {}
@@ -524,10 +550,18 @@ def servers_keys(pond, workdir, certs):
         log.close()
 
 
-def sessions(pond):
-    """The sessions open, listed without their ids, and the others ended
-    with root's password."""
-    print("the sessions")
+def sessions_and_token(pond, workdir):
+    """The sessions open, listed without their ids, the others ended with
+    root's password; and the token of scripts, whether one is in force, a new
+    one in the answer once, and none."""
+    print("the sessions and the token of scripts")
+    d = os.path.join(workdir, "sessions")
+    os.makedirs(d, exist_ok=True)
+    for name in os.listdir(d):
+        os.unlink(os.path.join(d, name))
+    stub = os.path.join(d, "stub")
+    write(stub, stub_text(d))
+    os.chmod(stub, 0o755)
     root = os.environ["POND_ROOT"]
     os.makedirs(root + "/run", exist_ok=True)
     # A password of root's own, which no session must change first.
@@ -535,7 +569,9 @@ def sessions(pond):
     hashed = subprocess.run(["perl", "-e", "print crypt($ARGV[0], q($5$rounds=1000$teststandinsalt))",
                              secret], capture_output=True, text=True, timeout=10).stdout
     write(root + "/run/onu-auth", hashed + "\n")
-    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}", "-t", "/tls-token"],
+    write(root + TOKEN_FILE, TOKEN + "\n")
+    env = dict(os.environ, POND_ONU_CONFIG=stub)
+    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}", "-t", TOKEN_FILE], env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def ask(method, path, headers, body=None):
@@ -585,10 +621,40 @@ def sessions(pond):
               "the one that asked stays")
         status, _, _ = ask("GET", "/api/auth/sessions/others", first)
         check(status == 405, "ending them is a POST")
+
+        print("  the token of scripts")
+        status, _, body = ask("GET", "/api/token", first)
+        check(status == 200 and body == {"set": True}, "one is in force, and is not shown")
+        status, _, body = ask("POST", "/api/token/new", mine, "")
+        check(status == 403, "a new one needs root's password")
+        status, _, body = ask("POST", "/api/token/new", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 200 and body == {"ok": True, "token": NEW_TOKEN},
+              "a new one, in the answer, out of onu-config's words")
+        status, _, _ = ask("GET", "/api/token", {"Authorization": f"Bearer {TOKEN}"})
+        check(status == 401, "the old one holds no more")
+        status, _, body = ask("GET", "/api/token", {"Authorization": f"Bearer {NEW_TOKEN}"})
+        check(status == 200 and body == {"set": True}, "the new one does")
+        write(os.path.join(d, "fail"), "")
+        status, _, body = ask("POST", "/api/token/new", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 400 and body.get("detail") ==
+              "the token of scripts is not kept: the store refused it",
+              "one the store refuses: the cause, and no token")
+        os.unlink(os.path.join(d, "fail"))
+        write(os.path.join(d, "silent"), "")
+        status, _, body = ask("POST", "/api/token/new", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 200 and body == {"ok": True},
+              "onu-config that printed none: no token in the answer, for the panel to say so")
+        os.unlink(os.path.join(d, "silent"))
+        status, _, body = ask("POST", "/api/token/off", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 200 and body == {"ok": True}, "no token")
+        status, _, body = ask("GET", "/api/token", first)
+        check(status == 200 and body == {"set": False}, "and none is in force")
     finally:
         proc.terminate()
         proc.wait(5)
         os.unlink(root + "/run/onu-auth")
+        if os.path.exists(root + TOKEN_FILE):
+            os.unlink(root + TOKEN_FILE)
 
 
 def downloads(pond, workdir, token):

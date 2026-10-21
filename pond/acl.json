@@ -13,6 +13,7 @@
 			"update_return", "update_backup",
 			"ssh_state", "ssh_host_key_new", "ssh_key_add", "ssh_key_remove",
 			"ssh_keys_only", "tls_key_new", "tls_own_store", "tls_own_remove",
+			"token_new", "token_off",
 			"restart"
 		] },
 		"omcid": { "methods": [ "status", "mib", "frames" ] },

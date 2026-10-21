@@ -36,8 +36,8 @@ What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 0011) rather than run the program itself: the SFP lane, the management pair,
 the confirmation of the changes on trial, the name, the product name, the
 identity and a new registration, the updates' status and trial, the restart,
-the keys of the ssh server and of the panel ("The servers' keys"),
-and the settings of the data path, which pond reads without the accounts'
+the keys of the ssh server and of the panel and the token of scripts ("The
+servers' keys"), and the settings of the data path, which pond reads without the accounts'
 secrets and changes on trial, root's password, which onu-config checks and
 keeps without pond seeing its hash, and the upload and download of an
 update, which stream through a pipe whose other end pond passes to onu-act.
@@ -61,9 +61,9 @@ with (ADR 0009, ADR 0011). ubusd's access list, ``acl.json``, which the image
 installs as ``/usr/share/acl.d/pond.json``, lets it call the methods of
 onu-act it names and read the state of omcid, of netifd's interfaces and of
 dhcp6d, and nothing else; a new password, an update written, a start of
-the other bank and every change of the servers' keys need root's password
-with the call as well (onu-act checks it), so that pond, taken over, cannot
-give itself root, nor a key to log in with; the
+the other bank and every change of the servers' keys and of the token need
+root's password with the call as well (onu-act checks it), so that pond,
+taken over, cannot give itself root, nor a key to log in with, nor a token; the
 boot script gives it a directory of ``/run`` of its own for its log and the
 token of scripts, and its group the two copies of the boot loader's
 environment to read. Every other value it reads, any user may.
@@ -105,8 +105,9 @@ The token of scripts
 --------------------
 
 A script that cannot sign in as a person does may present a bearer token
-instead of a session. The stick has none until root makes one, on the stick
-itself (ssh, the console)::
+instead of a session. The stick has none until root makes one, through
+``/api/token/new`` with root's password, which shows it once, or on the
+stick itself (ssh, the console)::
 
     onu-config token new      # makes a token, keeps it, prints it
     onu-config token          # prints it again
@@ -212,7 +213,9 @@ its sign-in came from, by the stick's clock, ``this`` for the one that asks;
 ``X-Pond-Password`` as the updates take it, ends every one but the one that
 asks, all of them for a request with the token, and answers ``{"ok": true,
 "ended": N}``: whoever holds a session, a browser left open somewhere,
-cannot shut the owner out without the password. ``/api/schema``,
+cannot shut the owner out without the password. ``/api/token`` says whether
+a token of scripts is in force, ``{"set": true}``, never the token.
+``/api/schema``,
 ``/api/get/ID``, ``/api/getm?ids=A,B`` (slow values left out) and ``POST
 /api/set/ID`` read and change values; ``POST /api/system/restart`` restarts the
 stick a second after it answers.
@@ -255,12 +258,13 @@ The servers' keys
 -----------------
 
 The ssh server's host key, the public keys root logs in to it with, whether
-it takes them alone, the panel's key and an own certificate change through
-these routes (``src/keys.c``), each a POST with root's password in
-``X-Pond-Password``, as the updates take it, besides a session or the token:
-a key to log in with gives root, and the servers' keys are what a person
-checks a connection by. onu-act has onu-config do the change (``onu-config
-ssh``, ``ssh-keys`` and ``tls``, of ``onu-utils``), which checks the
+it takes them alone, the panel's key, an own certificate and the token of
+scripts change through these routes (``src/keys.c``), each a POST with
+root's password in ``X-Pond-Password``, as the updates take it, besides a
+session or the token: a key to log in with gives root, the servers' keys are
+what a person checks a connection by, and the token signs a script in.
+onu-act has onu-config do the change (``onu-config ssh``, ``ssh-keys``,
+``tls`` and ``token``, of ``onu-utils``), which checks the
 password again and keeps the change in the configuration store before it is
 in force, and the answer comes when it has ended:
 
@@ -299,6 +303,13 @@ in force, and the answer comes when it has ended:
     it names it, for the panel to warn of.
 ``POST /api/tls/self-signed``, no body
     Back to the certificates of the panel's key.
+``POST /api/token/new``, no body
+    A new token of scripts in place of the one in force, which stops holding
+    at once: ``{"ok": true, "token": "..."}``, the 64 hexadecimal digits
+    onu-config printed, in this answer alone; the daemon keeps no copy of
+    the answer, and no route shows the token again.
+``POST /api/token/off``, no body
+    No token of scripts. ``{"ok": true}``.
 
 The three of ``/api/tls`` answer ``{"ok": true, "tls": ...}``, the value
 ``tls`` as it is once the daemon has read the new files, with the new
@@ -555,8 +566,8 @@ as an authority would, a root, an intermediate and the server's: taken and
 refused (``tests/test_cert.c``), and served by the daemon, through which a
 client that trusts the root alone verifies it by the address, which it
 cannot without the intermediate (``tests/test_tls.py``); the routes of the
-servers' keys run against a stand-in for onu-config, and those of the
-sessions with a password of root's own.
+servers' keys and of the token run against a stand-in for onu-config, and
+those of the sessions with a password of root's own.
 
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,
