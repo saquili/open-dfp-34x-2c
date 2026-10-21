@@ -1170,6 +1170,18 @@ export const pl: Dictionary = {
     pemEncrypted: "Klucz jest zaszyfrowany: podaj go bez hasła.",
     pemRsa: "Klucz RSA: HTTPS panelu przyjmuje tylko klucz ECDSA P-256.",
   },
+  confirm: {
+    password: "Hasło roota",
+    passwordHint: "Idzie tylko z tą zmianą i nie jest zapamiętywane.",
+    empty: "Wpisz hasło roota.",
+    wrong: "Złe hasło: potrzebne jest hasło roota.",
+    locked:
+      "Za dużo złych haseł: wkładka nie przyjmie żadnego przez {seconds} s. Odczekaj i spróbuj ponownie.",
+    noStore:
+      "Wkładka nie może odczytać ustawień, więc nie zna hasła. Zaloguj się na konsoli szeregowej.",
+    failed: "Nie zrobiono: {reason}",
+    cancel: "Anuluj",
+  },
   form: {
     required: "Wymagane",
     vlan: "Liczba od 1 do 4094",

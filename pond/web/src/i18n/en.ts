@@ -1171,6 +1171,17 @@ export const en = {
     pemEncrypted: "The key is encrypted: give it without its passphrase.",
     pemRsa: "An RSA key: the panel's HTTPS takes an ECDSA key of P-256 only.",
   },
+  confirm: {
+    password: "Root password",
+    passwordHint: "It goes with this change alone and is not kept.",
+    empty: "Type root's password.",
+    wrong: "Wrong password: this needs root's password.",
+    locked: "Too many wrong passwords: the stick takes none for {seconds} s. Wait, then try again.",
+    noStore:
+      "The stick cannot read its settings, so no password is known. Sign in on the serial console.",
+    failed: "Not done: {reason}",
+    cancel: "Cancel",
+  },
   form: {
     required: "Required",
     vlan: "A number from 1 to 4094",
