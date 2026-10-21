@@ -22,6 +22,10 @@
  *   /api/firmware/return   a POST: start the shipped firmware from now on,
  *                          by a restart
  *   /api/firmware/backup   the whole flash (firmware.c)
+ *   /api/ssh/...           POSTs: the ssh server's host key, the keys root
+ *                          logs in with, and whether it takes them alone
+ *   /api/tls/...           POSTs: the panel's key and an own certificate
+ *                          (keys.c)
  *
  * Over HTTPS (tls.h), a request that comes over HTTP is sent on to the same
  * path over HTTPS, but for /api/health. Every other route of /api needs a
@@ -37,6 +41,7 @@
 #include "bus.h"
 #include "changes.h"
 #include "firmware.h"
+#include "keys.h"
 #include "later.h"
 #include "mgmt.h"
 #include "prov.h"
@@ -658,6 +663,9 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		reply_err(c, 403, "must_change", "set a password of your own first");
 		return;
 	}
+	/* The servers' keys: answered now, or once onu-act has done the change. */
+	if (keys_route(c, hm))
+		return;
 
 	if (mg_match(hm->uri, mg_str("/api/system/restart"), NULL)) {
 		if (post)

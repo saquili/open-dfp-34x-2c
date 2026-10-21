@@ -496,3 +496,71 @@ int prov_clock(struct prov_buf *out)
 	pv_close(out, '}');
 	return 0;
 }
+
+void ssh_key_json(struct prov_buf *out, const char *line)
+{
+	char type[40] = "", fp[64] = "";
+	unsigned int bits = 0;
+	int at = 0;
+
+	/* TYPE BITS FINGERPRINT COMMENT, the comment to the line's end. */
+	if (sscanf(line, "%39s %u %63s %n", type, &bits, fp, &at) < 3)
+		at = (int)strlen(line);
+	pv_open(out, '{');
+	pv_key(out, "type");
+	pv_str(out, type);
+	pv_comma(out);
+	pv_key(out, "bits");
+	pv_num(out, bits);
+	pv_comma(out);
+	pv_key(out, "fingerprint");
+	pv_str(out, fp);
+	pv_comma(out);
+	pv_key(out, "comment");
+	pv_strn(out, line + at, strcspn(line + at, "\r\n"));
+	pv_close(out, '}');
+}
+
+int prov_ssh(struct prov_buf *out)
+{
+	char text[SSH_STATE_MAX], type[64], fp[64], v[8];
+	bool first = true;
+	int rc = bus_act("ssh_state", NULL, NULL, 0, NULL, text, sizeof(text));
+
+	if (rc)
+		return rc < 0 ? rc : -EIO;
+	pv_open(out, '{');
+	pv_key(out, "host_key");
+	if (line_of(text, "TYPE", type, sizeof(type)) &&
+	    line_of(text, "FINGERPRINT", fp, sizeof(fp))) {
+		pv_open(out, '{');
+		pv_key(out, "type");
+		pv_str(out, type);
+		pv_comma(out);
+		pv_key(out, "fingerprint");
+		pv_str(out, fp);
+		pv_close(out, '}');
+	} else {
+		pv_null(out);
+	}
+	pv_comma(out);
+	pv_key(out, "keys_only");
+	pv_bool(out, line_of(text, "ONLY", v, sizeof(v)) && !strcmp(v, "1"));
+	pv_comma(out);
+	pv_key(out, "keys_max");
+	pv_num(out, SSH_KEYS_MAX);
+	pv_comma(out);
+	pv_key(out, "keys");
+	pv_open(out, '[');
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		if (strncmp(p, "KEY=", 4))
+			continue;
+		if (!first)
+			pv_comma(out);
+		first = false;
+		ssh_key_json(out, p + 4);
+	}
+	pv_close(out, ']');
+	pv_close(out, '}');
+	return 0;
+}

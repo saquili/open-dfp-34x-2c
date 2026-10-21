@@ -36,6 +36,7 @@ What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 0011) rather than run the program itself: the SFP lane, the management pair,
 the confirmation of the changes on trial, the name, the product name, the
 identity and a new registration, the updates' status and trial, the restart,
+the keys of the ssh server and of the panel ("The servers' keys"),
 and the settings of the data path, which pond reads without the accounts'
 secrets and changes on trial, root's password, which onu-config checks and
 keeps without pond seeing its hash, and the upload and download of an
@@ -59,9 +60,10 @@ or a shell, which no one logs in with, started as root with ``-u pond``; root st
 with (ADR 0009, ADR 0011). ubusd's access list, ``acl.json``, which the image
 installs as ``/usr/share/acl.d/pond.json``, lets it call the methods of
 onu-act it names and read the state of omcid, of netifd's interfaces and of
-dhcp6d, and nothing else; a new password, an update written and a start of
-the other bank need root's password with the call as well (onu-act checks
-it), so that pond, taken over, cannot give itself root; the
+dhcp6d, and nothing else; a new password, an update written, a start of
+the other bank and every change of the servers' keys need root's password
+with the call as well (onu-act checks it), so that pond, taken over, cannot
+give itself root, nor a key to log in with; the
 boot script gives it a directory of ``/run`` of its own for its log and the
 token of scripts, and its group the two copies of the boot loader's
 environment to read. Every other value it reads, any user may.
@@ -176,6 +178,13 @@ is not its certificate's is said in the log and left out; so is a file that
 is not one. ``-F`` prints the own certificate's fingerprint while there is
 one.
 
+The key and the own certificate change while the daemon runs (``/api/tls``,
+below): once onu-config has written the files, the daemon reads them again,
+and the connections from then on get the new certificate; the connection
+that asked keeps the one it has, and its answer, and a browser warns once
+about a certificate it was not shown before, unless it trusts its
+authority.
+
 Mongoose's TLS, of version 7.16, is changed in four places, each marked in
 ``third_party/mongoose/mongoose.c``: ChaCha20 takes the byte order from the
 compiler, as the C library defines ``LITTLE_ENDIAN`` on the big-endian stick
@@ -230,6 +239,61 @@ is named the same way, ``buchos-gpon-flash-<version>.bin`` by default. The
 upload, the start, the way back and the copy need root's password as well as a
 session, in the header ``X-Pond-Password``, percent-encoded: 403 for a wrong
 one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
+
+The servers' keys
+-----------------
+
+The ssh server's host key, the public keys root logs in to it with, whether
+it takes them alone, the panel's key and an own certificate change through
+these routes (``src/keys.c``), each a POST with root's password in
+``X-Pond-Password``, as the updates take it, besides a session or the token:
+a key to log in with gives root, and the servers' keys are what a person
+checks a connection by. onu-act has onu-config do the change (``onu-config
+ssh``, ``ssh-keys`` and ``tls``, of ``onu-utils``), which checks the
+password again and keeps the change in the configuration store before it is
+in force, and the answer comes when it has ended:
+
+``POST /api/ssh/host-key``, no body
+    A new host key; the ssh server starts again with it, and its sessions go
+    on. ``{"ok": true, "host_key": {"type", "fingerprint"}}``, the
+    fingerprint ``SHA256:...`` as an ssh client shows it, which changes, so
+    that a client that knew the old key refuses to go on until its user
+    takes the new one.
+``POST /api/ssh/keys``, the body a public key, one line ``TYPE BASE64 [COMMENT]``
+    The key added. ``{"ok": true, "key": {"type", "bits", "fingerprint",
+    "comment"}}``. onu-config takes ed25519, ECDSA of nistp256, nistp384 and
+    nistp521 and RSA of 2048 to 4096 bits, eight keys at most, and says why
+    not: a type, a size, a key kept already, a ninth, a store with no room.
+``POST /api/ssh/keys/remove``, the body a key's fingerprint
+    The key removed; refused for the last key while the server takes keys
+    alone. ``{"ok": true}``.
+``POST /api/ssh/keys-only``, the body ``on`` or ``off``
+    Whether the ssh server takes keys alone, and no password; refused on
+    while no key is kept. The server starts again when it changes.
+    ``{"ok": true}``.
+``POST /api/tls/key``, no body
+    A new key for the panel, which the daemon makes new certificates from;
+    while an own certificate is in force, they wait behind it.
+``POST /api/tls/certificate``, the body ``{"certificate", "key"}``
+    An own certificate: ``certificate`` the server's certificate and the CA
+    certificates after it, each a PEM block ``BEGIN CERTIFICATE``, the
+    server's first; ``key`` its private key, unencrypted, ``BEGIN EC
+    PRIVATE KEY`` (SEC1) or ``BEGIN PRIVATE KEY`` (PKCS#8). The daemon checks
+    it before anything is kept: the text, the chain of at most eight
+    certificates and 8 KiB, a key of ECDSA P-256, and that the key is the
+    certificate's; it refuses an RSA key, another curve, an encrypted key,
+    and says why. An expired certificate, or one that does not name the
+    address, is taken: ``tls`` shows its end and, for each address, whether
+    it names it, for the panel to warn of.
+``POST /api/tls/self-signed``, no body
+    Back to the certificates of the panel's key.
+
+The three of ``/api/tls`` answer ``{"ok": true, "tls": ...}``, the value
+``tls`` as it is once the daemon has read the new files, with the new
+fingerprints. Each answers 400 with why for a body it does not take or a
+change onu-config refused (its first complaint, the cause), 403 for root's
+password missing or wrong, 409 while the same change runs, 413 for a body of
+more than 32 KiB, 423 and 429 as the updates do.
 
 ``/api/set/ID`` takes ``KEY=VALUE`` lines:
 
@@ -397,7 +461,12 @@ the own certificate or null (its subject and issuer as words, its SHA-256,
 the start and end of its validity, the certificates of its chain and its
 alternative names), and, for each address it serves over HTTPS, the port, the
 certificate's SHA-256 as browsers show it, the start and end of its validity
-and whether it names the address (``named``, always for the daemon's own); ``clock``, the time
+and whether it names the address (``named``, always for the daemon's own);
+``ssh``, the ssh server's host key (its type and fingerprint, or null), the
+public keys root logs in with (``keys``: type, bits, fingerprint and
+comment), whether it takes them alone (``keys_only``) and how many it may
+keep (``keys_max``), as ``onu-config ssh show`` says them through onu-act,
+which alone reads them; ``clock``, the time
 the stick's clock reads and what timed says of it in ``/run/timed/state``
 (``timed/README.rst``): the source in use, ``ptp``, ``ntp``, ``olt`` or
 ``none``, the state (``locked``, ``syncing``, ``set``, ``holdover`` or
@@ -468,7 +537,8 @@ certificate is tested with those ``tests/make-certs.sh`` makes with openssl,
 as an authority would, a root, an intermediate and the server's: taken and
 refused (``tests/test_cert.c``), and served by the daemon, through which a
 client that trusts the root alone verifies it by the address, which it
-cannot without the intermediate (``tests/test_tls.py``).
+cannot without the intermediate (``tests/test_tls.py``); the routes of the
+servers' keys run against a stand-in for onu-config.
 
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,

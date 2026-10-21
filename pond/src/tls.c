@@ -100,6 +100,20 @@ bool tls_on(void)
 	return g_tls;
 }
 
+int tls_reload(void)
+{
+	int rc = g_keyf ? cert_load_key(g_keyf) : 0;
+	const char *why = rc == -EINVAL ? "not a key of P-256" : strerror(-rc);
+
+	if (rc)
+		fprintf(stderr, "pond: the key of %s is not taken: %s\n", g_keyf, why);
+	/* The certificates of the key before go, and are made again as asked. */
+	for (unsigned int i = 0; i < TLS_CACHE; i++)
+		g_cache[i].len = 0;
+	own_load();
+	return rc;
+}
+
 static bool tls_port(unsigned int port)
 {
 	int i;

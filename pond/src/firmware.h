@@ -67,4 +67,13 @@ bool firmware_try(struct mg_connection *c, struct mg_http_message *hm);
 bool firmware_return(struct mg_connection *c, struct mg_http_message *hm);
 void firmware_poll(void);
 
+/*
+ * Root's password of the header X-Pond-Password, percent-encoded, which
+ * the routes of firmware.c and keys.c take as well as a session, checked
+ * into @pw of @cap bytes: true when it is root's; otherwise the refusal (403,
+ * 423 or 429) has been sent. A wrong one counts as a wrong sign-in.
+ */
+bool firmware_confirmed(struct mg_connection *c, struct mg_http_message *hm, char *pw,
+			size_t cap);
+
 #endif

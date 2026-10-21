@@ -205,6 +205,12 @@ static bool confirmed(struct mg_connection *c, struct mg_http_message *hm,
 	return false;
 }
 
+bool firmware_confirmed(struct mg_connection *c, struct mg_http_message *hm, char *pw,
+			size_t cap)
+{
+	return confirmed(c, hm, pw, cap);
+}
+
 void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 {
 	struct mg_str *cl = mg_http_get_header(hm, "Content-Length");

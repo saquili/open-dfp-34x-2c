@@ -160,6 +160,73 @@ def main():
     token_file(pond)
     downloads(pond, os.path.dirname(key), token)
     own_file(pond, os.path.dirname(key), sys.argv[3])
+    servers_keys(pond, os.path.dirname(key), sys.argv[3])
+
+
+# A second scalar of P-256, for a new key of the panel.
+KEY2 = "11" * 32
+
+# The header of root's password, which a change of the servers' keys takes,
+# and root's, the default of the tests' store.
+CONFIRM = "X-Pond-Password"
+ROOT = "admin"
+
+# A stand-in for onu-config, of the keys' verbs, which writes the daemon's
+# files as onu-config does, and says what it was asked; root's password the
+# real one judges.
+STUB = r"""#!/bin/sh
+D=@DIR@
+echo "$*" >>"$D/calls"
+case "$1 ${2:-}" in
+"password-check ")
+	exec @REAL@ "$@"
+	;;
+"tls new")
+	[ -e "$D/slow" ] && sleep 1
+	if [ -e "$D/fail" ]; then
+		echo "onu-config: import TLS_KEY: the store has no room for it, of its 64 KiB" >&2
+		echo "onu-config: the new key is not kept: the store refused it" >&2
+		exit 1
+	fi
+	cat "$D/next.key" >"$D/tls.key"
+	;;
+"tls own")
+	in=$(cat)
+	{
+		printf '%s\n' "$in" | sed -n 's/^KEY=//p'
+		printf '%s\n' "$in" | sed -n 's/^CHAIN=//p'
+	} >"$D/tls.own"
+	;;
+"tls self-signed")
+	rm -f "$D/tls.own"
+	;;
+"ssh show")
+	[ -e "$D/fail" ] && exit 1
+	[ -e "$D/nohost" ] || printf 'TYPE=ssh-ed25519\nFINGERPRINT=SHA256:host\n'
+	printf 'ONLY=1\nKEY=ssh-ed25519 256 SHA256:one me@laptop\nKEY=garbled\n'
+	;;
+"ssh new")
+	printf 'TYPE=ssh-ed25519\nFINGERPRINT=SHA256:new\n'
+	;;
+"ssh-keys add")
+	in=$(cat)
+	case $in in
+	ssh-ed25519*) echo "KEY=ssh-ed25519 256 SHA256:two ${in##* }" ;;
+	*) echo "onu-config: a key of the type ${in%% *}" >&2; exit 1 ;;
+	esac
+	;;
+"ssh-keys remove")
+	[ -e "$D/fail" ] && exit 1
+	cat >>"$D/removed"
+	;;
+"ssh-keys only")
+	echo "$3" >"$D/only"
+	;;
+*)
+	exit 2
+	;;
+esac
+"""
 
 
 def read(path):
@@ -244,6 +311,207 @@ def own_file(pond, workdir, certs):
                   "-F prints the own certificate's fingerprint and end, for the console")
         if what == "no file":
             check("own certificate" not in said, "a file that is not there is nothing to say")
+
+
+def servers_keys(pond, workdir, certs):
+    """The keys of the ssh server and of the panel, changed through onu-config
+    with root's password, what is asked and answered, and what a browser
+    then meets, the new certificate after the answer, the chain of an own
+    certificate whole, and the self-signed ones again."""
+    print("the servers' keys and an own certificate")
+    d = os.path.join(workdir, "keys")
+    os.makedirs(d, exist_ok=True)
+    for name in os.listdir(d):
+        os.unlink(os.path.join(d, name))
+    keyf, ownf, stub = os.path.join(d, "tls.key"), os.path.join(d, "tls.own"), os.path.join(d, "stub")
+    write(keyf, KEY + "\n")
+    write(os.path.join(d, "next.key"), KEY2 + "\n")
+    write(stub, STUB.replace("@DIR@", d).replace("@REAL@", os.environ["POND_ONU_CONFIG"]))
+    os.chmod(stub, 0o755)
+    env = dict(os.environ, POND_ONU_CONFIG=stub)
+    fp = {}
+    for name, k in (("one", KEY), ("two", KEY2)):
+        write(os.path.join(d, name), k + "\n")
+        out = subprocess.run([pond, "-k", os.path.join(d, name), "-F", "127.0.0.1"],
+                             capture_output=True, text=True, timeout=10).stdout.split()
+        fp[name] = out[2]
+    log = open(os.path.join(d, "log"), "w")
+    urls = ["-l", f"https://127.0.0.1:{HTTPS}", "-l", f"http://127.0.0.1:{HTTP}"]
+    proc = subprocess.Popen([pond, *urls, "-k", keyf, "-c", ownf, "-t", "/tls-token"], env=env,
+                            stdout=subprocess.DEVNULL, stderr=log)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    pw = dict(auth, **{CONFIRM: ROOT})
+
+    def ask(method, path, body=None, headers=None, conn=None):
+        c = conn or http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=10)
+        status, _, reply = request(c, method, path, body, headers or pw)
+        if not conn:
+            c.close()
+        try:
+            return status, json.loads(reply)
+        except ValueError:
+            return status, {}
+
+    try:
+        if not started(proc, HTTPS):
+            check(False, "the daemon listens")
+            return
+        status, tls = ask("GET", "/api/get/tls", headers=auth)
+        check(status == 200 and tls["value"]["own"] is None
+              and tls["value"]["certificates"][0]["named"] is True
+              and tls["value"]["certificates"][0]["sha256"] == fp["one"],
+              "no own certificate: the one of the panel's key, which names the address")
+
+        print("  the ssh server")
+        status, ssh = ask("GET", "/api/get/ssh", headers=auth)
+        v = ssh.get("value", {})
+        check(status == 200 and v.get("host_key") == {"type": "ssh-ed25519", "fingerprint": "SHA256:host"}
+              and v.get("keys_only") is True and v.get("keys_max") == 8
+              and v.get("keys", [{}])[0] == {"type": "ssh-ed25519", "bits": 256,
+                                              "fingerprint": "SHA256:one", "comment": "me@laptop"}
+              and v["keys"][1]["type"] == "garbled" and v["keys"][1]["comment"] == "",
+              "the host key, the keys and keys alone, as onu-config says them")
+        write(os.path.join(d, "nohost"), "")
+        status, ssh = ask("GET", "/api/get/ssh", headers=auth)
+        check(status == 200 and ssh["value"]["host_key"] is None, "no host key: null")
+        write(os.path.join(d, "fail"), "")
+        status, _ = ask("GET", "/api/get/ssh", headers=auth)
+        check(status == 500, "onu-config failing: no value")
+        os.unlink(os.path.join(d, "fail"))
+
+        status, body = ask("POST", "/api/ssh/keys", "ssh-ed25519 AAAA me@desk\n", auth)
+        check(status == 403 and body.get("error") == "wrong password",
+              "a change of a key without root's password is refused")
+        status, body = ask("POST", "/api/ssh/keys", "ssh-ed25519 AAAA me@desk\n",
+                           dict(auth, **{CONFIRM: "not%20it"}))
+        check(status == 403, "and with a wrong one")
+        status, body = ask("POST", "/api/ssh/keys", "ssh-ed25519 AAAA me@desk\n")
+        check(status == 200 and body.get("key") == {"type": "ssh-ed25519", "bits": 256,
+                                                    "fingerprint": "SHA256:two",
+                                                    "comment": "me@desk"},
+              "a key added, said back")
+        check("ssh-keys add" in read(os.path.join(d, "calls")) and "admin" not in read(os.path.join(d, "calls")),
+              "onu-config ssh-keys add, the password never among its arguments")
+        status, body = ask("POST", "/api/ssh/keys", "ecdsa-sha2-nistp999 AAAA x")
+        check(status == 400 and body.get("detail") == "a key of the type ecdsa-sha2-nistp999",
+              "a key onu-config refuses: its reason")
+        status, body = ask("POST", "/api/ssh/keys", " \n")
+        check(status == 400 and body.get("error") == "not a key", "no key")
+        status, body = ask("POST", "/api/ssh/keys", "a" * 5000)
+        check(status == 400 and body.get("error") == "not a key", "a line too long")
+        status, body = ask("POST", "/api/ssh/keys/remove", "SHA256:two=\n")
+        check(status == 200 and read(os.path.join(d, "removed")) == "SHA256:two=\n",
+              "a key removed by its fingerprint, on onu-config's input")
+        status, body = ask("POST", "/api/ssh/keys/remove", "SHA256:no such key")
+        check(status == 400 and body.get("error") == "not a fingerprint", "no fingerprint")
+        write(os.path.join(d, "fail"), "")
+        status, body = ask("POST", "/api/ssh/keys/remove", "SHA256:two")
+        check(status == 400 and body.get("detail") == "onu-config refused it",
+              "refused without a word: said so")
+        os.unlink(os.path.join(d, "fail"))
+        for state in ("on", "off"):
+            status, _ = ask("POST", "/api/ssh/keys-only", state + "\n")
+            check(status == 200 and read(os.path.join(d, "only")) == state + "\n", f"keys alone {state}")
+        status, body = ask("POST", "/api/ssh/keys-only", "maybe")
+        check(status == 400 and body.get("error") == "not on or off", "keys alone, neither on nor off")
+        status, body = ask("POST", "/api/ssh/host-key", "")
+        check(status == 200 and body.get("host_key") == {"type": "ssh-ed25519", "fingerprint": "SHA256:new"},
+              "a new host key, and its fingerprint")
+        status, _ = ask("GET", "/api/ssh/host-key", headers=pw)
+        check(status == 405, "a change is a POST")
+        status, _ = ask("POST", "/api/ssh/keys", "a" * (33 * 1024))
+        check(status == 413, "a body of more than 32 KiB")
+
+        print("  the panel's key")
+        conn = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=10)
+        status, body = ask("POST", "/api/tls/key", "", conn=conn)
+        check(status == 200 and body["tls"]["certificates"][0]["sha256"] == fp["two"]
+              and read(keyf) == KEY2 + "\n", "a new key: the answer gives the new certificate")
+        old = ":".join(f"{b:02X}" for b in hashlib.sha256(conn.sock.getpeercert(binary_form=True)).digest())
+        status, _ = ask("GET", "/api/health", headers=auth, conn=conn)
+        check(status == 200 and old == fp["one"],
+              "the connection that asked goes on, with the certificate it had")
+        conn.close()
+        check(served()[0] == fp["two"], "a new connection gets the new one")
+        write(os.path.join(d, "fail"), "")
+        status, body = ask("POST", "/api/tls/key", "")
+        check(status == 400 and body.get("detail") ==
+              "import TLS_KEY: the store has no room for it, of its 64 KiB",
+              "a key the store has no room for: the cause")
+        os.unlink(os.path.join(d, "fail"))
+        # Two at once: the second waits for none, and is told so.
+        write(os.path.join(d, "slow"), "")
+        write(os.path.join(d, "next.key"), KEY + "\n")
+        first = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=10)
+        first.request("POST", "/api/tls/key", body="", headers=pw)
+        time.sleep(0.8)
+        status, body = ask("POST", "/api/tls/key", "")
+        check(status == 409 and body.get("error") == "busy", "a second change while one runs: 409")
+        r = first.getresponse()
+        r.read()
+        first.close()
+        check(r.status == 200 and served()[0] == fp["one"], "the first is answered when it ends")
+        # The one who asked went away once onu-config ran: the change is made all the same.
+        write(os.path.join(d, "next.key"), KEY2 + "\n")
+        asked = read(os.path.join(d, "calls")).count("tls new")
+        gone = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=10)
+        gone.request("POST", "/api/tls/key", body="", headers=pw)
+        for _ in range(50):
+            if read(os.path.join(d, "calls")).count("tls new") > asked:
+                break
+            time.sleep(0.1)
+        gone.close()
+        time.sleep(1.5)
+        os.unlink(os.path.join(d, "slow"))
+        check(served()[0] == fp["two"], "a change whose asker went is made")
+        # A key that is none: the one before stays, until a key comes.
+        write(os.path.join(d, "next.key"), "zz\n")
+        status, _ = ask("POST", "/api/tls/key", "")
+        check(status == 200 and served()[0] == fp["two"], "a key file that is no key: the one before")
+        write(os.path.join(d, "next.key"), KEY2 + "\n")
+        status, _ = ask("POST", "/api/tls/key", "")
+        check(status == 200 and read(keyf) == KEY2 + "\n", "and a key again")
+
+        print("  an own certificate")
+        leaf, chain, key = (read(os.path.join(certs, n)) for n in ("leaf.pem", "chain.pem", "leaf.key"))
+        trust = ssl.create_default_context(cafile=os.path.join(certs, "root.pem"))
+        status, body = ask("POST", "/api/tls/certificate", json.dumps({"certificate": leaf, "key": key}))
+        check(status == 200 and body["tls"]["own"]["chain"] == 1, "the server's certificate alone is taken")
+        try:
+            served(trust)
+            alone = "verified"
+        except ssl.SSLCertVerificationError as e:
+            alone = e.verify_message
+        check(alone == "unable to get local issuer certificate",
+              f"without the CA certificate between, a client that trusts the root cannot verify it: {alone}")
+        status, body = ask("POST", "/api/tls/certificate", json.dumps({"certificate": chain, "key": key}))
+        own = body.get("tls", {}).get("own") or {}
+        leaf_fp = read(os.path.join(certs, "leaf.fp")).strip()
+        check(status == 200 and own.get("chain") == 2 and own.get("sha256") == leaf_fp
+              and own.get("subject") == "O=Example, CN=stick.example"
+              and own.get("issuer") == "O=Example CA, CN=Example Intermediate"
+              and own.get("not_after") == "2036-01-01T00:00:00Z"
+              and "IP:192.0.2.254" in own.get("names", [])
+              and body["tls"]["certificates"][0]["named"] is True
+              and body["tls"]["certificates"][0]["sha256"] == leaf_fp,
+              "with its chain: taken, and said back")
+        got, sent = served(trust)
+        check(got == leaf_fp and sent in (0, 2),
+              f"a client that trusts the root verifies it by the name 127.0.0.1; {sent} certificates sent")
+        status, body = ask("POST", "/api/tls/certificate",
+                           json.dumps({"certificate": read(os.path.join(certs, "rsa.pem")),
+                                       "key": read(os.path.join(certs, "rsa.key"))}))
+        check(status == 400 and "RSA" in body.get("detail", ""), "a certificate of an RSA key is refused")
+        status, body = ask("POST", "/api/tls/certificate", json.dumps({"certificate": chain}))
+        check(status == 400 and body.get("error") == "not a certificate", "one without its key")
+        check(served(trust)[0] == leaf_fp, "the refused leave the own one in force")
+        status, body = ask("POST", "/api/tls/self-signed", "")
+        check(status == 200 and body["tls"]["own"] is None and not os.path.exists(ownf)
+              and served()[0] == fp["two"], "back to the certificates of the panel's key")
+    finally:
+        proc.terminate()
+        proc.wait(5)
+        log.close()
 
 
 def downloads(pond, workdir, token):

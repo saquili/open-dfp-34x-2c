@@ -35,6 +35,15 @@ int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *ownfile,
 bool tls_on(void);
 
 /*
+ * Read the two files of tls_setup() again, once onu-config has changed
+ * them: the connections that come from now on get the certificates of the
+ * new key, or the own certificate, or no longer it; those open keep theirs.
+ * A key that is not one leaves the one before. Returns 0, or a negative
+ * errno for the key.
+ */
+int tls_reload(void);
+
+/*
  * Listen on @ip, an IPv4 address with or without its prefix, with each scheme
  * and port of the -l addresses, @fn handling each connection. Returns how
  * many listen.

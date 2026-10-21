@@ -30,8 +30,11 @@ const struct prov pond_provs[] = {
 	  "The management VLAN and address, and a new pair that waits to be "
 	  "confirmed from it", prov_mgmt, NULL, PROV_VOLATILE },
 	{ "tls", "System",
-	  "The panel's HTTPS: the certificate of each address it answers on, "
-	  "by its SHA-256", prov_tls, NULL, 0 },
+	  "The panel's HTTPS: an own certificate, and the certificate of each "
+	  "address it answers on, by its SHA-256", prov_tls, NULL, 0 },
+	{ "ssh", "System",
+	  "The ssh server: its host key, the public keys root logs in with, and "
+	  "whether it takes them alone", prov_ssh, NULL, 0 },
 	{ "kernel", "System", "Kernel", prov_kernel, NULL, 0 },
 	{ "image", "System", "Image", prov_image, NULL, 0 },
 	{ "model", "System", "Board", prov_model, NULL, 0 },

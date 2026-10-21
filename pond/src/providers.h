@@ -36,6 +36,23 @@ int prov_sfp_lane_write(const char *val, char *err, size_t errcap,
 			prov_done done, void *ctx);
 int prov_sfp_lane_set(const char *val, char *err, size_t errcap);
 int prov_tls(struct prov_buf *out);
+
+/*
+ * The provider "ssh": the ssh server's host key, the public keys root logs in
+ * with and whether the server takes them alone, as onu-config ssh show says,
+ * through onu-act (the method ssh_state), which alone reads them; and
+ * SSH_KEYS_MAX, the most keys onu-config keeps (SSHKEY_MAX of
+ * onu-utils/src/sshkey.h). Its answer is at most SSH_STATE_MAX bytes.
+ */
+#define SSH_KEYS_MAX 8
+#define SSH_STATE_MAX 8192
+int prov_ssh(struct prov_buf *out);
+
+/*
+ * A key of onu-config ssh-keys, the line "TYPE BITS FINGERPRINT COMMENT"
+ * after its "KEY=", as {"type", "bits", "fingerprint", "comment"}.
+ */
+void ssh_key_json(struct prov_buf *out, const char *line);
 int prov_image(struct prov_buf *out);
 int prov_kernel(struct prov_buf *out);
 int prov_log(struct prov_buf *out);
