@@ -69,7 +69,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "health"
       }
     },
     "/api/auth/login": {
@@ -168,7 +169,8 @@
           "429": {
             "$ref": "#/components/responses/TooMany"
           }
-        }
+        },
+        "operationId": "authLogin"
       }
     },
     "/api/auth/session": {
@@ -191,7 +193,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "authSession"
       }
     },
     "/api/auth/logout": {
@@ -219,7 +222,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "authLogout"
       }
     },
     "/api/auth/password": {
@@ -302,7 +306,8 @@
           "429": {
             "$ref": "#/components/responses/TooMany"
           }
-        }
+        },
+        "operationId": "authPassword"
       }
     },
     "/api/auth/sessions": {
@@ -325,7 +330,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "authSessions"
       }
     },
     "/api/auth/sessions/others": {
@@ -374,7 +380,8 @@
           "429": {
             "$ref": "#/components/responses/TooMany"
           }
-        }
+        },
+        "operationId": "authSessionsOthers"
       }
     },
     "/api/identity/olt-login": {
@@ -432,7 +439,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "identityOltLogin"
       }
     },
     "/api/token": {
@@ -455,7 +463,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "token"
       }
     },
     "/api/ssh/host-key": {
@@ -535,7 +544,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "sshHostKey"
       }
     },
     "/api/ssh/keys": {
@@ -614,7 +624,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "sshKeys"
       }
     },
     "/api/ssh/keys/remove": {
@@ -682,7 +693,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "sshKeysRemove"
       }
     },
     "/api/ssh/keys-only": {
@@ -753,7 +765,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "sshKeysOnly"
       }
     },
     "/api/tls/key": {
@@ -821,7 +834,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "tlsKey"
       }
     },
     "/api/tls/certificate": {
@@ -913,7 +927,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "tlsCertificate"
       }
     },
     "/api/tls/self-signed": {
@@ -981,7 +996,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "tlsSelfSigned"
       }
     },
     "/api/token/new": {
@@ -1051,7 +1067,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "tokenNew"
       }
     },
     "/api/token/off": {
@@ -1108,7 +1125,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "tokenOff"
       }
     },
     "/api/schema": {
@@ -1176,7 +1194,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "schema"
       }
     },
     "/api/getm": {
@@ -1564,7 +1583,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "getm"
       }
     },
     "/api/get/uptime": {
@@ -1610,7 +1630,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getUptime"
       }
     },
     "/api/get/memory": {
@@ -1656,7 +1677,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getMemory"
       }
     },
     "/api/get/cpu": {
@@ -1702,7 +1724,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getCpu"
       }
     },
     "/api/get/hostname": {
@@ -1748,7 +1771,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getHostname"
       }
     },
     "/api/get/product": {
@@ -1794,7 +1818,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getProduct"
       }
     },
     "/api/get/clock": {
@@ -1840,7 +1865,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getClock"
       }
     },
     "/api/get/sfp_lane": {
@@ -1886,7 +1912,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getSfpLane"
       }
     },
     "/api/get/mgmt": {
@@ -1932,7 +1959,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getMgmt"
       }
     },
     "/api/get/tls": {
@@ -1978,7 +2006,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getTls"
       }
     },
     "/api/get/ssh": {
@@ -2024,7 +2053,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getSsh"
       }
     },
     "/api/get/kernel": {
@@ -2070,7 +2100,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getKernel"
       }
     },
     "/api/get/image": {
@@ -2116,7 +2147,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getImage"
       }
     },
     "/api/get/model": {
@@ -2162,7 +2194,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getModel"
       }
     },
     "/api/get/log": {
@@ -2227,7 +2260,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getLog"
       }
     },
     "/api/get/identity": {
@@ -2273,7 +2307,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getIdentity"
       }
     },
     "/api/get/leases": {
@@ -2322,7 +2357,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getLeases"
       }
     },
     "/api/get/settings": {
@@ -2368,7 +2404,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getSettings"
       }
     },
     "/api/get/ports": {
@@ -2417,7 +2454,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getPorts"
       }
     },
     "/api/get/port_counters": {
@@ -2475,7 +2513,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getPortCounters"
       }
     },
     "/api/get/network": {
@@ -2521,7 +2560,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getNetwork"
       }
     },
     "/api/get/bridge": {
@@ -2567,7 +2607,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getBridge"
       }
     },
     "/api/get/gem_ports": {
@@ -2616,7 +2657,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getGemPorts"
       }
     },
     "/api/get/tc_rules": {
@@ -2662,7 +2704,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getTcRules"
       }
     },
     "/api/get/banks": {
@@ -2708,7 +2751,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getBanks"
       }
     },
     "/api/get/firmware": {
@@ -2754,7 +2798,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getFirmware"
       }
     },
     "/api/get/onu": {
@@ -2807,7 +2852,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getOnu"
       }
     },
     "/api/get/tconts": {
@@ -2856,7 +2902,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getTconts"
       }
     },
     "/api/get/optics": {
@@ -2909,7 +2956,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getOptics"
       }
     },
     "/api/get/gem_counters": {
@@ -2958,7 +3006,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getGemCounters"
       }
     },
     "/api/get/omci": {
@@ -3004,7 +3053,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getOmci"
       }
     },
     "/api/get/omci_frames": {
@@ -3060,7 +3110,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getOmciFrames"
       }
     },
     "/api/get/service_rules": {
@@ -3106,7 +3157,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getServiceRules"
       }
     },
     "/api/get/iptv": {
@@ -3152,7 +3204,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getIptv"
       }
     },
     "/api/get/phone": {
@@ -3198,7 +3251,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "getPhone"
       }
     },
     "/api/set/hostname": {
@@ -3276,7 +3330,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setHostname"
       }
     },
     "/api/set/product": {
@@ -3354,7 +3409,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setProduct"
       }
     },
     "/api/set/sfp_lane": {
@@ -3440,7 +3496,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setSfpLane"
       }
     },
     "/api/set/identity": {
@@ -3559,7 +3616,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setIdentity"
       }
     },
     "/api/set/session": {
@@ -3663,7 +3721,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setSession"
       }
     },
     "/api/set/ipoe": {
@@ -3774,7 +3833,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setIpoe"
       }
     },
     "/api/set/lan": {
@@ -3883,7 +3943,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setLan"
       }
     },
     "/api/set/fixed": {
@@ -3970,7 +4031,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setFixed"
       }
     },
     "/api/set/forward": {
@@ -4075,7 +4137,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setForward"
       }
     },
     "/api/set/dmz": {
@@ -4159,7 +4222,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setDmz"
       }
     },
     "/api/set/rule": {
@@ -4264,7 +4328,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setRule"
       }
     },
     "/api/set/fw": {
@@ -4351,7 +4416,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setFw"
       }
     },
     "/api/set/service_rule": {
@@ -4444,7 +4510,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setServiceRule"
       }
     },
     "/api/set/iptv": {
@@ -4526,7 +4593,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setIptv"
       }
     },
     "/api/set/settings": {
@@ -4601,7 +4669,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "setSettings"
       }
     },
     "/api/set/mgmt": {
@@ -4665,7 +4734,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "setMgmt"
       }
     },
     "/api/set/changes": {
@@ -4723,7 +4793,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "setChanges"
       }
     },
     "/api/phone/secrets": {
@@ -4781,7 +4852,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "phoneSecrets"
       }
     },
     "/api/iptv/test": {
@@ -4891,7 +4963,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "iptvTest"
       }
     },
     "/api/system/restart": {
@@ -4919,7 +4992,8 @@
           "401": {
             "$ref": "#/components/responses/Unauthorised"
           }
-        }
+        },
+        "operationId": "systemRestart"
       }
     },
     "/api/firmware/upload": {
@@ -4988,7 +5062,8 @@
           "429": {
             "$ref": "#/components/responses/TooMany"
           }
-        }
+        },
+        "operationId": "firmwareUpload"
       }
     },
     "/api/firmware/download": {
@@ -5022,7 +5097,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "firmwareDownload"
       }
     },
     "/api/firmware/backup": {
@@ -5057,7 +5133,8 @@
           "429": {
             "$ref": "#/components/responses/TooMany"
           }
-        }
+        },
+        "operationId": "firmwareBackup"
       }
     },
     "/api/firmware/try": {
@@ -5119,7 +5196,8 @@
           "429": {
             "$ref": "#/components/responses/TooMany"
           }
-        }
+        },
+        "operationId": "firmwareTry"
       }
     },
     "/api/firmware/return": {
@@ -5181,7 +5259,8 @@
           "429": {
             "$ref": "#/components/responses/TooMany"
           }
-        }
+        },
+        "operationId": "firmwareReturn"
       }
     }
   },
