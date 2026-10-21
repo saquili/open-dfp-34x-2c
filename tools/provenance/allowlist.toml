@@ -121,6 +121,18 @@ a comment; the names are common to many programs.
 """
 
 [[allow]]
+gate = "denylist"
+rules = ["me-table"]
+paths = ["pond/openapi.json", "pond/README.rst"]
+match = 'operation[I]d'
+hashes = ["8a88cfb26bfbac4b65213c16678494d982e9e70d11d59e38befcdf161c8662f3"]
+reason = """
+The word is the keyword of OpenAPI 3.1 that names an operation of an API (a
+field of its Operation Object); the description of pond's API and its README
+use it in that sense alone, and Orval names the panel's requests by it.
+"""
+
+[[allow]]
 gate = "binaries"
 rules = ["file-size"]
 paths = ["pond/third_party/mongoose/mongoose.c"]
