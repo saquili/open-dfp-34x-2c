@@ -857,7 +857,10 @@ Take-down and the facts of the bring-up
      - I: the order. M: 11 activations with the loop off and 12 with it on,
        taken in turn on the lab OLT, each reached O5 in 1.8 s and was
        provisioned over OMCI 4.8 s after O5, also with the burst overhead of
-       O5 forced down to 12 bytes (2026-10-21).
+       O5 forced down to 12 bytes (2026-10-21). With the optics' driver that
+       leaves the loop on, ten takes of the PON down and up in a row each
+       reached O5 in 1.4 to 1.7 s and were provisioned 4.7 to 4.8 s after O5,
+       with the same count of OMCC frames each time (2026-10-21).
    * - The GPON source of the switch interrupt (``RTL9602C_IRQ_SRC_GPON``, bit
        10 of ``RTL9602C_IRQ_ENABLE``, ``0x01d00c``) is enabled last and the
        worker is run at once, so that the first PLOAM message dispatched finds
@@ -2119,10 +2122,11 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
        does not report the loss of the ONU that follows.
      - M
      - ITU-T G.984.3 clause 9.2.2 and clause 9.2.4.3. ``reboot`` in O5 logged
-       ``sent 1 of 3``: the test OLT gives the ONU no allocation after the
+       ``sent 1 of 3``: the test OLT gave the ONU no allocation after the
        first copy. Sent without a restart, a copy left the queue in 0.56 ms,
        the next two waited 2 s in vain, and the OLT deactivated the ONU and
-       activated it again about 4 s later.
+       activated it again about 4 s later. On 2026-10-21 a ``reboot`` in O5,
+       at transmit power level mode 2, logged ``sent 3 of 3``.
    * - At bring-up the driver arms the No message template (octet 1 255, octet 2
        4, the rest zero) and then the Dying_Gasp template (255, 3, zero). Every
        allocation that asks for a PLOAMu carries a message, so the No message
@@ -3791,8 +3795,9 @@ Known limitations
   user space has to keep it across a restart and set ``gpon_disabled`` again
   before the PON comes up. The bring-up in O7 with the parameter set while the
   PON was down has been run on the board; a restart that sets it has not.
-- Dying_Gasp is sent before an orderly restart, and on the test OLT only its
-  first copy leaves (see "PLOAM transmit"). What makes the MAC send the
+- Dying_Gasp is sent before an orderly restart, and on the test OLT the first
+  copy alone left in one restart and all three in another (see "PLOAM
+  transmit"). What makes the MAC send the
   Dying_Gasp template it holds armed, and whether the supply-loss interrupt
   needs handling, are not known: the driver does not enable that interrupt,
   whose bit reads clear in operation, and testing either needs a controlled
