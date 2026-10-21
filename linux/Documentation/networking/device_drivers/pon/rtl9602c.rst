@@ -445,7 +445,7 @@ Where the code is
        ``rtl9602c_gem_tcont_ready()`` when an Alloc-ID is bound to a T-CONT, and
        ``rtl9602c_ponmac_sid_valid()`` when it binds or unbinds the OMCC.
    * - ``drivers/net/pon/gn25l95.c``
-     - The optics: the hwmon device, TX_DISABLE, the modulation hold, the
+     - The optics: the hwmon device, TX_DISABLE, the factory configuration, the
        transmit power levels and the debugfs views ``a2``, ``eeblocks`` and
        ``tables``, over the I2C adapter that
        ``drivers/i2c/busses/i2c-rtl9602c.c`` registers.

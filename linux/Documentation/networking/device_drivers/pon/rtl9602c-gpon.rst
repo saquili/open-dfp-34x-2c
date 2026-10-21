@@ -215,8 +215,8 @@ Configuration
        lines. They print once enabled through dynamic debug (see "The kernel
        log").
    * - ``CONFIG_RTL9602C_OPTICS_RO``
-     - With it the optics' I2C adapter refuses every write, and the modulation
-       hold of the bring-up writes nothing (see
+     - With it the optics' I2C adapter refuses every write, and the bring-up
+       does not put the optics' factory configuration back (see
        Documentation/networking/device_drivers/pon/gn25l95.rst).
 
 ``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver in
@@ -713,9 +713,11 @@ those of the facts that carry each step.
 7. Program the GEM ports that exist again (``rtl9602c_gem_restore()``). Purpose:
    they live in the tables that step 6 emptied. (M)
 8. Let the optics prepare the transmitter (``pon_optics_start()``: the
-   modulation hold of Documentation/networking/device_drivers/pon/gn25l95.rst).
-   Purpose: before the laser is first enabled in O3. A failure is logged and
-   bring-up goes on. (I)
+   factory configuration of
+   Documentation/networking/device_drivers/pon/gn25l95.rst, the automatic
+   extinction-ratio loop on and transmit power level mode 0). Purpose: before
+   the laser is first enabled in O3. A failure is logged and bring-up goes on.
+   (I)
 9. Set the burst merge threshold. (I)
 10. Write the response delay under the write key. Purpose: upstream timing. (M)
 11. Write the period of the frame-derived pulse. (I)
@@ -833,13 +835,17 @@ Take-down and the facts of the bring-up
      - After a PON down and up, a GEM port created before it was restored, and
        its upstream restarted when the Alloc-ID was assigned again (the kernel
        log line ``upstream started``).
-   * - The optics' modulation is held (``pon_optics_start()``, see
+   * - The optics put their factory configuration back
+       (``pon_optics_start()``, see
        Documentation/networking/device_drivers/pon/gn25l95.rst) before the
        laser is first enabled in O3; a failure is logged and bring-up goes
-       on.
-     - I
-     - Whether activation needs the hold is open: activations have been clean
-       with the hold on and off.
+       on. Activation does not need the optics' automatic extinction-ratio
+       loop off.
+     - I, M
+     - I: the order. M: 11 activations with the loop off and 12 with it on,
+       taken in turn on the lab OLT, each reached O5 in 1.8 s and was
+       provisioned over OMCI 4.8 s after O5, also with the burst overhead of
+       O5 forced down to 12 bytes (2026-10-21).
    * - The GPON source of the switch interrupt (``RTL9602C_IRQ_SRC_GPON``, bit
        10 of ``RTL9602C_IRQ_ENABLE``, ``0x01d00c``) is enabled last and the
        worker is run at once, so that the first PLOAM message dispatched finds
@@ -3704,10 +3710,6 @@ Assumptions the driver depends on
    * - That the PON MAC has to be built before the SerDes is put in GPON mode
        ("Bring-up and take-down").
      - Reversing the two and checking that OMCI messages pass both ways.
-   * - That activation needs the optics' modulation held ("Bring-up and
-       take-down").
-     - The ONU reaching O5 and OMCI messages passing both ways with the hold off
-       (``CONFIG_RTL9602C_OPTICS_RO``).
    * - That parking the SerDes and clearing its reset register is needed ("PON
        SerDes and analog front end").
      - Removing the writes and checking that the ONU reaches O5 on an OLT.

@@ -173,8 +173,8 @@ Offsets are the values of the macros of the driver for master 1.
        ``RTL9602C_I2C_TX_DATA`` the byte a write sends; ``RTL9602C_I2C_RX_DATA``
        returns the byte a read received, in its low 8 bits.
      - T
-     - The optics diagnostics read, for reads; for writes, the modulation hold
-       reads back what it wrote.
+     - The optics diagnostics read, for reads; for writes, the laser driver's
+       bring-up reads back what it wrote.
 
 One transfer
 ------------
@@ -230,8 +230,8 @@ The adapter
    * - A write from a client is refused with ``-EPERM`` unless the switch
        driver allows it, and a write of a word with ``-EOPNOTSUPP``.
      - T
-     - The modulation hold: it writes through the adapter on the module the
-       driver knows, and is refused on one it does not.
+     - The laser driver's bring-up: it writes through the adapter on the
+       module the driver knows, and is refused on one it does not.
    * - The adapter is registered when the driver binds and goes before the
        driver does; the switch driver is told of both, and a sequence of
        transfers in progress holds the adapter until it ends.

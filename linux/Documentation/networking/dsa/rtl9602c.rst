@@ -332,15 +332,17 @@ The device of the GPON MAC carries ``struct rtl9602c_pon_data``
 (``include/linux/platform_data/rtl9602c-pon.h``): the switch, the register
 window, the debugfs directory, and two tables of operations. The *host
 operations* are the switch's services to the MAC (``rtl9602c-pon-host.c``):
-the interrupt's sources, the laser's TX_DISABLE line, its modulation hold and
-power level, and the switch's half of the GEM ports. The *PON operations* are
-the MAC's to the switch: start and stop with the PON port, the interrupt's
-thread, the serial number and password, whether a GEM port's upstream is
-programmed, and the power level it asks for. The switch calls them under a
-read-write semaphore that the MAC's driver takes for writing to bind and to
-unbind, so a call in progress ends before the driver goes, and a call while no
-driver is bound returns ``-ENODEV`` (or the neutral answer: not up, no
-serial number, level 0).
+the interrupt's sources, the switch's half of the GEM ports, and the PTP
+clock's time of day and seconds. The laser is not among them: the MAC takes
+the optics from their own driver through the PON class
+(Documentation/networking/device_drivers/pon/gn25l95.rst). The *PON
+operations* are the MAC's to the switch: start and stop with the PON port, the
+interrupt's thread, the serial number and password, the OLT's disable, whether
+a GEM port's upstream is programmed, and the seconds of the OLT's clock. The
+switch calls them under a read-write semaphore that the MAC's driver takes for
+writing to bind and to unbind, so a call in progress ends before the driver
+goes, and a call while no driver is bound returns ``-ENODEV`` (or the neutral
+answer: not up, no serial number, no password, not disabled, no upstream).
 
 Where the code is
 -----------------
