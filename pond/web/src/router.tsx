@@ -39,7 +39,15 @@ import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";
 import { Stats } from "./pages/Stats";
 import { MacPage, RoutesPage, VlansPage } from "./pages/Switch";
-import { AccessPage, DevicePage, ResourcesPage, SoftwarePage, systemPath } from "./pages/System";
+import {
+  DevicePage,
+  HttpsPage,
+  PanelAccessPage,
+  ResourcesPage,
+  SoftwarePage,
+  SshPage,
+  systemPath,
+} from "./pages/System";
 
 interface Context {
   queryClient: QueryClient;
@@ -92,7 +100,7 @@ const signIn = createRoute({
 
 /*
  * The default password must be changed before anything else; a change of
- * it later is under System, Access, where this address leads once it is.
+ * it later is under System, Panel, where this address leads once it is.
  */
 const forcedPassword = createRoute({
   getParentRoute: () => root,
@@ -101,7 +109,7 @@ const forcedPassword = createRoute({
   beforeLoad: async ({ context }) => {
     const s = await context.queryClient.ensureQueryData(sessionQuery);
     if (!s) throw redirect({ to: "/login" });
-    if (!s.must_change) throw redirect({ to: "/system/access" });
+    if (!s.must_change) throw redirect({ to: "/system/panel" });
   },
 });
 
@@ -157,7 +165,10 @@ const pages = [
   page("/system/resources", ResourcesPage),
   page("/system/software", SoftwarePage),
   page("/system/device", DevicePage),
-  page("/system/access", AccessPage),
+  page("/system/panel", PanelAccessPage),
+  page("/system/ssh", SshPage),
+  page("/system/https", HttpsPage),
+  moved("/system/access", () => "/system/panel"),
   moved("/internet", (tab) => `/internet/${INTERNET_PAGES.find((p) => p === tab) ?? "wan"}`),
   moved("/lan", (tab) => (tab === "devices" ? "/internet/clients" : "/internet/lan")),
   moved("/sfp", () => "/switch/sfp"),

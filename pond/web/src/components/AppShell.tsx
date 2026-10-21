@@ -89,7 +89,9 @@ const SYSTEM: Section = {
     { to: "/system/resources", key: "nav.resources" },
     { to: "/system/software", key: "nav.software" },
     { to: "/system/device", key: "nav.device" },
-    { to: "/system/access", key: "nav.access" },
+    { to: "/system/panel", key: "nav.panelAccess" },
+    { to: "/system/ssh", key: "nav.ssh" },
+    { to: "/system/https", key: "nav.https" },
   ],
 };
 
@@ -472,7 +474,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
             </button>
             <ul className="menu dropdown-content z-30 mt-2 w-52 rounded-box border border-base-300 bg-base-100 p-1">
               <li>
-                <Link to="/system/access">
+                <Link to="/system/panel">
                   <KeyRound className="size-4" />
                   {t("nav.changePassword")}
                 </Link>

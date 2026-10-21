@@ -51,7 +51,7 @@ const root: Session = { user: "root", must_change: false, idle_timeout_s: 900 };
 
 describe("the pages of System", () => {
   it("are four, each at an address of its own", async () => {
-    expect(SYSTEM_PAGES).toEqual(["resources", "software", "device", "access"]);
+    expect(SYSTEM_PAGES).toEqual(["resources", "software", "device", "panel", "ssh", "https"]);
     for (const p of SYSTEM_PAGES) expect(await opened(`/system/${p}`, root)).toBe(`/system/${p}`);
   });
 
@@ -59,7 +59,7 @@ describe("the pages of System", () => {
     expect(systemPath("resources")).toBe("/system/resources");
     expect(systemPath("software")).toBe("/system/software");
     expect(systemPath("settings")).toBe("/system/device");
-    expect(systemPath("access")).toBe("/system/access");
+    expect(systemPath("access")).toBe("/system/panel");
     expect(systemPath("")).toBe("/system/resources");
     expect(systemPath("toString")).toBe("/system/resources");
   });
@@ -68,7 +68,8 @@ describe("the pages of System", () => {
     expect(await opened("/system", root)).toBe("/system/resources");
     expect(await opened("/system", root, "software")).toBe("/system/software");
     expect(await opened("/system", root, "settings")).toBe("/system/device");
-    expect(await opened("/system", root, "access")).toBe("/system/access");
+    expect(await opened("/system", root, "access")).toBe("/system/panel");
+    expect(await opened("/system/access", root)).toBe("/system/panel");
     expect(await opened("/system", root, "nothing")).toBe("/system/resources");
   });
 
@@ -86,7 +87,7 @@ describe("the password's page", () => {
   });
 
   it("leads to System, Access, once a password of root's own is set", async () => {
-    expect(await opened("/password", root)).toBe("/system/access");
+    expect(await opened("/password", root)).toBe("/system/panel");
     expect(await opened("/password", null)).toBe("/login");
   });
 });

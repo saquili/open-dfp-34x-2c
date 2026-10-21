@@ -33,7 +33,9 @@ export const en = {
     resources: "Resources",
     software: "Software",
     device: "Device",
-    access: "Access",
+    panelAccess: "Panel",
+    ssh: "SSH",
+    https: "HTTPS",
     signOut: "Sign out",
     changePassword: "Change password",
     language: "Language",
@@ -1101,7 +1103,9 @@ export const en = {
     busy: "An update sent from another tab or device is under way.",
   },
   access: {
-    hint: "Every way into the stick: root's password, the panel's sessions, the token of scripts, ssh and its keys, and the panel's HTTPS.",
+    panelHint: "Root's password, the panel's sessions and the token of scripts.",
+    sshHint: "The ssh server: how root signs in, the server's key and the keys that sign in.",
+    httpsHint: "The panel's HTTPS: the certificate of each address, and a certificate of your own.",
     passwordTitle: "Root password",
     passwordRules:
       "At least 8 characters. It is root's password for the console, ssh and this panel.",

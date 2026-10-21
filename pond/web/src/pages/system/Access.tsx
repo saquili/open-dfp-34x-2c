@@ -2,18 +2,18 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * System, Access: every way into the stick, in one place. Root's password,
- * which the console, ssh and the panel take; the sessions of the panel, this
- * browser's among them, and the end of the others; the token of scripts,
- * made anew or taken away; the ssh server, its host key and whether it takes
- * keys alone, and the keys root logs in with, the panel's and the image's;
- * the panel's HTTPS, the certificate of each address, and an own
+ * System's ways into the stick, on three pages: Panel, SSH and HTTPS. Root's
+ * password, which the console, ssh and the panel take; the sessions of the
+ * panel, this browser's among them, and the end of the others; the token of
+ * scripts, made anew or taken away; the ssh server, its host key and whether
+ * it takes keys alone, and the keys root logs in with, the panel's and the
+ * image's; the panel's HTTPS, the certificate of each address, and an own
  * certificate in place of the stick's. Every change but the password's own
- * asks for root's password at the moment it is made (components/Confirm),
- * and it is never kept. After a new key or certificate of the panel the
- * browser meets a certificate it has not seen, and warns once unless it
- * trusts its authority: the HTTPS card says so and shows the fingerprint to
- * compare, with a button that reloads the page.
+ * asks for root's password at the moment it is made (components/Confirm), and
+ * it is never kept. After a new key or certificate of the panel the browser
+ * meets a certificate it has not seen, and warns once unless it trusts its
+ * authority: the HTTPS card says so and shows the fingerprint to compare, with
+ * a button that reloads the page.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -69,7 +69,7 @@ import {
 } from "../../lib/keys";
 import type { z } from "../../lib/schemas";
 import { passwordFailure, passwordSchema } from "../SignIn";
-import { Hint, Mono, Pair } from "./shared";
+import { Columns, Hint, Mono, Pair, Stack } from "./shared";
 
 const KEY_PROBLEM: Record<KeyProblem, Key> = {
   empty: "access.keyEmpty",
@@ -953,30 +953,48 @@ function OwnCertificate({ onChanged }: { onChanged: () => void }) {
   );
 }
 
-export function AccessPage() {
+/*
+ * The ways in, a page each, each on one screen: two columns of cards that
+ * keep their own heights.
+ */
+export function PanelAccessPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.panelAccess")} hint={t("access.panelHint")}>
+      <Columns>
+        <RootPassword />
+        <Stack>
+          <SessionsCard />
+          <TokenCard />
+        </Stack>
+      </Columns>
+    </Page>
+  );
+}
+
+export function SshPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.ssh")} hint={t("access.sshHint")}>
+      <Columns wide="right">
+        <SshServer />
+        <SshKeys />
+      </Columns>
+    </Page>
+  );
+}
+
+export function HttpsPage() {
   const { t } = useI18n();
   /* A new certificate is served: the HTTPS card asks for a reload. */
   const [changed, setChanged] = useState(false);
   const onChanged = () => setChanged(true);
   return (
-    <Page title={t("nav.access")} hint={t("access.hint")}>
-      <div className="grid shrink-0 content-start gap-4">
-        <div className="grid gap-4 xl:grid-cols-2">
-          <RootPassword />
-          <div className="grid min-w-0 content-start gap-4">
-            <SessionsCard />
-            <TokenCard />
-          </div>
-        </div>
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <SshServer />
-          <SshKeys />
-        </div>
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <Https changed={changed} onChanged={onChanged} />
-          <OwnCertificate onChanged={onChanged} />
-        </div>
-      </div>
+    <Page title={t("nav.https")} hint={t("access.httpsHint")}>
+      <Columns wide="left">
+        <Https changed={changed} onChanged={onChanged} />
+        <OwnCertificate onChanged={onChanged} />
+      </Columns>
     </Page>
   );
 }
