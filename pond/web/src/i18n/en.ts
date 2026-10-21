@@ -1265,7 +1265,7 @@ export const en = {
     password: "Root password",
     passwordHint: "It goes with this change alone and is not kept.",
     empty: "Type root's password.",
-    wrong: "Wrong password: this needs root's password.",
+    wrong: "Wrong password. This needs root's password.",
     locked: "Too many wrong passwords: the stick takes none for {seconds} s. Wait, then try again.",
     noStore:
       "The stick cannot read its settings, so no password is known. Sign in on the serial console.",

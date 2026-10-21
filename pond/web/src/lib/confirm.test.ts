@@ -26,13 +26,13 @@ describe("what the confirmation says of a refusal", () => {
   it("says a wrong password under the field", () => {
     expect(refusal(t, new ApiError(403, "wrong password", "root's password is needed"))).toEqual({
       text: en.confirm.wrong,
-      password: true,
+      atField: true,
     });
   });
 
   it("says how long wrong passwords stop it, as the stick says, or half a minute", () => {
     const locked = refusal(t, new ApiError(429, "too many attempts", "wait", 17));
-    expect(locked.password).toBe(true);
+    expect(locked.atField).toBe(true);
     expect(locked.text).toContain("17");
     expect(refusal(t, new ApiError(429, "too many attempts")).text).toContain(String(LOCK_S));
   });
@@ -40,19 +40,19 @@ describe("what the confirmation says of a refusal", () => {
   it("says that the stick knows no password", () => {
     expect(refusal(t, new ApiError(423, "no store"))).toEqual({
       text: en.confirm.noStore,
-      password: true,
+      atField: true,
     });
   });
 
   it("says any other refusal with the stick's reason, apart from the field", () => {
     const other = refusal(t, new ApiError(400, "refused", "the key is kept already"));
-    expect(other).toEqual({ text: "Not done: the key is kept already", password: false });
-    expect(refusal(t, new ApiError(403, "must_change", "set a password")).password).toBe(false);
+    expect(other).toEqual({ text: "Not done: the key is kept already", atField: false });
+    expect(refusal(t, new ApiError(403, "must_change", "set a password")).atField).toBe(false);
     expect(refusal(t, new OfflineError())).toEqual({
       text: en.connection.offline,
-      password: false,
+      atField: false,
     });
-    expect(refusal(t, new AuthError()).password).toBe(false);
+    expect(refusal(t, new AuthError()).atField).toBe(false);
   });
 });
 
@@ -62,7 +62,7 @@ describe("the confirmation's run of an action", () => {
     expect(await attempt(t, run, true, "")).toEqual({
       done: false,
       text: en.confirm.empty,
-      password: true,
+      atField: true,
     });
     expect(run).not.toHaveBeenCalled();
   });
@@ -88,7 +88,7 @@ describe("the confirmation's run of an action", () => {
       true,
       "nope",
     );
-    expect(wrong).toEqual({ done: false, text: en.confirm.wrong, password: true });
+    expect(wrong).toEqual({ done: false, text: en.confirm.wrong, atField: true });
     const refused = await attempt(
       t,
       async () => {
@@ -97,6 +97,6 @@ describe("the confirmation's run of an action", () => {
       true,
       "right",
     );
-    expect(refused).toEqual({ done: false, text: "Not done: 8 keys at most", password: false });
+    expect(refused).toEqual({ done: false, text: "Not done: 8 keys at most", atField: false });
   });
 });

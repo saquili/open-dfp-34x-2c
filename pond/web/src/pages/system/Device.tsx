@@ -342,7 +342,7 @@ function Maintenance() {
               body: t("system.restartConfirm"),
               action: t("system.restartAction"),
               danger: true,
-              password: false,
+              rootPassword: false,
               run: () => restart.mutateAsync(),
             })
           }

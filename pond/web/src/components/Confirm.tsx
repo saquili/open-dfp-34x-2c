@@ -29,7 +29,7 @@ export interface Ask {
   /** Red, for what cannot be taken back. */
   danger?: boolean;
   /** Whether root's password goes with it: yes unless said. */
-  password?: boolean;
+  rootPassword?: boolean;
   /** The action, with the password typed; done when it resolves. */
   run: (secret: string) => Promise<unknown>;
 }
@@ -53,8 +53,8 @@ export function Confirm({
   const field = useRef<HTMLInputElement>(null);
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
-  const [said, setSaid] = useState<{ text: string; password: boolean } | null>(null);
-  const needs = ask?.password !== false;
+  const [said, setSaid] = useState<{ text: string; atField: boolean } | null>(null);
+  const needs = ask?.rootPassword !== false;
 
   useEffect(() => {
     const d = dialog.current;
@@ -87,7 +87,7 @@ export function Confirm({
       return;
     }
     setSaid(out);
-    if (out.password) {
+    if (out.atField) {
       setSecret("");
       field.current?.focus();
     }
@@ -126,11 +126,11 @@ export function Confirm({
                 id="confirm-password"
                 autoComplete="current-password"
                 value={secret}
-                invalid={!!said?.password}
+                invalid={!!said?.atField}
                 disabled={busy}
                 onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value)}
               />
-              {said?.password ? (
+              {said?.atField ? (
                 <p role="alert" className="text-xs text-error">
                   {said.text}
                 </p>
@@ -139,7 +139,7 @@ export function Confirm({
               )}
             </div>
           )}
-          {said && !said.password && (
+          {said && !said.atField && (
             <p role="alert" className="text-sm text-error wrap-anywhere">
               {said.text}
             </p>

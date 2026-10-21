@@ -20,20 +20,20 @@ export const LOCK_S = 30;
 
 export interface Refusal {
   text: string;
-  /** It is about the password: said under its field, which is emptied. */
-  password: boolean;
+  /** It concerns root's password, and stands under its field, which is emptied. */
+  atField: boolean;
 }
 
 /** Why the action @e ended did not go through, in the panel's words. */
 export function refusal(t: T, e: unknown): Refusal {
   if (e instanceof ApiError && e.status === 403 && e.message === "wrong password")
-    return { text: t("confirm.wrong"), password: true };
+    return { text: t("confirm.wrong"), atField: true };
   if (e instanceof ApiError && e.status === 429)
-    return { text: t("confirm.locked", { seconds: e.retryAfter ?? LOCK_S }), password: true };
+    return { text: t("confirm.locked", { seconds: e.retryAfter ?? LOCK_S }), atField: true };
   if (e instanceof ApiError && e.status === 423)
-    return { text: t("confirm.noStore"), password: true };
-  if (e instanceof OfflineError) return { text: t("connection.offline"), password: false };
-  return { text: t("confirm.failed", { reason: reason(t, e) }), password: false };
+    return { text: t("confirm.noStore"), atField: true };
+  if (e instanceof OfflineError) return { text: t("connection.offline"), atField: false };
+  return { text: t("confirm.failed", { reason: reason(t, e) }), atField: false };
 }
 
 export type Outcome = { done: true } | ({ done: false } & Refusal);
@@ -49,7 +49,7 @@ export async function attempt(
   needs: boolean,
   secret: string,
 ): Promise<Outcome> {
-  if (needs && !secret) return { done: false, text: t("confirm.empty"), password: true };
+  if (needs && !secret) return { done: false, text: t("confirm.empty"), atField: true };
   try {
     await run(secret);
     return { done: true };
