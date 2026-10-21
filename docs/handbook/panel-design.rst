@@ -293,8 +293,34 @@ Actions
 
 A card's actions (change, remove) are icons in the secondary colour, of at
 least 32 px to the touch; an action that destroys turns red when the pointer is
-on it, and asks before it acts. A page's main action is a button in the accent;
-an action beside it is a button without a fill.
+on it, and asks before it acts (Confirmation, below). A page's main action is a
+button in the accent; an action beside it is a button without a fill.
+
+Confirmation
+------------
+
+An action that cannot be taken back (a restart, a removal, a start of the
+other system) or that needs root's password asks first, always the same way:
+a dialog over the page (``Confirm`` in ``components/Confirm.tsx``), never the
+browser's own question and never a field that stands on the page. Its title
+names the action as its button does; under it a sentence or two say what the
+action does and what follows from it (the connection drops, a client warns
+once, the old token stops working); then, for what needs root's password, the
+field of the password, which takes the focus as the dialog opens; and at its
+end the button that acts, in the accent or red for what destroys, before
+Cancel. Enter does the action, Escape and Cancel shut the dialog while nothing
+is sent.
+
+While the stick has not answered, the dialog stays, its button busy, and shows
+what it is waiting for, an upload's progress among it. A wrong password is
+said under the field, in red, and the field is emptied for the next try; so is
+a stop after too many wrong ones, with the seconds left, and a stick that knows
+no password. Any other refusal is said in the dialog, with the stick's reason,
+over its buttons. Once the action is done the dialog closes, and the card it
+was asked from says what came of it. The password goes with that request alone
+and is forgotten with the dialog: no page keeps it, and no page shows a field
+of root's password but the form that changes it, which asks for the current
+one in its own field.
 
 Forms
 =====
@@ -306,6 +332,28 @@ chosen one bordered in the accent; a choice of a few short words is a row of
 buttons, the chosen one filled. The buttons stand at the form's end, the one
 that saves first.
 
+The menu
+========
+
+The menu at the left (a drawer on a phone) has a few sections, each an entry
+that folds its pages: Internet, Switch, Operator and System, beside the
+Overview. Every page of a section has an address of its own
+(``/system/access``), so that a link, a reload or the browser's back opens it
+again, and the menu marks the page open. A section's pages are what a person
+looks for under its name: System has Resources (what the stick has: processor,
+memory, flash), Software (the two systems and their update), Device (the stick
+itself: model, names, clock, upkeep) and Access (every way in). Tabs are for
+views of one thing within a page (the statistics' counters, of the ports, of
+the fibre and of the interfaces), never for pages of their own. A page that moved keeps its old address, which opens the new one
+(``moved`` in ``router.tsx``).
+
+Each fact stands on one page alone, under one name: the version and the system
+that runs are under Software, the flash's partitions and how full a system is
+under Resources, the state of HTTPS under Access. Another page that needs the
+fact links to its page rather than show it again, and names it the same way:
+"system A" and "system B" everywhere, never "bank", which is the flash's word
+of the programs.
+
 The panel's own settings
 ========================
 
@@ -315,10 +363,10 @@ and before the user's menu, each a menu behind a small button that shows the
 choice: the language's code, the theme's icon, named ``Theme: Dark`` for those
 who do not see it. The browser keeps them (``localStorage``);
 without it a choice lasts the visit. A setting of the stick never stands
-there: those are pages, kept on the stick (System, Settings).
+there: those are pages, kept on the stick (System, Device).
 
 The product name, BuchOS unless the stick names another, is a setting of
-the stick too (System, Settings, "Product name"), though the panel's own
+the stick too (System, Device, "Product name"), though the panel's own
 places show it: the bar over every page, the heading of the menu, the
 sign-in and the browser's tab, each followed by " – GPON". The browser keeps
 the last name it read only so that the sign-in and the tab show it before
