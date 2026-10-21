@@ -124,10 +124,13 @@ DFP-34X-2C3 against a laboratory OLT, where 24 runs of the device tests are
 recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
 2026-10-12, is of an earlier image: PTP and the stick's clock, the router, the
 firewall, the laser driver of its own, the address on VLAN 4094, the first
-start's import from the shipped firmware and the way back to it came after
-it, and have been tried by hand. On 2026-10-20 the files of the first release
-were installed on a stick through the shipped firmware's page, by hand
-(`install-guide.rst <docs/handbook/install-guide.rst>`__).
+start's import from the shipped firmware and the way back to it, and the
+panel's Operator and System pages with what they set came after it, and have
+been tried by hand. On 2026-10-20 the files of the first release were
+installed on a stick through the shipped firmware's page, by hand
+(`install-guide.rst <docs/handbook/install-guide.rst>`__). What an OLT may set
+up that the lab OLT does not was tried on 2026-10-21 with messages of a
+stand-in OLT (`tests/device/README.rst <tests/device/README.rst>`__).
 
 | 🟢 **Tested**: passed the recorded device tests on the lab OLT.
 | 🟡 **Bench**: works on the developer's stick; no recorded test run yet.
@@ -155,6 +158,34 @@ were installed on a stick through the shipped firmware's page, by hand
      - Recorded on 2026-10-07, on an earlier image; the current image ran
        the kernel's selftests of the devlink parameters and the tc offload,
        not these cases
+   * - The ports told to the OLT: the Ethernet UNIs, the VEIP, phone sockets,
+       as the ONT the stick stands in for had them
+     - 🟡 Bench
+     - Each choice made the lab OLT read the MIB again, with no message
+       refused (by hand, 2026-10-21)
+   * - What an OLT may set up that the lab OLT does not: a PPPoE login, a
+       multicast profile, a SIP phone on a phone socket
+     - 🟡 Bench
+     - With a stand-in OLT's messages in the PON's inject file of a RAM
+       image (2026-10-21): each reached the panel's values, the passwords
+       only with root's; a group outside the profile was refused, and the
+       IP host's voice VLAN got a host VLAN of the stick's own. The device
+       tests ``omci.olt-login``, ``omci.igmp-policy`` and ``omci.phone``
+       passed, not yet in a recorded run
+   * - Television on the panel: the OLT's policy, the groups watched and
+       refused, the priority of IGMP, a test of a group
+     - 🟡 Bench
+     - The policy and a refusal as above. A test of a group joins it and
+       puts the switch's rule that counts its bytes in place, and takes it
+       away again; no stream came on the lab OLT, so the count was not
+       measured with traffic (2026-10-21)
+   * - The rules of the OLT's services: moved to another VLAN, kept off the
+       host, kept to the Ethernet UNIs or the VEIP alone
+     - 🟡 Bench
+     - A rule set and taken away from the panel's API reached omcid
+       (2026-10-21). The lab OLT's services carry no VLAN, so no rule of a
+       person's moved traffic there; the stick's own move of a voice VLAN
+       did, as above
    * - The host lane, 2.5 or 1 Gb/s, found by itself
      - 🟢 Tested
      - 2500BASE-X, and 1000BASE-X with auto-negotiation (2026-10-07); the
@@ -210,7 +241,9 @@ were installed on a stick through the shipped firmware's page, by hand
      - ⚪ Not on a stick yet
      - The sessions' IPv6 is handed to the router behind the stick. The
        panel takes a network's IPv6 setting, but the stick does not apply it
-       yet (``onu-apply``)
+       yet (``onu-apply``). The switch's driver can route a local network's
+       IPv6 hosts in its engine (its KUnit cases), not yet measured on a
+       stick
    * - The PTP hardware clock, its pulse once a second, its receive stamps
      - 🟢 Tested
      - ``system.phc``, 2026-10-12
@@ -228,12 +261,24 @@ were installed on a stick through the shipped firmware's page, by hand
    * - The laser driver as a driver of its own (GN25L95), with its hwmon
        device
      - 🟡 Bench
-     - The release's image reached O5 with it on 2026-10-20; its
-       diagnostics are not in a recorded run yet
+     - The release's image reached O5 with it on 2026-10-20. On 2026-10-21
+       a bring-up left the module's own extinction-ratio loop on: 11
+       activations with it off and 12 with it on reached O5 alike on the lab
+       OLT, and the lower power levels measured 3.0 and 6.0 dB down (by hand,
+       a RAM image). Its diagnostics are not in a recorded run yet
    * - The web panel and its API over HTTPS
      - 🟢 Tested
      - The API and the delivery of the page. What the panel shows in a
-       browser is checked by hand
+       browser is checked by hand. Every read of the API answered as
+       ``pond/openapi.json`` describes it on the developer's stick
+       (2026-10-21)
+   * - The panel's System pages: the keys of ssh and of HTTPS, an own
+       certificate, the sessions open, the token of scripts
+     - ⚪ Not on a stick yet
+     - Their reads answer on the developer's stick, and ssh takes the keys
+       from where they are kept now (2026-10-21). A change needs root's
+       password and has run in the programs' tests on the build machine
+       alone
    * - Settings kept beside the shipped firmware's files
      - 🟢 Tested
      - A save leaves the shipped firmware's 13 files as they were. Eight
