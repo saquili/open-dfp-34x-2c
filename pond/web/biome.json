@@ -3,5 +3,8 @@
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "linter": { "rules": { "recommended": true } },
   "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always" } },
-  "css": { "parser": { "tailwindDirectives": true } }
+  "css": { "parser": { "tailwindDirectives": true } },
+  "overrides": [
+    { "includes": ["src/api/gen/**"], "linter": { "enabled": false }, "assist": { "enabled": false } }
+  ]
 }

@@ -13,8 +13,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { CHANGES } from "../lib/omci-frames";
-import { request } from "./client";
-import type { OmciFrame, OmciFrames } from "./types";
+import { getOmciFrames } from "./gen/pond";
+import type { OmciFrame } from "./types";
 
 /* The frames the panel keeps, as omcid does, and a read's most. */
 const KEPT = 1024;
@@ -56,8 +56,7 @@ export function useConversation(): Conversation {
     const read = async () => {
       let full = false;
       try {
-        const v = (await request<{ value: OmciFrames }>(`/api/get/omci_frames?since=${since}`))
-          .value;
+        const v = (await getOmciFrames({ since })).value;
         if (stopped) return;
         const last = () => kept.at(-1)?.seq ?? -1;
         const again = v.head < since || (kept.length > 0 && (v.frames[0]?.seq ?? since) < since);

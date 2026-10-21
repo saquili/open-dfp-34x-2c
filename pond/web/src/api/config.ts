@@ -17,29 +17,40 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { ApiError, lines, OfflineError, request } from "./client";
-import type {
-  Banks,
-  Bridge,
-  Clock,
-  Firmware,
-  Identity,
-  Iptv,
-  IptvTest,
-  LeaseInfo,
-  Mgmt,
-  Network,
-  OltLogin,
-  OmciValue,
-  Phone,
-  PhoneSecrets,
-  ServiceRules,
-  Sessions,
-  SfpLane,
-  Ssh,
-  SshKey,
-  Tls,
-  TokenState,
-} from "./types";
+import {
+  authSessions,
+  authSessionsOthers,
+  firmwareReturn,
+  firmwareTry,
+  getBanks,
+  getClock,
+  getFirmware,
+  getIdentity,
+  getIptv,
+  getLeases,
+  getMgmt,
+  getOmci,
+  getPhone,
+  getServiceRules,
+  getSfpLane,
+  getSsh,
+  getTls,
+  identityOltLogin,
+  iptvTest,
+  phoneSecrets,
+  sshHostKey,
+  sshKeys,
+  sshKeysOnly,
+  sshKeysRemove,
+  systemRestart,
+  tlsCertificate,
+  tlsKey,
+  tlsSelfSigned,
+  token,
+  tokenNew,
+  tokenOff,
+} from "./gen/pond";
+import type { Bridge, Network, Tls } from "./types";
 
 interface Value<T> {
   id: string;
@@ -48,35 +59,35 @@ interface Value<T> {
 
 export const banksQuery = queryOptions({
   queryKey: ["banks"],
-  queryFn: async () => (await request<Value<Banks>>("/api/get/banks")).value,
+  queryFn: async () => (await getBanks()).value,
   staleTime: 60_000,
 });
 
 /* The panel's certificates: they change only with the stick's addresses. */
 export const tlsQuery = queryOptions({
   queryKey: ["tls"],
-  queryFn: async () => (await request<Value<Tls>>("/api/get/tls")).value,
+  queryFn: async () => (await getTls()).value,
   staleTime: 300_000,
 });
 
 /* The clock and its source: timed writes its state every 10 s. */
 export const clockQuery = queryOptions({
   queryKey: ["clock"],
-  queryFn: async () => (await request<Value<Clock>>("/api/get/clock")).value,
+  queryFn: async () => (await getClock()).value,
   staleTime: 5_000,
   refetchInterval: 10_000,
 });
 
 export const identityQuery = queryOptions({
   queryKey: ["identity"],
-  queryFn: async () => (await request<Value<Identity>>("/api/get/identity")).value,
+  queryFn: async () => (await getIdentity()).value,
   staleTime: 30_000,
 });
 
 /* What the OLT set up: slow to read, and it changes only when the OLT says so. */
 export const omciQuery = queryOptions({
   queryKey: ["omci"],
-  queryFn: async () => (await request<Value<OmciValue>>("/api/get/omci")).value,
+  queryFn: async () => (await getOmci()).value,
   staleTime: 20_000,
   refetchInterval: 30_000,
 });
@@ -96,7 +107,7 @@ export const LEASES_POLL_MS = 30_000;
 
 export const leasesQuery = queryOptions({
   queryKey: ["leases"],
-  queryFn: async () => (await request<Value<LeaseInfo[]>>("/api/get/leases")).value,
+  queryFn: async () => (await getLeases()).value,
   staleTime: 10_000,
   refetchInterval: LEASES_POLL_MS,
   retry: false,
@@ -123,7 +134,7 @@ export function useBanks() {
 /* The ssh server's keys: they change only when a person changes them. */
 export const sshQuery = queryOptions({
   queryKey: ["ssh"],
-  queryFn: async () => (await request<Value<Ssh>>("/api/get/ssh")).value,
+  queryFn: async () => (await getSsh()).value,
   staleTime: 60_000,
 });
 
@@ -137,7 +148,7 @@ export function useSsh() {
  */
 export const sessionsQuery = queryOptions({
   queryKey: ["sessions"],
-  queryFn: () => request<Sessions>("/api/auth/sessions"),
+  queryFn: () => authSessions(),
   staleTime: 10_000,
   refetchInterval: 30_000,
 });
@@ -149,7 +160,7 @@ export function useSessions() {
 /* Whether a token of scripts is in force: it changes only when a person changes it. */
 export const tokenQuery = queryOptions({
   queryKey: ["token"],
-  queryFn: () => request<TokenState>("/api/token"),
+  queryFn: () => token(),
   staleTime: 60_000,
 });
 
@@ -172,7 +183,7 @@ export function useIdentity() {
 /* The phone the OLT set up: it changes only when the OLT says so. */
 export const phoneQuery = queryOptions({
   queryKey: ["phone"],
-  queryFn: async () => (await request<Value<Phone>>("/api/get/phone")).value,
+  queryFn: async () => (await getPhone()).value,
   staleTime: 30_000,
 });
 
@@ -183,7 +194,7 @@ export function usePhone() {
 /* The stick's rules for the services: they change with the OLT's services and a person's choice. */
 export const serviceRulesQuery = queryOptions({
   queryKey: ["service_rules"],
-  queryFn: async () => (await request<Value<ServiceRules>>("/api/get/service_rules")).value,
+  queryFn: async () => (await getServiceRules()).value,
   staleTime: 10_000,
 });
 
@@ -194,7 +205,7 @@ export function useServiceRules() {
 /* Television: the groups change as people switch channels, so it is read every few seconds while shown. */
 export const iptvQuery = queryOptions({
   queryKey: ["iptv"],
-  queryFn: async () => (await request<Value<Iptv>>("/api/get/iptv")).value,
+  queryFn: async () => (await getIptv()).value,
   refetchInterval: 3_000,
 });
 
@@ -207,10 +218,7 @@ export const useIptvTest = () =>
   useMutation({
     mutationKey: ["iptv", "test"],
     mutationFn: (v: { group: string; vlan: string; seconds: number }) =>
-      request<IptvTest>(
-        "/api/iptv/test",
-        lines({ GROUP: v.group, VLAN: v.vlan || undefined, SECONDS: String(v.seconds) }),
-      ),
+      iptvTest(lines({ GROUP: v.group, VLAN: v.vlan || undefined, SECONDS: String(v.seconds) })),
   });
 
 /*
@@ -314,14 +322,14 @@ const waiting = (q: { state: { data?: { trial?: unknown; pending?: unknown } } }
 export const useSfpLane = () =>
   useQuery({
     queryKey: ["sfp_lane"],
-    queryFn: async () => (await request<Value<SfpLane>>("/api/get/sfp_lane")).value,
+    queryFn: async () => (await getSfpLane()).value,
     refetchInterval: waiting,
     retry: false,
   });
 export const useMgmt = () =>
   useQuery({
     queryKey: ["mgmt"],
-    queryFn: async () => (await request<Value<Mgmt>>("/api/get/mgmt")).value,
+    queryFn: async () => (await getMgmt()).value,
     refetchInterval: waiting,
     retry: false,
   });
@@ -334,7 +342,7 @@ export const useIdentityChange = () => useChange("identity");
 export function restartOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["system", "restart"],
-    mutationFn: () => request<{ ok: boolean }>("/api/system/restart", {}),
+    mutationFn: () => systemRestart(),
     onSuccess: () => void refresh(qc, "restart"),
   });
 }
@@ -344,7 +352,7 @@ export const useRestart = () => useMutation(restartOptions(useQueryClient()));
 /* The banks: read often while an upload runs, rarely otherwise. */
 export const firmwareQuery = queryOptions({
   queryKey: ["firmware"],
-  queryFn: async () => (await request<Value<Firmware>>("/api/get/firmware")).value,
+  queryFn: async () => (await getFirmware()).value,
   refetchInterval: (query) => {
     const state = query.state.data?.update.state;
     return state === "receiving" || state === "writing" ? 2_000 : 30_000;
@@ -362,17 +370,14 @@ export function useFirmware() {
  */
 const PASSWORD_HEADER = "X-Pond-Password";
 const passwordHeader = (secret: string) => ({ [PASSWORD_HEADER]: encodeURIComponent(secret) });
+const withPassword = (secret: string) => ({ headers: passwordHeader(secret) });
 
 /** Start a bank once, the other one without @bank: pond arms it and restarts. */
 export function tryOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["firmware", "try"],
     mutationFn: ({ bank, secret }: { bank?: number; secret: string }) =>
-      request<{ ok: boolean }>(
-        "/api/firmware/try",
-        bank === undefined ? "" : String(bank),
-        passwordHeader(secret),
-      ),
+      firmwareTry(bank === undefined ? "" : (String(bank) as "0" | "1"), withPassword(secret)),
     onSuccess: () => void refresh(qc, "try"),
   });
 }
@@ -384,7 +389,7 @@ export function returnOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["firmware", "return"],
     mutationFn: ({ bank, secret }: { bank: number; secret: string }) =>
-      request<{ ok: boolean }>("/api/firmware/return", String(bank), passwordHeader(secret)),
+      firmwareReturn(String(bank) as "0" | "1", withPassword(secret)),
     onSuccess: () => void refresh(qc, "return"),
   });
 }
@@ -404,12 +409,7 @@ type Keyed<T> = T & { secret: string };
 export function sshHostKeyOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["ssh", "host-key"],
-    mutationFn: ({ secret }: Keyed<object>) =>
-      request<{ ok: boolean; host_key?: { type: string; fingerprint: string } }>(
-        "/api/ssh/host-key",
-        "",
-        passwordHeader(secret),
-      ),
+    mutationFn: ({ secret }: Keyed<object>) => sshHostKey(withPassword(secret)),
     onSuccess: () => void refresh(qc, "ssh_host_key"),
   });
 }
@@ -418,11 +418,7 @@ export function sshKeyAddOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["ssh", "key-add"],
     mutationFn: ({ key, secret }: Keyed<{ key: string }>) =>
-      request<{ ok: boolean; key?: SshKey }>(
-        "/api/ssh/keys",
-        `${key.trim()}\n`,
-        passwordHeader(secret),
-      ),
+      sshKeys(`${key.trim()}\n`, withPassword(secret)),
     onSuccess: () => void refresh(qc, "ssh_key"),
   });
 }
@@ -431,7 +427,7 @@ export function sshKeyRemoveOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["ssh", "key-remove"],
     mutationFn: ({ fingerprint, secret }: Keyed<{ fingerprint: string }>) =>
-      request<{ ok: boolean }>("/api/ssh/keys/remove", fingerprint, passwordHeader(secret)),
+      sshKeysRemove(fingerprint, withPassword(secret)),
     onSuccess: () => void refresh(qc, "ssh_key"),
   });
 }
@@ -440,7 +436,7 @@ export function sshKeysOnlyOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["ssh", "keys-only"],
     mutationFn: ({ on, secret }: Keyed<{ on: boolean }>) =>
-      request<{ ok: boolean }>("/api/ssh/keys-only", on ? "on" : "off", passwordHeader(secret)),
+      sshKeysOnly(on ? "on" : "off", withPassword(secret)),
     onSuccess: () => void refresh(qc, "ssh_keys_only"),
   });
 }
@@ -460,33 +456,26 @@ function tlsOptions<V>(qc: QueryClient, change: Change, send: (v: V) => Promise<
 }
 
 export const tlsKeyOptions = (qc: QueryClient) =>
-  tlsOptions(qc, "tls_key", ({ secret }: Keyed<object>) =>
-    request<TlsAnswer>("/api/tls/key", "", passwordHeader(secret)),
-  );
+  tlsOptions(qc, "tls_key", ({ secret }: Keyed<object>) => tlsKey(withPassword(secret)));
 
 export const tlsCertificateOptions = (qc: QueryClient) =>
   tlsOptions(
     qc,
     "tls_certificate",
     ({ certificate, key, secret }: Keyed<{ certificate: string; key: string }>) =>
-      request<TlsAnswer>("/api/tls/certificate", { certificate, key }, passwordHeader(secret)),
+      tlsCertificate({ certificate, key }, withPassword(secret)),
   );
 
 export const tlsSelfSignedOptions = (qc: QueryClient) =>
   tlsOptions(qc, "tls_self_signed", ({ secret }: Keyed<object>) =>
-    request<TlsAnswer>("/api/tls/self-signed", "", passwordHeader(secret)),
+    tlsSelfSigned(withPassword(secret)),
   );
 
 /** End every session but this browser's, with root's password: how many ended. */
 export function endOthersOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["sessions", "others"],
-    mutationFn: ({ secret }: Keyed<object>) =>
-      request<{ ok: boolean; ended: number }>(
-        "/api/auth/sessions/others",
-        "",
-        passwordHeader(secret),
-      ),
+    mutationFn: ({ secret }: Keyed<object>) => authSessionsOthers(withPassword(secret)),
     onSuccess: () => void refresh(qc, "sessions_end"),
   });
 }
@@ -499,8 +488,7 @@ export function endOthersOptions(qc: QueryClient) {
 export function tokenNewOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["token", "new"],
-    mutationFn: ({ secret }: Keyed<object>) =>
-      request<{ ok: boolean; token?: string }>("/api/token/new", "", passwordHeader(secret)),
+    mutationFn: ({ secret }: Keyed<object>) => tokenNew(withPassword(secret)),
     onSuccess: () => void refresh(qc, "token"),
   });
 }
@@ -509,8 +497,7 @@ export function tokenNewOptions(qc: QueryClient) {
 export function tokenOffOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["token", "off"],
-    mutationFn: ({ secret }: Keyed<object>) =>
-      request<{ ok: boolean }>("/api/token/off", "", passwordHeader(secret)),
+    mutationFn: ({ secret }: Keyed<object>) => tokenOff(withPassword(secret)),
     onSuccess: () => void refresh(qc, "token"),
   });
 }
@@ -523,16 +510,14 @@ export const useTokenOff = () => useMutation(tokenOffOptions(useQueryClient()));
 export const usePhoneSecrets = () =>
   useMutation({
     mutationKey: ["phone", "secrets"],
-    mutationFn: ({ secret }: Keyed<object>) =>
-      request<PhoneSecrets>("/api/phone/secrets", "", passwordHeader(secret)),
+    mutationFn: ({ secret }: Keyed<object>) => phoneSecrets(withPassword(secret)),
   });
 
 /** The PPPoE login the OLT sent, with its password, which root's password shows. */
 export const useOltLogin = () =>
   useMutation({
     mutationKey: ["identity", "olt-login"],
-    mutationFn: ({ secret }: Keyed<object>) =>
-      request<OltLogin>("/api/identity/olt-login", "", passwordHeader(secret)),
+    mutationFn: ({ secret }: Keyed<object>) => identityOltLogin(withPassword(secret)),
   });
 export const useSshHostKey = () => useMutation(sshHostKeyOptions(useQueryClient()));
 export const useSshKeyAdd = () => useMutation(sshKeyAddOptions(useQueryClient()));

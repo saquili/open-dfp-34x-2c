@@ -368,7 +368,8 @@ function PortCounters() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
   const c = live?.port_counters?.sfp;
-  const n = (k: string) => integer(c?.[k], lang);
+  /* Every counter is a number (pond/openapi.json); Orval types the ones it does not name as unknown. */
+  const n = (k: string) => integer(c?.[k] as number | undefined, lang);
   return (
     <div className="grid content-start grid-cols-2 gap-3 lg:grid-cols-1">
       <Stat

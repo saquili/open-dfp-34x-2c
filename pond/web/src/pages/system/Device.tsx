@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { request } from "../../api/client";
 import { useClock, useHostnameChange, useProductChange, useRestart } from "../../api/config";
+import { schema } from "../../api/gen/pond";
 import { useLive } from "../../api/live";
 import { useConfirm } from "../../components/Confirm";
 import { Field, SaveState, useChangeState } from "../../components/Field";
@@ -271,7 +272,7 @@ function ClockCard() {
 }
 
 async function report() {
-  const ids = (await request<{ items: { id: string }[] }>("/api/schema")).items.map((i) => i.id);
+  const ids = (await schema()).items.map((i) => i.id);
   const values: Record<string, unknown> = {};
   for (const id of ids) {
     try {

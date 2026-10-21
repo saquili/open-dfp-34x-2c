@@ -16,15 +16,16 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { AuthError, request } from "./client";
+import { AuthError } from "./client";
 import { refresh } from "./config";
+import { authLogin, authLogout, authPassword, authSession } from "./gen/pond";
 import type { Session } from "./types";
 
 export const sessionQuery = queryOptions({
   queryKey: ["session"],
   queryFn: async (): Promise<Session | null> => {
     try {
-      return await request<Session>("/api/auth/session");
+      return await authSession();
     } catch (e) {
       if (e instanceof AuthError) return null;
       throw e;
@@ -42,7 +43,7 @@ export function forgetReads(qc: QueryClient) {
 export function signInOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["auth", "login"],
-    mutationFn: (v: { user: string; secret: string }) => request<Session>("/api/auth/login", v),
+    mutationFn: (v: { user: string; secret: string }) => authLogin(v),
     onSuccess: (s) => {
       forgetReads(qc);
       qc.setQueryData(sessionQuery.queryKey, s);
@@ -53,7 +54,7 @@ export function signInOptions(qc: QueryClient) {
 export function signOutOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["auth", "logout"],
-    mutationFn: () => request<Record<string, never>>("/api/auth/logout", {}),
+    mutationFn: () => authLogout(),
     onSettled: () => {
       qc.setQueryData(sessionQuery.queryKey, null);
       forgetReads(qc);
@@ -68,7 +69,7 @@ export function signOutOptions(qc: QueryClient) {
 export function passwordOptions(qc: QueryClient) {
   return mutationOptions({
     mutationKey: ["auth", "password"],
-    mutationFn: (v: { current: string; next: string }) => request<Session>("/api/auth/password", v),
+    mutationFn: (v: { current: string; next: string }) => authPassword(v),
     onSuccess: (s) => {
       qc.setQueryData(sessionQuery.queryKey, s);
       void refresh(qc, "password");

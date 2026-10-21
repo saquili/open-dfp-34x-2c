@@ -10,7 +10,7 @@
 
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { request } from "./client";
+import { getm } from "./gen/pond";
 import { LIVE_IDS, type Live } from "./types";
 
 export const POLL_MS = 5_000;
@@ -141,7 +141,8 @@ function busyShare(prev: Reading, cur: Reading): number | null {
 }
 
 export async function fetchLive(): Promise<Live> {
-  const live = await request<Live>(`/api/getm?ids=${LIVE_IDS.join(",")}`);
+  /* pond gives a value it cannot read as an error in its place, which the panel takes as it comes. */
+  const live = (await getm({ ids: LIVE_IDS.join(",") })) as Live;
   record(live, Date.now());
   return live;
 }
