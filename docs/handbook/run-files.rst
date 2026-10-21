@@ -148,10 +148,28 @@ Shared by two components
      - ``onu-config``
      - ``dropbear`` (``-r``)
      - The ssh server's host key in its own format; mode 0600.
+   * - ``/run/dropbear/authorized_keys``
+     - ``onu-config ssh-keys``
+     - ``dropbear`` (``-D /run/dropbear``), at each login
+     - The public keys root logs in with, one line each: the image's
+       ``/root/.ssh/authorized_keys`` first, then the store's
+       (``onu-utils/README.rst``); mode 0600.
+   * - ``/run/dropbear/keys-only``
+     - ``onu-config ssh-keys``
+     - ``onu-run ssh``, which gives ``dropbear`` ``-s``
+     - There while the ssh server takes keys alone, and no password, and a key
+       is kept; mode 0600.
    * - ``/run/pond/tls.key``
-     - the boot script, from ``/run/onu-tls-key``
-     - ``pond`` (``-k``)
+     - ``onu-config tls install``, from ``/run/onu-tls-key``
+     - ``pond`` (``-k``), again after a change through it
      - The panel's key, a P-256 scalar; mode 0400, account ``pond``.
+   * - ``/run/pond/tls.own``
+     - ``onu-config tls install``, from ``/run/onu-tls-own``
+     - ``pond`` (``-c``), again after a change through it
+     - An own certificate, while the store keeps one: its P-256 key in 64
+       hexadecimal characters on the first line, the certificate and its
+       chain, DER in base64, on the second (``pond/README.rst``, "HTTPS");
+       mode 0400, account ``pond``.
    * - ``/run/pond/token``
      - ``onu-config token install``
      - ``pond`` (``-t``), at each request that has no session
@@ -241,9 +259,14 @@ Private to one program or to onu-utils
      - The lines of a two-slot store of older builds, while they are in RAM
        only
        (``updating.rst``).
-   * - ``/run/onu-tls-key``, ``/run/onu-ssh-key``, ``/run/onu-pond-token``
-     - The keys and the token as ``onu-config load`` took them out of the
-       store, before the boot script hands each to its program; mode 0600.
+   * - ``/run/onu-tls-key``, ``/run/onu-tls-own``, ``/run/onu-ssh-key``,
+       ``/run/onu-pond-token``
+     - The keys, the own certificate and the token as ``onu-config load``
+       took them out of the store, or a change put them, before each is
+       handed to its program; mode 0600.
+   * - ``/run/dropbear/``
+     - The ssh server's directory, root's alone (mode 0700), as the server
+       asks of each directory of the path of its keys.
    * - ``/run/omcid/mib``
      - The MIB the OLT gave ``omcid``, kept so that a start again goes
        unseen; mode 0600, account ``omcid``.

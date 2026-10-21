@@ -70,7 +70,14 @@ The lengths are those ``/proc/mtd`` gives on the board (M: the command below,
 
 **The copy is private.** It holds the unit's registration identity, its MAC
 address and this system's secrets. Keep it off shared storage, out of this
-repository and out of any report or issue.
+repository and out of any report or issue. The secrets are those of the
+store in ``config`` (``onu-utils/README.rst``, the table of its keys): the
+hash of root's password, the PPPoE accounts, the token of scripts, the ssh
+server's host key, the panel's key and the private key of an own certificate
+of the panel, beside the public keys root logs in to ssh with and whether
+ssh takes them alone. Whoever has the copy has those keys: after a copy went
+where it should not, make the servers' keys anew under System, tab Access,
+and change root's password.
 
 Taking the copy
 ===============

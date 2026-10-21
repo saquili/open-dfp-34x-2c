@@ -426,9 +426,10 @@ The boot script
        VLAN or from it, in every mode (``system.rst``, "Reaching the
        stick");
     #. starts the servers on the addresses above and nowhere else, as
-       procd's services: ``dropbear`` (keys, and root's password once one
-       other than the default is set, with the ed25519 host key that
-       ``onu-config ssh`` keeps in the store),
+       procd's services: ``dropbear`` (keys, the image's and those the store
+       keeps, and root's password once one other than the default is set,
+       unless its owner had it take keys alone, with the ed25519 host key
+       that ``onu-config ssh`` keeps in the store),
        ``onu-act``, and ``pond``,
        the status daemon and its panel, over HTTPS on port 443 and on port 80
        to send a browser there (ADR 0013), as an account of its own, ``pond``,
@@ -519,7 +520,10 @@ Files of one bench
 ------------------
 
 An image that a bench uses needs its ssh key and perhaps its own addresses,
-which do not belong in the repository. ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` names a
+which do not belong in the repository (a stick's owner adds keys through the
+panel instead, which the store keeps; the image's come first in the ssh
+server's list, ``/run/dropbear/authorized_keys``, and the panel does not show
+them). ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` names a
 directory whose files the post-image script lays over a copy of the root
 filesystem tree before it packs ``r0.squashfs``::
 

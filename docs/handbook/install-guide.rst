@@ -210,9 +210,11 @@ restart the stick answers::
 Open ``https://192.168.1.1/``. The panel answers over HTTPS; its port 80 only
 sends a browser on to HTTPS. The browser warns about the certificate, which
 the stick signed itself (ADR 0013). Its SHA-256 fingerprint is printed on the
-console at every start, and shown in the panel under System, tab Settings,
-card "Security", as "Certificate fingerprint (SHA-256)". Accept the
-certificate to go on, and compare the fingerprint once you are in.
+console at every start, and shown in the panel under System, tab Access,
+card "HTTPS of the panel", as "Certificate fingerprint (SHA-256)". Accept the
+certificate to go on, and compare the fingerprint once you are in. A
+certificate that an authority you trust signed may take its place there
+later ("Keys of ssh and of the panel", below).
 
 Step 5: Sign in
 ===============
@@ -287,6 +289,47 @@ Writing the copy back is work for a bench, not for the panel: it needs the
 serial console, a host port that links at 2500BASE-X and a RAM image built
 from this repository's sources, which is not among a release's files ("After
 the first update", below; ``backup.rst``, "Writing it back").
+
+Keys of ssh and of the panel
+============================
+
+Under System, tab Access, the panel changes the keys of the stick's two
+servers. Each change there needs root's password again: type it into "Root
+password" at the top of the tab; it goes with each change and is not kept. A
+wrong one is refused, and counts as a wrong sign-in. These changes have been
+tried against the panel's mock stick and pond's tests, not yet on a stick.
+
+To log in to ssh with a key, paste one line of your public key, such as the
+content of ``~/.ssh/id_ed25519.pub``, into "Public key" under "Keys for ssh
+login (root)" and press "Add the key": Ed25519, ECDSA (P-256, P-384, P-521)
+or RSA of 2048 to 4096 bits, eight keys at most. The row shows its comment,
+kind and SHA-256 fingerprint, as ``ssh-keygen -l -f key.pub`` prints it.
+``ssh root@192.168.1.1`` then takes the key. Once a key works, "Take keys
+only, no password" makes the ssh server refuse root's password, as a key's
+owner may want; the panel and the console still take the password. The
+switch waits for a key, and the last key cannot be removed while it is on.
+
+"Make a new host key" gives the ssh server a new key: an ssh client that knew
+the old one refuses to connect, as for a key it does not know, until the line
+of the stick is taken out of its ``known_hosts`` (``ssh-keygen -R
+192.168.1.1``); compare the fingerprint it shows then with the one on the tab.
+
+Under "HTTPS of the panel", "Make a new key" makes new certificates of the
+stick's own; "Your own certificate" takes a certificate that an authority your
+browsers trust signed, with the CA certificates between it and the
+authority's root, in PEM, and its key, an unencrypted ECDSA key of P-256 (the
+panel's HTTPS takes no other kind). It should name the address the panel is
+opened at among its alternative names, ``IP:192.168.1.1`` for instance; the
+panel warns when it does not, when it ends within 30 days, and when it has
+ended. "Back to the stick's own certificate" takes it away. After each of
+these the browser warns once about a certificate it was not shown before,
+unless it trusts the authority: reload the page, and compare the fingerprint
+the browser shows with the one on the tab. The console prints the fingerprint
+of the certificate served at every start.
+
+The keys and the certificate are kept in the stick's store, so they hold
+after a restart and an update, and a copy of the flash holds them
+(``backup.rst``).
 
 Updating to a newer release
 ===========================
