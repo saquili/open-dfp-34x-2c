@@ -271,6 +271,11 @@ that stops with an error does.
     argument that names a member, where C allows none; and
     ``UNCOMMENTED_DEFINITION``, which misses the comment of a lock when the
     patch removes the old definition between the comment and the new one.
+    One patch is also checked without ``UNKNOWN_COMMIT_ID``: the published
+    message of "net: dsa: realtek: rtl9602c: Give the bridging CPU its IPv6
+    multicast" names the commit it reverts by its id from before the history
+    was put together again, which no longer exists; the patch is found by
+    that id in its message, and every other patch is checked for it.
     With no commits there yet, it checks that the split is the imported
     release. The split needs the commit the import was squashed from, which
     the repository keeps with a tag (``CONTRIBUTING.rst``); push that tag

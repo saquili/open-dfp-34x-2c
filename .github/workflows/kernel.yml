@@ -145,8 +145,24 @@ jobs:
           # out of the patches before they are checked, and nothing else.
           git format-patch -q -o "$RUNNER_TEMP/patches" "${series[@]}"
           sed -i '/^Co-Authored-By: /d' "$RUNNER_TEMP"/patches/*.patch
+          # One published message names the commit it reverts by its id from
+          # before the history was put together again (CONTRIBUTING.rst),
+          # 5dffc72cf355, which checkpatch cannot find; that patch alone is
+          # checked without UNKNOWN_COMMIT_ID, and every other with it.
+          old=$(grep -l '^This reverts commit 5dffc72cf3555072263a415a047921c93af25fc3\.$' \
+            "$RUNNER_TEMP"/patches/*.patch || true)
+          rest=()
+          for p in "$RUNNER_TEMP"/patches/*.patch; do
+            [ "$p" = "$old" ] || rest+=("$p")
+          done
+          rc=0
           ./scripts/checkpatch.pl --strict \
-            ${CHECKPATCH_IGNORE:+--ignore "$CHECKPATCH_IGNORE"} "$RUNNER_TEMP"/patches/*.patch
+            ${CHECKPATCH_IGNORE:+--ignore "$CHECKPATCH_IGNORE"} "${rest[@]}" || rc=1
+          if [ -n "$old" ]; then
+            ./scripts/checkpatch.pl --strict \
+              --ignore "${CHECKPATCH_IGNORE:+$CHECKPATCH_IGNORE,}UNKNOWN_COMMIT_ID" "$old" || rc=1
+          fi
+          exit $rc
 
   dt-bindings:
     runs-on: ubuntu-24.04
