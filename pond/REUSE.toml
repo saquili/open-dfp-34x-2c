@@ -16,3 +16,10 @@ path = ["web/package.json", "web/package-lock.json", "web/tsconfig.json", "web/b
         "openapi.json"]
 SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
 SPDX-License-Identifier = "GPL-2.0-only"
+
+# The panel's types and requests that Orval makes from openapi.json
+# (web/orval.config.mjs), whose header is Orval's.
+[[annotations]]
+path = "web/src/api/gen/**"
+SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
+SPDX-License-Identifier = "GPL-2.0-only"

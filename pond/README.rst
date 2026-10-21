@@ -210,7 +210,14 @@ on the stick. ``make check`` checks it against the routes of ``src/pond.c``
 and ``src/keys.c`` and the values of ``src/table.c`` (``tests/test_openapi.py``),
 and the panel's tests check the mock stick's answers against its schemas
 (``web/src/mocks/openapi.test.ts``): a route or a value added without its
-description fails both.
+description fails both. It is where the panel's types come from: Orval
+makes them, and a function and a TanStack Query hook of each route, its
+``operationId``, into ``web/src/api/gen`` (``npm run gen:api``, set in
+``web/orval.config.mjs``), and ``npm run gen:check`` fails when what is
+there is not what the description makes. Their requests go through the
+panel's own (``web/src/api/fetcher.ts``), with its session, header and
+errors, and a change's keys go as ``KEY=VALUE`` lines; the mock stick is
+the panel's own. So a value or a route changes in ``openapi.json`` first.
 
 ``/api/health`` answers anyone. ``POST /api/auth/login`` takes ``{"user",
 "secret"}``; ``/api/auth/session`` says who is signed in and whether the
