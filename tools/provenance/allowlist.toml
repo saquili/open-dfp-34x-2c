@@ -351,6 +351,17 @@ the option's name is the build system's.
 """
 
 [[allow]]
+gate = "forbidden-words"
+rules = ["dev-kit"]
+paths = ["pond/web/package-lock.json", "tools/provenance/allowlist.toml"]
+match = '@modelcontextprotocol/sdk'
+reason = """
+The name of a package that Orval's package for the Model Context Protocol
+takes as an optional peer, which the panel's lock lists and npm does not
+install; the name is that package's. This entry names it too.
+"""
+
+[[allow]]
 gate = "unit-ids"
 rules = ["password"]
 commits = [
