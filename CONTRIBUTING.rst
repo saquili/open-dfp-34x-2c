@@ -129,10 +129,18 @@ That keeps the kernel history separable::
 
     git subtree split -P linux
 
-prints a commit whose history is the imported release followed by exactly our
-kernel commits, with the kernel at its root: a kernel branch to publish, to
-rebase onto the upstream stable tag, or to turn into patches with
-``git format-patch``.
+prints a commit whose history is the imported releases with our kernel commits
+on top, with the kernel at its root. It holds more than that: before the first
+import, ``linux/`` held a README, which a commit removed again, and the
+history keeps the README's commit, and the project's commits up to the one
+that removed it, which hold no kernel. Our kernel commits are the ones that
+descend from the release of the first import, but for the releases imported
+since; with ``base`` and ``upstream`` as ``.github/scripts/kernel-series``
+names those two releases, ::
+
+    git format-patch --ancestry-path=<base> <base>..<split> ^<upstream>
+
+turns them into patches, to publish or to apply onto the upstream stable tag.
 
 The split starts at the commit the import was squashed from, which no branch
 contains; the tag ``linux-6.18.57`` keeps it. Without the tag,
