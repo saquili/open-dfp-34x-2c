@@ -553,7 +553,7 @@ When something fails
    * - "The stick cannot read its settings, so no password is known. [...]"
      - The store in the partition ``config`` cannot be read, and the panel
        refuses every sign-in (``recovery.rst``, "The password is lost").
-   * - "Wrong password: this needs root's password." in a dialog
+   * - "Wrong password. This needs root's password." in a dialog
      - The password typed into the dialog is not root's. It counts as a wrong
        sign-in; the field is emptied for the next try.
    * - "Too many wrong passwords: the stick takes none for N s. [...]"
