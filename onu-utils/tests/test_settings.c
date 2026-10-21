@@ -642,6 +642,17 @@ static void test_forwards(void)
 		"DMZ1=pppoe:1/0/" DEV,
 		"DMZ1=ipoe:8/1/" DEV,
 		"DMZ1=pppoe:1/1/" DEV "/x",
+		"SVC0=500/off",
+		"SVC33=500/off",
+		"SVC1_NAME=x",
+		"SVC1=0/off",
+		"SVC1=4095/off",
+		"SVC1=500/drop",
+		"SVC1=500/move",
+		"SVC1=500/move/0",
+		"SVC1=500/off/411",
+		"SVC1=500/only_uni/x",
+		"SVC1=0500/off",
 	};
 	struct settings s;
 
@@ -666,6 +677,18 @@ static void test_forwards(void)
 	CHECK(judge(&s, PINNED "FORWARD3=pppoe:1/tcp/443/1/" DEV "/443/on\nFORWARD3_NAME=x\n"
 			"FORWARD3=\nDMZ1=pppoe:1/1/" DEV "\nDMZ1=\n") == 0 &&
 	      !strstr(g_out, "FORWARD3") && !strstr(g_out, "DMZ1"));
+
+	/* The rules of the services are written as they are; an empty one is none. */
+	CHECK(judge(&s, PINNED "SVC32=500/move/411\nSVC1=200/off\nSVC2=100/only_uni\n"
+			"SVC3=300/only_veip\nSVC4=600/off\nSVC4=\n") == 0);
+	CHECK(has("SVC32=500/move/411") && has("SVC1=200/off") && has("SVC2=100/only_uni") &&
+	      has("SVC3=300/only_veip") && !strstr(g_out, "SVC4"));
+	/* Two of one service, or two moves to one host VLAN, are refused. */
+	CHECK(judge(&s, PINNED "SVC1=500/off\nSVC2=500/only_uni\n") == -2 &&
+	      strstr(g_err, "one service"));
+	CHECK(judge(&s, PINNED "SVC1=500/move/411\nSVC2=501/move/411\n") == -2 &&
+	      strstr(g_err, "one host VLAN"));
+	CHECK(judge(&s, PINNED "SVC1=500/move/411\nSVC2=501/off\nSVC3=502/move/412\n") == 0);
 
 	/* A port may go to another, and a range to the same ports or to others. */
 	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8080/1/" DEV "/80/on\n") == 0);

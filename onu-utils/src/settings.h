@@ -82,6 +82,14 @@
  * block, and FW_PING_LANS one from the host side's networks, the local
  * networks and the links a session hands its address down by; both block by
  * default. On the management VLAN the stick answers whatever they say.
+ *
+ * The stick's rules for the services the OLT sets up, 1 to 32, are each
+ * SVCn, "FIBRE/move/HOST", "FIBRE/off", "FIBRE/only_uni" or
+ * "FIBRE/only_veip": the service of VLAN FIBRE on the fibre goes to the
+ * host as VLAN HOST, is kept off the host, or is kept to the Ethernet UNIs
+ * or to the VEIP alone. omcid applies them to the OLT's VLAN rules (its
+ * me/svcrule.h); no two are of one service, nor do two moves give one host
+ * VLAN. An empty SVCn removes one.
  */
 
 #ifndef SETTINGS_H
@@ -117,6 +125,8 @@
 #define SETTINGS_RULES 96
 #define SETTINGS_RULE_NAME_MAX 164
 #define SETTINGS_RULE_MAX 128
+/* The rules of the services, as many as omcid takes (OMCI_SVC_MAX). */
+#define SETTINGS_SVCS 32
 
 /* The keys of before that are not a session's, read and never written. */
 enum settings_key {
@@ -214,6 +224,7 @@ struct settings_account {
  * @fwd: the forwards
  * @dmz: the DMZs, DMZn: "CONN/L/MAC", empty for none
  * @rule: the firewall's rules, in their order
+ * @svc: the rules of the services, SVCn: "FIBRE/ACTION[/HOST]", empty for none
  * @fw: what the firewall does where no rule decides, allow or block
  * @legacy_lan: LAN_VLAN, the one link of before, when @had_legacy_lan
  * @had_legacy_lan: whether the set named LAN_VLAN
@@ -228,6 +239,7 @@ struct settings {
 	struct settings_forward fwd[SETTINGS_FORWARDS];
 	char dmz[SETTINGS_DMZS][32];
 	struct settings_rule rule[SETTINGS_RULES];
+	char svc[SETTINGS_SVCS][16];
 	char fw[SETTINGS_NFKEYS][8];
 	char legacy_lan[SETTINGS_VALUE_MAX];
 	bool had_legacy_lan;

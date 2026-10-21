@@ -544,6 +544,31 @@ static bool dmz_spec(const char *v, char cn[8], int *lan, char macv[18])
 	return true;
 }
 
+/*
+ * FIBRE/ACTION[/HOST]: a rule for the service of VLAN FIBRE on the fibre,
+ * move with the VLAN HOST towards the host, or off, only_uni or only_veip.
+ */
+static bool svc_spec(const char *v, unsigned long *fibre, unsigned long *host)
+{
+	char f[3][24];
+	unsigned long a = 0, b = 0;
+
+	if (fields(v, 3, f)) {
+		if (!number(f[0], 1, 4094, &a) || strcmp(f[1], "move") ||
+		    !number(f[2], 1, 4094, &b))
+			return false;
+	} else if (!fields(v, 2, f) || !number(f[0], 1, 4094, &a) ||
+		   (strcmp(f[1], "off") && strcmp(f[1], "only_uni") &&
+		    strcmp(f[1], "only_veip"))) {
+		return false;
+	}
+	if (fibre)
+		*fibre = a;
+	if (host)
+		*host = b;
+	return true;
+}
+
 /* Where a rule of the firewall comes from or goes to. */
 enum end_kind {
 	END_INTERNET,
@@ -953,6 +978,15 @@ int settings_line(struct settings *s, const char *line, char *err,
 			return -1;
 		}
 		snprintf(s->dmz[n], sizeof(s->dmz[n]), "%s", v);
+		return 0;
+	}
+	/* A rule of a service has no name: it is its service's. */
+	if (list_key(key, "SVC", SETTINGS_SVCS, &n, &user) && !user) {
+		if (*v && !svc_spec(v, NULL, NULL)) {
+			snprintf(err, errcap, "%s: not a value of it", key);
+			return -1;
+		}
+		snprintf(s->svc[n], sizeof(s->svc[n]), "%s", v);
 		return 0;
 	}
 	if (list_key(key, "RULE", SETTINGS_RULES, &n, &user)) {
@@ -1487,6 +1521,31 @@ static bool forwards_coherent(const struct settings *s, char *err, size_t errcap
 	return true;
 }
 
+/* No two rules of the services are of one service, nor do two moves give one host VLAN. */
+static bool svcs_coherent(const struct settings *s, char *err, size_t errcap)
+{
+	for (int i = 0; i < SETTINGS_SVCS; i++) {
+		unsigned long fa, ha, fb, hb;
+
+		if (!*s->svc[i])
+			continue;
+		(void)svc_spec(s->svc[i], &fa, &ha);
+		for (int j = i + 1; j < SETTINGS_SVCS; j++) {
+			if (!*s->svc[j])
+				continue;
+			(void)svc_spec(s->svc[j], &fb, &hb);
+			if (fa == fb || (ha && ha == hb)) {
+				snprintf(err, errcap,
+					 fa == fb ? "SVC%d and SVC%d are of one service, VLAN %lu" :
+						    "SVC%d and SVC%d move to one host VLAN, %lu",
+					 i + 1, j + 1, fa == fb ? fa : ha);
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 /*
  * A rule goes from somewhere to somewhere else: never from the internet to
  * the internet, nor within one network. The address of a part of the
@@ -1613,7 +1672,7 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 	}
 	return ipoe_coherent(s, err, errcap) && lans_coherent(s, err, errcap) &&
 	       fixed_coherent(s, err, errcap) && forwards_coherent(s, err, errcap) &&
-	       rules_coherent(s, err, errcap);
+	       svcs_coherent(s, err, errcap) && rules_coherent(s, err, errcap);
 }
 
 size_t settings_format_defaults(char *out, size_t cap)
@@ -1710,6 +1769,11 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 			len += (size_t)snprintf(out + (len < cap ? len : cap),
 						len < cap ? cap - len : 0,
 						"DMZ%d=%s\n", i + 1, s->dmz[i]);
+	for (int i = 0; i < SETTINGS_SVCS; i++)
+		if (*s->svc[i])
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0,
+						"SVC%d=%s\n", i + 1, s->svc[i]);
 	for (int i = 0; i < SETTINGS_RULES; i++) {
 		const struct settings_rule *r = &s->rule[i];
 

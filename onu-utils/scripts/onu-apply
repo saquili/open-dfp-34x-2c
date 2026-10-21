@@ -522,6 +522,22 @@ omcid_applied() {
 	return 0
 }
 
+# The rules of the services, SVCn ("FIBRE/ACTION[/HOST]"), as omcid reads
+# them from $RUN/omcid/rules: a line "FIBRE ACTION [HOST]" each, readable by
+# its account. A new file only when they changed, as omcid programs its data
+# path again at each new one (its target/hw_kernel.c, rules_changed()).
+omcid_rules() {
+	[ -d "$RUN/omcid" ] || return 0
+	awk -F '[=/]' '/^SVC[0-9]+=[0-9]/ { print $2, $3 ($4 != "" ? " " $4 : "") }' \
+		"$CONF" 2>/dev/null >"$RUN/omcid/rules.new" || return 0
+	if cmp -s "$RUN/omcid/rules.new" "$RUN/omcid/rules"; then
+		rm -f "$RUN/omcid/rules.new"
+		return 0
+	fi
+	chmod 644 "$RUN/omcid/rules.new" && mv "$RUN/omcid/rules.new" "$RUN/omcid/rules" ||
+		log "omcid cannot read the rules of the services"
+}
+
 # The identity omcid reads, a copy of the unit's without the PLOAM password,
 # which root alone and the PON driver need: omcid is an account of its own.
 omcid_identity() {
@@ -2247,6 +2263,7 @@ apply() {
 		CONF=$RUN/onu.conf
 		load_mode
 	fi
+	omcid_rules
 	omcid_sync "$(omcid_want)"
 	echo "$MODE" >"$RUN/onu-mode"
 	[ "$MODE" != passthrough ] || pass_up

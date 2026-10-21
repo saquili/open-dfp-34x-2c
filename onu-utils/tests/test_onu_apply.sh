@@ -260,6 +260,23 @@ check 'logged "^onu-fw guard" && [ ! -e "$ONU_ROOT/run/onu-guard.conf" ]'
 check 'logged "^onu-fw guard"'
 teardown
 
+echo "the rules of the services, for omcid, in a new file only when they change"
+setup
+conf SVC1=500/move/411 SVC2=200/off SVC3=100/only_uni
+"$MODE_SCRIPT" start 2>/dev/null
+check 'printf "500 move 411\n200 off\n100 only_uni\n" | cmp -s - "$ONU_ROOT/run/omcid/rules"'
+check 'ls -l "$ONU_ROOT/run/omcid/rules" | grep -q "^-rw-r--r--"'
+ls -i "$ONU_ROOT/run/omcid/rules" >"$T/rules.inode"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'ls -i "$ONU_ROOT/run/omcid/rules" | cmp -s - "$T/rules.inode"'
+printf 'SVC1=500/move/412\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'printf "500 move 412\n" | cmp -s - "$ONU_ROOT/run/omcid/rules"'
+printf 'FW_OUT=allow\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ -e "$ONU_ROOT/run/omcid/rules" ] && [ ! -s "$ONU_ROOT/run/omcid/rules" ]'
+teardown
+
 echo "a local network, routed out by a session that keeps its address"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
