@@ -156,6 +156,23 @@ by its whole path where procd starts it.
    cannot (ubusd's access list has no method for it), so that a daemon taken
    over cannot make itself a token. Without a store the new token lasts until
    the next start.
+   The keys of the stick's two servers are kept there too:
+   ``onu-config ssh new`` makes a new host key for the
+   ssh server, keeps it, ends the server, which procd starts again with it,
+   and prints its ``TYPE=`` and ``FINGERPRINT=`` (``SHA256:``, as an ssh
+   client shows it); ``onu-config ssh show`` prints the same, then what
+   ``onu-config ssh-keys`` prints. ``onu-config tls new`` makes a new key for
+   the panel, from which the status daemon makes new certificates;
+   ``onu-config tls own`` keeps an own certificate, of the lines ``KEY=``, its
+   P-256 key in 64 hexadecimal digits, and ``CHAIN=``, the certificate and the
+   CA certificates after it, DER one after another, in base64, at most 8 KiB
+   of DER, which the status daemon has checked, and ``onu-config tls
+   self-signed`` takes it away. ``onu-config tls install`` hands the panel's
+   key and the own certificate to the status daemon, ``/run/pond/tls.key``
+   and ``/run/pond/tls.own`` for its account alone: the boot script after it
+   made that directory, and each change. A change is kept in the store before
+   it is in force, and without a store none is made.
+
    ``onu-config ssh-keys`` keeps the public keys root may log in to the ssh
    server with, ``src/sshkey.h``: ed25519, ECDSA of nistp256, nistp384 and
    nistp521, and RSA of 2048 to 4096 bits, one a line as ``ssh-keygen`` writes
@@ -178,6 +195,18 @@ by its whole path where procd starts it.
    is there, and the server takes no password; when that changes,
    ``onu-config`` ends the server, and procd starts it again. Sessions open
    go on, as each is a process of its own.
+
+   Measured with the tests (``tests/test_onu_config_keys.sh``): eight RSA keys
+   of 4096 bits with comments of 100 bytes and keys alone take 6,696 bytes of
+   the store, and an own certificate with a chain of three, a P-256 leaf, an
+   intermediate with an RSA key of 2048 bits and a root with one of 4096 bits
+   as openssl makes them (3,372 bytes of DER), 4,653 bytes with its key: 11,349
+   in all. The largest settings, 96 rules with the longest names beside 512
+   fixed addresses (``tests/test_settings.c``), take 51,917, and the stick's
+   other keys about 2 KB, so that everything at once comes to some 65,000 of
+   the store's 65,536 bytes. A change for which the store has no room is
+   refused whole, the store left as it was, and says so (``the store has no
+   room for it, of its 64 KiB``).
 
    ``onu-config identity-current`` prints the identity of
    ``/run/onu-identity``, which root alone reads, without its PLOAM and
@@ -247,13 +276,19 @@ by its whole path where procd starts it.
         - ``/run/dhcp6d/pdN``: the host session N delegated its IPv6 prefix to,
           which ``dhcp6d`` takes back after a restart.
       * - ``TLS_KEY``
-        - ``onu-config tls``
+        - ``onu-config tls``, ``tls new``
         - ``/run/onu-tls-key``: the status daemon's key, a scalar of P-256 in 64
-          hexadecimal digits, made once on the stick.
+          hexadecimal digits, made once on the stick, or again when asked.
+      * - ``TLS_OWN_KEY``, ``TLS_OWN_CHAINn``, n from 1 to 11
+        - ``onu-config tls own``, ``tls self-signed``
+        - ``/run/onu-tls-own``: an own certificate, which the status daemon
+          serves in place of its own; its key on the first line, as
+          ``TLS_KEY``, and its chain in base64 on the second, the pieces of
+          1024 characters each, one after another.
       * - ``SSH_HOST_KEY``
-        - ``onu-config ssh``
+        - ``onu-config ssh``, ``ssh new``
         - ``/run/onu-ssh-key``: the ssh server's host key in its own format, in
-          hexadecimal digits, made once on the stick.
+          hexadecimal digits, made once on the stick, or again when asked.
       * - ``SSH_KEYn``, n from 1 to 8; ``SSH_KEYS_ONLY``
         - ``onu-config ssh-keys``
         - ``/run/dropbear/authorized_keys``: the public keys root logs in with,

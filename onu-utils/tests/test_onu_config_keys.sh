@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of the public keys root logs in to the ssh server with: onu-config
-# ssh-keys, of the build, on a store in a file, with stand-ins for BusyBox's
-# hexdump, dropbearkey, chown and logger. The keys were made with OpenSSH's
-# ssh-keygen, and their fingerprints are the ones it printed.
+# Tests of the keys of the ssh server and of the panel's HTTPS: onu-config
+# ssh-keys, of the build, and onu-config.sh's ssh new and show, and tls new,
+# own, self-signed and install, on a store in a file, with stand-ins for
+# BusyBox's hexdump, dropbearkey, chown and logger. The public keys were made
+# with OpenSSH's ssh-keygen, and their fingerprints are the ones it printed.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -20,6 +21,9 @@ P256='ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBK
 P256_FP=SHA256:QVzpbdO2XiR+U/GoiobfqifyWwLvSY5QBcJvz5JlvTc
 RSA1024='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC4WKVwESjp9sdRo62oW55S64G3eVqIYUlT+q+xVqp03ARK0Oj2yoFl8Df/VkE02pdFdlRASR0aD+o5EoHaKu21mxYU5mwShl85lftmV7po42nmwn7QZu8aoWAtXdDFtK7yvQrn0XBGn3ealTZSGOEHpR52e7BcjqN/o8CIOiQZhw== rsa1024'
 RSA4096='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQClwHPntBSVYjrernMrqfVsUuLGWU5acxU552ov7cBaGc62UcGOgMW2yVsSaJ8utN89tOY1Jk3PE57aX65a0WoDuVXJlG74gjb25LnSLlXgr4ua5TXIUK5FYj58iMcv5fEd6gzQMYrj764eMtWwC+ATZ5YB0sSCE/CtuMtF1m+fV1ZjJWRfUyIK8e8w1vmAGyiQkhOPAii9QZq9s/B22ZreQSaG+ae30yRYLqz1fOk4c6Tvdi8OZadcFmTUm2h50Hp8H62g/6FdsCa5zmN9agJOROCvhU7kD7rwm3MaMlqjk07m6i0IhK9aV4D8GqZ++il57B1cpdV4z44+exkVQvWes04MrE+9IwGhFnmilCxvEad4duLGFLjmsT/EMrqDmzdMOV648QsQwq6OTeTtjNTkVGIM5wvB3TjREfQ0hNBQJPCSLAs//Y4TGVLlr+zsdZiEp0Palgbn1MONpj8Zy8MSsfsgCQ6MhQ3RACqHE4JKelyjKaMk7pYw633HzaupxHDE7MijmgmHHva7n2dXUmwU454UwqhdNH2xx7uE6N3aVjF7oku070E30wpzSllcMkNeugMmwSPTQ60FK2TMw7/D5wRr/CNSKWuxaEKhp/QwQ3lqPGvCBaQ89evCovcSINMHfmNi9SrV25uzdFSIZfVlgrH8ecbe7j900Vc0tNbnFw== rsa4096'
+# A scalar of P-256, and the bytes of a chain, which the status daemon
+# checked before; onu-config.sh takes their shape alone.
+KEY=c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721
 
 check() {
 	checks=$((checks + 1))
@@ -342,6 +346,173 @@ keys add
 check '[ $rc -eq 1 ] && said "no lock" && ! stored "SSH_KEY1=$ED25519"'
 kill "$holder" 2>/dev/null
 wait "$holder" 2>/dev/null
+teardown
+
+echo "the cost in the store: eight RSA keys of 4096 bits with the longest comments, and a chain of three certificates"
+setup
+for d in A B C D E F G H; do
+	rsa4096 "$d" >"$T/in"
+	keys add
+done
+keys only on
+ssh_cost=$(wc -c <"$ONU_STORE")
+# Three certificates as openssl makes them: a P-256 leaf of 875 bytes, an
+# intermediate with an RSA key of 2048 bits, 1141, and a root with one of
+# 4096 bits, 1356: 3372 bytes of DER, 4496 of base64.
+chain=$(head -c 3372 /dev/urandom | od -An -v -tx1 | tr -d ' \n' | cut -c1-4496 | tr 0-9a-f A-P)
+printf 'KEY=%s\nCHAIN=%s\n' "$KEY" "$chain" >"$T/in"
+script tls own
+check '[ $rc -eq 0 ]'
+tls_cost=$(($(wc -c <"$ONU_STORE") - ssh_cost))
+echo "  eight keys and keys alone: $ssh_cost bytes; the certificate and its key: $tls_cost bytes"
+check '[ $ssh_cost -eq 6696 ] && [ $tls_cost -eq 4653 ]'
+teardown
+
+echo "the ssh host key: a new one, kept, and the server started again; its fingerprint"
+setup
+script ssh
+old=$(cat "$ONU_ROOT/run/onu-ssh-key")
+server
+script ssh new
+new=$(cat "$ONU_ROOT/run/onu-ssh-key")
+check '[ $rc -eq 0 ] && [ "$new" != "$old" ] && stored "SSH_HOST_KEY=$new"'
+check '[ "$(od -An -v -tx1 "$ONU_ROOT/run/dropbear/host_key" | tr -d " \n")" = "$new" ]'
+check '[ "$(cat "$T/out")" = "$(printf "TYPE=ssh-ed25519\nFINGERPRINT=SHA256:%s" "$(echo "$new" | cut -c1-43)")" ]'
+check ended
+feed "$ED25519"
+keys add
+script ssh show
+check '[ "$(sed -n 1,3p "$T/out")" = "$(printf "TYPE=ssh-ed25519\nFINGERPRINT=SHA256:%s\nONLY=0" "$(echo "$new" | cut -c1-43)")" ]'
+check 'grep -q -x -F "KEY=ssh-ed25519 256 $ED25519_FP test-ed25519@example" "$T/out"'
+# A key tool that fails, and a store that refuses: nothing changes.
+touch "$T/dropbearkey.fail"
+script ssh new
+check '[ $rc -eq 1 ] && said "no ssh host key" && [ "$(cat "$ONU_ROOT/run/onu-ssh-key")" = "$new" ]'
+rm "$T/dropbearkey.fail"
+mkdir "$ONU_STORE.new"
+script ssh new
+check '[ $rc -eq 1 ] && said "not kept: the store refused it" && [ "$(cat "$ONU_ROOT/run/onu-ssh-key")" = "$new" ]'
+check '[ ! -e "$ONU_ROOT/run/dropbear/host_key.new" ]'
+rmdir "$ONU_STORE.new"
+kill "$ssh" 2>/dev/null
+rm "$ONU_ROOT/run/dropbear/host_key"
+script ssh show
+check '[ "$(head -n 1 "$T/out")" = ONLY=0 ]'
+ONU_STORE= script ssh new
+check '[ $rc -eq 1 ] && said "no store"'
+script ssh sideways
+check '[ $rc -eq 2 ]'
+teardown
+
+echo "the panel's key: a new one, kept first, then handed to the status daemon"
+setup
+script tls
+old=$(cat "$ONU_ROOT/run/onu-tls-key")
+script tls new
+new=$(cat "$ONU_ROOT/run/onu-tls-key")
+check '[ $rc -eq 0 ] && [ "$new" != "$old" ] && stored "TLS_KEY=$new"'
+check 'echo "$new" | grep -q -x "[0-9a-f]\{64\}"'
+# The daemon's directory, which the boot script makes: its copy, its own.
+check '[ ! -e "$ONU_ROOT/run/pond/tls.key" ]'
+mkdir -p "$ONU_ROOT/run/pond"
+script tls new
+new=$(cat "$ONU_ROOT/run/onu-tls-key")
+check '[ "$(cat "$ONU_ROOT/run/pond/tls.key")" = "$new" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/pond/tls.key" | cut -c1-10)" = -r-------- ]'
+check 'grep -q "chown pond:pond $ONU_ROOT/run/pond/tls.key.new" "$T/chown.log"'
+mkdir "$ONU_STORE.new"
+script tls new
+check '[ $rc -eq 1 ] && said "the new key is not kept" && [ "$(cat "$ONU_ROOT/run/onu-tls-key")" = "$new" ]'
+rmdir "$ONU_STORE.new"
+ONU_STORE= script tls new
+check '[ $rc -eq 1 ] && said "no store"'
+script tls sideways
+check '[ $rc -eq 2 ]'
+teardown
+
+echo "an own certificate: kept in pieces, in force, handed over, back at boot"
+setup
+mkdir -p "$ONU_ROOT/run/pond"
+script tls
+chain=$(head -c 2500 /dev/zero | tr '\0' Q)
+printf 'KEY=%s\nCHAIN=%s==\n' "$KEY" "$chain" >"$T/in"
+script tls own
+check '[ $rc -eq 0 ] && stored "TLS_OWN_KEY=$KEY"'
+check 'stored "TLS_OWN_CHAIN1=$(echo "$chain" | cut -c1-1024)" && stored "TLS_OWN_CHAIN3=$(echo "$chain==" | cut -c2049-)"'
+check '[ "$(cat "$ONU_ROOT/run/onu-tls-own")" = "$(printf "%s\n%s==" "$KEY" "$chain")" ]'
+check '[ "$(cat "$ONU_ROOT/run/pond/tls.own")" = "$(cat "$ONU_ROOT/run/onu-tls-own")" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-tls-own" | cut -c1-10)" = -rw------- ]'
+rm "$ONU_ROOT/run/onu-tls-own"
+script load
+check '[ "$(cat "$ONU_ROOT/run/onu-tls-own")" = "$(printf "%s\n%s==" "$KEY" "$chain")" ]'
+check '! grep -q "^TLS_" "$ONU_ROOT/run/onu.conf" 2>/dev/null'
+# A shorter one leaves no piece of the longer behind.
+printf 'KEY=%s\nCHAIN=QUFB\n' "$KEY" >"$T/in"
+script tls own
+check '[ $rc -eq 0 ] && stored TLS_OWN_CHAIN1=QUFB && ! onu-config --store "$ONU_STORE" get TLS_OWN_CHAIN2 >/dev/null'
+check '[ "$(sed -n 2p "$ONU_ROOT/run/pond/tls.own")" = QUFB ]'
+# What is refused: a key that is none, a chain that is no base64 or too
+# long, no store, and a store that has no room; nothing changes.
+cp "$ONU_STORE" "$T/before"
+printf 'KEY=%064d\nCHAIN=QUFB\n' 0 >"$T/in"
+script tls own
+check '[ $rc -eq 1 ] && said "not a key of P-256"'
+printf 'KEY=%s\nCHAIN=QU%%B\n' "$KEY" >"$T/in"
+script tls own
+check '[ $rc -eq 1 ] && said "not base64"'
+printf 'KEY=%s\n' "$KEY" >"$T/in"
+script tls own
+check '[ $rc -eq 1 ] && said "not base64"'
+printf 'KEY=%s\nCHAIN=%s' "$KEY" "$(head -c 10925 /dev/zero | tr '\0' Q)" >"$T/in"
+script tls own
+check '[ $rc -eq 1 ] && said "longer than 8 KiB"'
+printf 'KEY=%s\nCHAIN=QUFB\n' "$KEY" >"$T/in"
+ONU_STORE= script tls own
+check '[ $rc -eq 1 ] && said "no store"'
+check 'cmp -s "$ONU_STORE" "$T/before"'
+fill=$((65536 - $(wc -c <"$ONU_STORE") - 1200))
+printf 'FILLER=%s\n' "$(head -c "$fill" /dev/zero | tr '\0' x)" >>"$ONU_STORE"
+printf 'KEY=%s\nCHAIN=%s\n' "$KEY" "$chain" >"$T/in"
+script tls own
+check '[ $rc -eq 1 ] && said "the store has no room for it" && said "the certificate is not kept"'
+check '[ "$(sed -n 2p "$ONU_ROOT/run/onu-tls-own")" = QUFB ]'
+teardown
+
+echo "back to the certificates of the panel's key: the own one gone, from the store too"
+setup
+mkdir -p "$ONU_ROOT/run/pond"
+script tls
+printf 'KEY=%s\nCHAIN=QUFB\n' "$KEY" >"$T/in"
+script tls own
+script tls self-signed
+check '[ $rc -eq 0 ] && ! onu-config --store "$ONU_STORE" list | grep -q "^TLS_OWN"'
+check '[ ! -e "$ONU_ROOT/run/onu-tls-own" ] && [ ! -e "$ONU_ROOT/run/pond/tls.own" ]'
+check '[ -s "$ONU_ROOT/run/pond/tls.key" ] && stored "TLS_KEY=$(cat "$ONU_ROOT/run/onu-tls-key")"'
+# A store that holds a key without its chain gives no certificate at boot.
+onu-config --store "$ONU_STORE" set TLS_OWN_KEY "$KEY"
+script load
+check '[ ! -e "$ONU_ROOT/run/onu-tls-own" ]'
+mkdir "$ONU_STORE.new"
+script tls self-signed
+check '[ $rc -eq 1 ]'
+rmdir "$ONU_STORE.new"
+teardown
+
+echo "the boot hands the key and the own certificate to the status daemon, once it has its directory"
+setup
+script tls
+printf 'KEY=%s\nCHAIN=QUFB\n' "$KEY" >"$T/in"
+script tls own
+check '[ ! -e "$ONU_ROOT/run/pond" ]'
+script tls install
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/pond" ]'
+mkdir -p "$ONU_ROOT/run/pond"
+script tls install
+check '[ $rc -eq 0 ] && [ -s "$ONU_ROOT/run/pond/tls.key" ] && [ -s "$ONU_ROOT/run/pond/tls.own" ]'
+# A copy that cannot be made is said, and none is left half made.
+mkdir -p "$ONU_ROOT/run/pond/tls.own.new/x"
+script tls install
+check '[ $rc -eq 1 ] && said "tls.own is not the status daemon"'
 teardown
 
 echo "test_onu_config_keys: $checks checks, $failures failed"

@@ -31,9 +31,25 @@
 #                        line dhcp6d keeps in /run/dhcp6d/pdN, into the store;
 #                        without the file, out of it
 #   onu-config tls       the panel's key: the one load found, or a new one,
-#                        kept in the store, in /run/onu-tls-key
+#                        kept in the store, in /run/onu-tls-key; "tls new"
+#                        makes a new one in its place, and the status daemon
+#                        makes new certificates from it; "tls own" keeps the
+#                        own certificate of the standard input's lines KEY=
+#                        (its P-256 key, as the panel's) and CHAIN= (the
+#                        certificate and the CA certificates after it, DER
+#                        one after another, in base64), which the status
+#                        daemon then serves in place of its own, in
+#                        /run/onu-tls-own, and "tls self-signed" takes it
+#                        away; "tls install" hands the key and the own
+#                        certificate to the status daemon (the boot script,
+#                        and each change)
 #   onu-config ssh       the ssh server's host key: the one load found, or a
-#                        new one, kept in the store, in /run/dropbear/host_key
+#                        new one, kept in the store, in /run/dropbear/host_key;
+#                        "ssh new" makes a new one in its place and ends the
+#                        server, which procd starts again with it, and prints
+#                        it as "ssh show" does: its TYPE= and FINGERPRINT=,
+#                        which "ssh show" follows with the public keys root
+#                        logs in with (onu-config ssh-keys)
 #   onu-config token     the token of scripts, which the status daemon takes in
 #                        place of a sign-in: printed, if there is one;
 #                        "token new" makes a new one, in place of the old,
@@ -75,6 +91,7 @@ IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
 SYSTEM=$RUN/onu-system
 TLS=$RUN/onu-tls-key
+TLS_OWN=$RUN/onu-tls-own
 SSHKEY=$RUN/onu-ssh-key
 HOSTKEY=$RUN/dropbear/host_key
 TOKEN=$RUN/onu-pond-token
@@ -246,11 +263,11 @@ load() {
 	}
 	umask 077
 	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"* "$TLS.new" \
-		"$SSHKEY.new" "$TOKEN.new"
+		"$TLS_OWN.new" "$SSHKEY.new" "$TOKEN.new"
 	printf '%s\n' "$list" | awk -v conf="$CONF.new" \
 		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" \
 		-v sys="$SYSTEM.new" -v pd="$PD" -v tls="$TLS.new" -v ssh="$SSHKEY.new" \
-		-v tok="$TOKEN.new" '
+		-v tok="$TOKEN.new" -v own="$TLS_OWN.new" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -264,6 +281,11 @@ load() {
 		k == "PON_DISABLED" { next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k == "TLS_KEY" { if (v != "") print v > tls; next }
+		# The own certificate: its key, and its chain in pieces of
+		# one value each, which go together again in their order.
+		k == "TLS_OWN_KEY" { own_key = v; next }
+		k ~ /^TLS_OWN_CHAIN[0-9]+$/ { chain[substr(k, 14) + 0] = v; next }
+		k ~ /^TLS_/ { next }
 		k == "SSH_HOST_KEY" { if (v != "") print v > ssh; next }
 		# The keys root logs in with: onu-config ssh-keys install.
 		k ~ /^SSH_/ { next }
@@ -287,6 +309,13 @@ load() {
 			for (n = 1; n <= max; n++)
 				if (user[n] != "")
 					print user[n] " " secret[n] > (creds n ".new")
+			if (own_key != "" && chain[1] != "") {
+				print own_key > own
+				line = ""
+				for (n = 1; n in chain; n++)
+					line = line chain[n]
+				print line > own
+			}
 		}'
 	# dhcp6d runs as an account of its own, in a directory of its own: the
 	# bindings it takes back after a restart are its to read and to replace.
@@ -316,6 +345,11 @@ load() {
 		mv "$TLS.new" "$TLS"
 	else
 		rm -f "$TLS"
+	fi
+	if [ -e "$TLS_OWN.new" ]; then
+		mv "$TLS_OWN.new" "$TLS_OWN"
+	else
+		rm -f "$TLS_OWN"
 	fi
 	if [ -e "$SSHKEY.new" ]; then
 		mv "$SSHKEY.new" "$SSHKEY"
@@ -589,14 +623,7 @@ tls() {
 	key=
 	[ -r "$TLS" ] && read -r key <"$TLS"
 	is_key "$key" && return 0
-	key=
-	seeded
-	for _ in 1 2 3; do
-		key=$(tr -dc '0-9a-f' </dev/urandom | head -c 64)
-		is_key "$key" && break
-		key=
-	done
-	[ -n "$key" ] || {
+	new_scalar || {
 		log "no key for the panel's HTTPS"
 		return 1
 	}
@@ -607,6 +634,129 @@ tls() {
 		log "the panel's key is not kept: the store refused it"
 	fi
 	return 0
+}
+
+# A new scalar of P-256 in key, of /dev/urandom, whose bytes that are
+# hexadecimal digits each carry four bits; fails without one.
+new_scalar() {
+	seeded
+	for _ in 1 2 3; do
+		key=$(tr -dc '0-9a-f' </dev/urandom | head -c 64)
+		is_key "$key" && return 0
+	done
+	key=
+	return 1
+}
+
+# The status daemon's copy of the file $1, as POND_DIR/$2, for its account
+# alone, put in place whole; none without the file. The boot script makes
+# the daemon's directory; without it there is nothing to hand over.
+give_pond() {
+	to=$POND_DIR/$2
+	if [ ! -s "$1" ]; then
+		rm -f "$to" "$to.new"
+		return 0
+	fi
+	(umask 077 && cat "$1" >"$to.new") && chown pond:pond "$to.new" &&
+		chmod 400 "$to.new" && mv "$to.new" "$to" || {
+		rm -f "$to.new"
+		log "$2 is not the status daemon's"
+		return 1
+	}
+}
+
+# The panel's key and the own certificate, to the status daemon, which
+# reads them again once the change that asked for it has ended.
+install_tls() {
+	[ -d "$POND_DIR" ] || return 0
+	give_pond "$TLS" tls.key && give_pond "$TLS_OWN" tls.own
+}
+
+# A new key for the panel in place of the one in force, kept in the store
+# before it is: the status daemon makes new certificates from it.
+tls_new() {
+	[ -n "$STORE" ] || {
+		log "no store: a new key would last until the next start"
+		return 1
+	}
+	new_scalar || {
+		log "no key for the panel's HTTPS"
+		return 1
+	}
+	echo "TLS_KEY=$key" | onu-config --store "$STORE" import || {
+		log "the new key is not kept: the store refused it"
+		return 1
+	}
+	(umask 077 && echo "$key" >"$TLS.new" && mv "$TLS.new" "$TLS") || return 1
+	install_tls
+}
+
+# The longest chain of an own certificate in base64, 8 KiB of DER, and the
+# piece of it that one value of the store holds (CFG_VALUE_MAX).
+CHAIN_MAX=10924
+PIECE=1024
+PIECES=$((CHAIN_MAX / PIECE + 1))
+
+# An own certificate, of the lines KEY= and CHAIN= on the standard input,
+# which the status daemon checked: kept in the store, TLS_OWN_KEY and
+# TLS_OWN_CHAIN1 on, in one write, then in force.
+tls_own() {
+	key=
+	chain=
+	while IFS= read -r line || [ -n "$line" ]; do
+		case $line in
+		KEY=*) key=${line#KEY=} ;;
+		CHAIN=*) chain=${line#CHAIN=} ;;
+		esac
+	done
+	is_key "$key" || {
+		log "the certificate's key is not a key of P-256"
+		return 1
+	}
+	case $chain in
+	"" | *[!A-Za-z0-9+/=]*)
+		log "the certificate is not base64"
+		return 1
+		;;
+	esac
+	[ ${#chain} -le $CHAIN_MAX ] || {
+		log "the certificate and its chain are longer than 8 KiB"
+		return 1
+	}
+	[ -n "$STORE" ] || {
+		log "no store: the certificate would last until the next start"
+		return 1
+	}
+	printf '%s\n' "$chain" | awk -v key="$key" -v piece=$PIECE -v max=$PIECES '{
+		print "TLS_OWN_KEY=" key
+		n = 0
+		for (i = 1; i <= length($0); i += piece)
+			print "TLS_OWN_CHAIN" ++n "=" substr($0, i, piece)
+		while (++n <= max)
+			print "-TLS_OWN_CHAIN" n
+	}' | onu-config --store "$STORE" import || {
+		log "the certificate is not kept: the store refused it"
+		return 1
+	}
+	(umask 077 && printf '%s\n%s\n' "$key" "$chain" >"$TLS_OWN.new" &&
+		mv "$TLS_OWN.new" "$TLS_OWN") || return 1
+	install_tls
+}
+
+# Back to the certificates the status daemon makes from the panel's key.
+tls_self() {
+	if [ -n "$STORE" ]; then
+		n=1
+		{
+			echo "-TLS_OWN_KEY"
+			while [ $n -le $PIECES ]; do
+				echo "-TLS_OWN_CHAIN$n"
+				n=$((n + 1))
+			done
+		} | onu-config --store "$STORE" import || return 1
+	fi
+	rm -f "$TLS_OWN"
+	install_tls
 }
 
 # The bytes of the hexadecimal digits on the standard input, as printf's
@@ -655,6 +805,57 @@ ssh_key() {
 		log "the ssh host key is not kept: the store refused it"
 	fi
 	return 0
+}
+
+# The host key in force as the server's key tool prints it: its TYPE= and
+# its FINGERPRINT=, which an ssh client shows at the first login.
+ssh_host() {
+	dropbearkey -y -f "$HOSTKEY" 2>/dev/null | awk '
+		/^(ssh-|ecdsa-)/ && type == "" { type = $1 }
+		/^Fingerprint: / { fp = $2 }
+		END {
+			if (type == "" || fp == "")
+				exit 1
+			print "TYPE=" type
+			print "FINGERPRINT=" fp
+		}'
+}
+
+# A new host key in place of the one in force, kept in the store before it
+# is; the server reads its key when it starts, and procd starts it again
+# once it ends, with the new one. Its sessions go on.
+ssh_new() {
+	[ -n "$STORE" ] || {
+		log "no store: a new host key would last until the next start"
+		return 1
+	}
+	umask 077
+	mkdir -p "${HOSTKEY%/*}"
+	rm -f "$HOSTKEY.new"
+	seeded
+	dropbearkey -t ed25519 -f "$HOSTKEY.new" >/dev/null 2>&1 || {
+		log "no ssh host key"
+		rm -f "$HOSTKEY.new"
+		return 1
+	}
+	hex=$(hexdump -v -e '/1 "%02x"' "$HOSTKEY.new")
+	echo "SSH_HOST_KEY=$hex" | onu-config --store "$STORE" import || {
+		log "the new host key is not kept: the store refused it"
+		rm -f "$HOSTKEY.new"
+		return 1
+	}
+	echo "$hex" >"$SSHKEY.new" && mv "$SSHKEY.new" "$SSHKEY" &&
+		mv "$HOSTKEY.new" "$HOSTKEY" || return 1
+	pid=$(cat "$RUN/dropbear.pid" 2>/dev/null)
+	[ -n "$pid" ] && kill "$pid" 2>/dev/null
+	ssh_host
+}
+
+# The host key, then the keys root logs in with and whether the server
+# takes them alone (onu-config ssh-keys).
+ssh_show() {
+	ssh_host
+	onu-config ${STORE:+--store "$STORE"} ssh-keys
 }
 
 # Whether $1 is a token of scripts: 64 hexadecimal digits, 256 bits.
@@ -777,16 +978,35 @@ pd)
 	pd "${2:-}"
 	;;
 tls)
-	tls
+	case ${2:-} in
+	"") tls ;;
+	new) tls_new ;;
+	own) tls_own ;;
+	self-signed) tls_self ;;
+	install) install_tls ;;
+	*)
+		echo "usage: onu-config tls [new|own|self-signed|install]" >&2
+		exit 2
+		;;
+	esac
 	;;
 ssh)
-	ssh_key
+	case ${2:-} in
+	"") ssh_key ;;
+	new) ssh_new ;;
+	show) ssh_show ;;
+	*)
+		echo "usage: onu-config ssh [new|show]" >&2
+		exit 2
+		;;
+	esac
 	;;
 token)
 	token "${2:-}"
 	;;
 *)
 	echo "usage: onu-config load|save|identity|password|auth HASH|system|pd N|tls|ssh" >&2
+	echo "       onu-config tls [new|own|self-signed|install] | ssh [new|show]" >&2
 	echo "       onu-config token [new|off|install]" >&2
 	exit 2
 	;;
