@@ -516,8 +516,13 @@ enum {
 #define RTL9602C_GTC_US_TX_MODE_SUPPRESS_DIS	BIT(1)
 #define RTL9602C_GTC_US_TX_MODE_SMALL_SSTART	BIT(0)
 
-/* More of RTL9602C_GTC_US_CTRL; which level BEN_POL selects is not known. */
+/*
+ * More of RTL9602C_GTC_US_CTRL; which level BEN_POL selects is not known.
+ * DBRU_DIS is taken to keep the DBRu out of the bursts even where an
+ * allocation asks for one (not verified).
+ */
 #define RTL9602C_GTC_US_CTRL_PLOAM_DIS	BIT(9)
+#define RTL9602C_GTC_US_CTRL_DBRU_DIS	BIT(8)
 #define RTL9602C_GTC_US_CTRL_SCRAMBLE_DIS	BIT(0)
 #define RTL9602C_GTC_US_CTRL_BEN_POL	BIT(3)
 
@@ -1124,6 +1129,19 @@ enum {
 #define RTL9602C_PKTBUF_THR_US_STREAM(s)	(0xf02458 + 4 * (s))
 #define RTL9602C_PKTBUF_THR_ON		GENMASK(28, 16)
 #define RTL9602C_PKTBUF_THR_OFF		GENMASK(12, 0)
+
+/*
+ * Status reporting (ITU-T G.984.3 clause 8.4): BLOCK is the reporting block,
+ * in bytes, in which a T-CONT's queue is counted for its DBRu reports; 8 bits
+ * hold no more than 255. BLOCK_DEF is the 48 bytes of G.984.3 clause 8.4.2,
+ * which the ANI-G's GEM block length holds until the OLT sets another (ITU-T
+ * G.988 clause 9.2.1). PERIOD is taken to space the reports and is left as
+ * it resets. The unit of BLOCK and the meaning of PERIOD are not verified.
+ */
+#define RTL9602C_PONSCH_DBRU_CFG		0xf02568
+#define RTL9602C_PONSCH_DBRU_CFG_BLOCK		GENMASK(15, 8)
+#define RTL9602C_PONSCH_DBRU_CFG_PERIOD		GENMASK(7, 0)
+#define RTL9602C_PONSCH_DBRU_CFG_BLOCK_DEF	48
 
 /*
  * Downstream: each stream's buffer queue, and the flow-control marks, whose

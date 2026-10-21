@@ -12,8 +12,9 @@ transmission convergence layer of ITU-T G.984.3, the GTC layer. Downstream it
 finds the 125 us frame, reads the PLOAM channel and the bandwidth map, and sorts
 the GEM frames by Port-ID into flows. Upstream it sends a burst in each
 allocation that the OLT grants to one of the ONU's Alloc-IDs: the physical layer
-overhead, a PLOAM message if the allocation asks for one, and the GEM frames
-that the PON MAC queues for the allocation's T-CONT. Its registers, tables and
+overhead, a PLOAM message if the allocation asks for one, a status report of
+the T-CONT's queue (DBRu) if it asks for one, and the GEM frames that the PON
+MAC queues for the allocation's T-CONT. Its registers, tables and
 counters are in the switch's register window, at offsets ``0x700000`` to
 ``0x706cfc``.
 
@@ -52,11 +53,12 @@ The block between the fibre and switch port 2::
 This page describes the block as the driver sets it up: the boot report, the
 bring-up and take-down, the PON SerDes and its analog front end, the downstream
 lock, the activation state machine, PLOAM in both directions, the burst overhead
-and the upstream timing, the bandwidth map, the Alloc-ID and Port-ID tables, GEM
-framing, the counters, FEC and encryption, and what the driver reports to the
-PON class, through devlink and in debugfs. The PON MAC and the packet buffer are
-on Documentation/networking/device_drivers/pon/rtl9602c.rst, which also
-introduces the set of pages for the PON hardware; the optics are on
+and the upstream timing, the bandwidth map, status reporting, the Alloc-ID and
+Port-ID tables, GEM framing, the counters, FEC and encryption, and what the
+driver reports to the PON class, through devlink and in debugfs. The PON MAC
+and the packet buffer are on
+Documentation/networking/device_drivers/pon/rtl9602c.rst, which also introduces
+the set of pages for the PON hardware; the optics are on
 Documentation/networking/device_drivers/pon/gn25l95.rst.
 
 Activation in brief
@@ -401,6 +403,12 @@ name the others.
    * - ``<GPON> tables emptied: N Alloc-IDs (...), N Port-IDs, N multicast``
      - info
      - The tables held entries at bring-up.
+   * - ``<GPON> status reporting: X, found Y`` and ``<GPON> upstream control:
+       X, found Y``
+     - debug
+     - The bring-up wrote the status-reporting word and the upstream control
+       word: each as read back after the write, and as found before it (see
+       "Status reporting").
    * - ``<GPON> O2 standby -> O3 serial-number``, and the other transitions;
        ``<GPON> O5 operation -> O2 standby after S.mmm s in O5``
      - info
@@ -720,33 +728,37 @@ those of the facts that carry each step.
    (I)
 9. Set the burst merge threshold. (I)
 10. Write the response delay under the write key. Purpose: upstream timing. (M)
-11. Write the period of the frame-derived pulse. (I)
-12. Set the signal-detect mismatch limit. (I)
-13. Enable the optical LOS input and select its polarity. Purpose: downstream
+11. Write the status-reporting block, 48 bytes, into the PON MAC. Purpose: the
+    unit of the DBRu reports (see "Status reporting"). (P for the 48, I for
+    the rest)
+12. Write the period of the frame-derived pulse. (I)
+13. Set the signal-detect mismatch limit. (I)
+14. Enable the optical LOS input and select its polarity. Purpose: downstream
     lock. (M)
-14. Write the FEC detection threshold. (I)
-15. Keep only the bandwidth-map allocations for this ONU. Purpose: the ONU
+15. Write the FEC detection threshold. (I)
+16. Keep only the bandwidth-map allocations for this ONU. Purpose: the ONU
     answers the discovery grants and its own grants only. (M)
-16. Write the OMCI PTI match. Purpose: the OMCC downstream. (T)
-17. Write the downstream GEM filter. Purpose: GEM data downstream. (T)
-18. Enable the downstream GTC interrupts, then the two sub-blocks at the top
+17. Write the OMCI PTI match. Purpose: the OMCC downstream. (T)
+18. Write the downstream GEM filter. Purpose: GEM data downstream. (T)
+19. Enable the downstream GTC interrupts, then the two sub-blocks at the top
     level. Purpose: PLOAM messages from the interrupt. (T, M)
-19. Write the laser lead and lag. Purpose: burst timing. (M)
-20. Enable the upstream GTC interrupts. Purpose: among them a change of the
+20. Write the laser lead and lag. Purpose: burst timing. (M)
+21. Enable the upstream GTC interrupts. Purpose: among them a change of the
     upstream FEC state (see "FEC and encryption"). (M, I for the FEC event)
-21. Enable the burst power save, in the GTC under the write key and then in the
+22. Enable the burst power save, in the GTC under the write key and then in the
     GEM framer. (I)
-22. Write the upstream PTI codes. Purpose: GEM data upstream. (T)
-23. Write the upstream control word under the write key. Purpose: the PLOAMu
-    field, the scrambler and the burst-enable polarity. (T)
-24. Write the transmit mode under the write key. Purpose: bursts that start in
+23. Write the upstream PTI codes. Purpose: GEM data upstream. (T)
+24. Write the upstream control word under the write key. Purpose: the PLOAMu
+    field, the scrambler and the burst-enable polarity (T); the DBRu, sent
+    wherever an allocation asks for one (I, see "Status reporting").
+25. Write the transmit mode under the write key. Purpose: bursts that start in
     the previous frame. (M)
-25. Keep only the allocations for this ONU, once more. (M)
-26. Mark the ONU-ID unassigned and set O2. Purpose: wait for Upstream_Overhead.
+26. Keep only the allocations for this ONU, once more. (M)
+27. Mark the ONU-ID unassigned and set O2. Purpose: wait for Upstream_Overhead.
     (P)
-27. Arm the No message, Dying_Gasp and Serial_Number_ONU templates. Purpose:
+28. Arm the No message, Dying_Gasp and Serial_Number_ONU templates. Purpose:
     they are ready before the first discovery grant. (M, P)
-28. Enable the GPON source of the switch interrupt and run the worker at once.
+29. Enable the GPON source of the switch interrupt and run the worker at once.
     Purpose: activation starts, and the first PLOAM message dispatched finds
     every register of the activation path programmed. (T)
 
@@ -2467,7 +2479,8 @@ signal-detect and burst-merge registers that the bring-up writes.
        ``RTL9602C_GTC_US_CTRL_BEN_POL`` (bit 3, the polarity of the burst-enable
        output), and clears ``RTL9602C_GTC_US_CTRL_PLOAM_DIS`` (bit 9, which
        would stop the PLOAMu field) and ``RTL9602C_GTC_US_CTRL_SCRAMBLE_DIS``
-       (bit 0, which would switch the upstream scrambler off).
+       (bit 0, which would switch the upstream scrambler off). It also clears
+       bit 8, ``RTL9602C_GTC_US_CTRL_DBRU_DIS`` (see "Status reporting").
      - T
      - The ONU reaches O5 on an OLT; scrambling is ITU-T G.984.3 clause 8.2.1,
        the Ind field clause 8.2.2.3.
@@ -2738,6 +2751,82 @@ A captured allocation is two words:
        ``bwmap`` view.
      - T
      - The ``bwmap`` view, its "captured on entering O4" part.
+
+Status reporting
+================
+
+An OLT that assigns bandwidth dynamically can ask the ONU how much each T-CONT
+has waiting. An allocation whose Flags ask for a DBRu, a dynamic bandwidth
+report upstream, gets one in the ONU's burst for that allocation's Alloc-ID: the
+T-CONT's queue, counted in reporting blocks. The OLT can set the block's size
+through OMCI, and until it does the block is 48 bytes. The MAC builds and sends
+the report itself. The driver turns the report on in the upstream control word,
+under the write key, and writes the block size into the PON MAC at bring-up
+(steps 11 and 24 of "Bring-up, in order"); it reads no report.
+
+omcid creates the ANI-G (ITU-T G.988 clause 9.2.1) with the status reporting
+indication true, a GEM block length of 48 bytes and a piggyback DBA reporting
+capability of 0, mode 0 only. The GEM block length is writable, but nothing
+carries a value that an OLT writes into the driver (see "Known limitations").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Bits 8 and 7 of an allocation's Flags ask for a DBRu: 00 none, 01 mode 0
+       (two bytes), 10 mode 1 (three bytes), 11 reserved. The DBRu is a DBA
+       field of 8 or 16 bits, the T-CONT's queue coded non-linearly in one
+       octet per field, and a CRC-8. Mode 0 reports the whole queue in one
+       field.
+     - P
+     - ITU-T G.984.3 clause 8.1.3.6.2, clause 8.2.5, clause 8.4.2 (Table 8-1)
+       and clause 8.4.3.
+   * - The ONU answers every allocation that asks for a DBRu with one of the
+       length asked for, with the invalid code where it does not support the
+       mode, so that the OLT keeps the burst's delineation.
+     - P
+     - ITU-T G.984.3 clause 8.2.5.1 and clause 8.4.5, items 3 and 4.
+   * - The reporting block is the same for every Alloc-ID of the PON
+       interface, is set through OMCI and is 48 bytes by default; the ANI-G's
+       GEM block length holds it, readable and writable, 48 when the ONU
+       creates the entity.
+     - P
+     - ITU-T G.984.3 clause 8.4.2; ITU-T G.988 clause 9.2.1.
+   * - ``RTL9602C_PONSCH_DBRU_CFG`` (``0xf02568``, in the PON MAC's part of
+       the window): ``RTL9602C_PONSCH_DBRU_CFG_BLOCK`` (bits 15:8) is the
+       reporting block in bytes, so no block above 255 bytes can be set;
+       ``RTL9602C_PONSCH_DBRU_CFG_PERIOD`` (bits 7:0) is taken to space the
+       reports. At step 11 of the bring-up the driver writes
+       ``RTL9602C_PONSCH_DBRU_CFG_BLOCK_DEF`` (48) into the block and leaves the
+       period as it finds it. Like the rest of the PON MAC, the word is read
+       only once the PON MAC is built.
+     - I
+     - The ``dbru cfg`` line of the ``usburst`` view after bring-up, ``block
+       48``, and the debug line ``<GPON> status reporting: ...``, which gives
+       the word as found and as written. That the unit is the byte, and the
+       period's meaning, need an OLT that asks for mode 0 reports while a known
+       amount waits in a T-CONT.
+   * - ``RTL9602C_GTC_US_CTRL_DBRU_DIS`` (bit 8 of ``RTL9602C_GTC_US_CTRL``,
+       ``0x705014``, locked) is taken to keep the DBRu out of the bursts even
+       where an allocation asks for one. At step 24 of the bring-up the driver
+       clears it, under the write key, so that the MAC answers every request.
+       Whether it resets clear, which would make the write change nothing, is
+       not established.
+     - I
+     - The ``tx ctrl`` line of the ``usburst`` view, ``dbru on``, and the
+       debug line ``<GPON> upstream control: ...``, which gives the word as
+       found and as written; an OLT that asks for a DBRu, with the DBRu column
+       of the ``bwmap`` view and index 1 of the ``uscntr`` view, taken to
+       count the DBRu sent.
+   * - Status reporting has no part in activation or in OMCI: an OLT that asks
+       for no DBRu, as the test OLT is taken to, sees the same bursts whether
+       the report is on or off.
+     - I
+     - The ONU reaching O5 on an OLT and OMCI messages passing both ways with
+       the report on; the DBRu column of the ``bwmap`` view on the test OLT.
 
 Tables: Alloc-ID, Port-ID and multicast
 =======================================
@@ -3609,7 +3698,10 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
      - The view read in O4 and O5 (see "The bandwidth map"); a check with
        traffic on the board reads its T-CONT column.
    * - ``usburst`` (0400): ``RTL9602C_GTC_US_LASER`` (lead, lag),
-       ``RTL9602C_GTC_US_CTRL``, ``RTL9602C_GTC_US_POWERSAVE`` (on or off),
+       ``RTL9602C_GTC_US_CTRL`` (``tx ctrl``, with ``dbru on`` or ``off`` for
+       ``RTL9602C_GTC_US_CTRL_DBRU_DIS``), ``RTL9602C_PONSCH_DBRU_CFG``
+       (``dbru cfg``: block and period, read only once the PON MAC is built,
+       else ``not read``), ``RTL9602C_GTC_US_POWERSAVE`` (on or off),
        ``RTL9602C_GEM_US_POWERSAVE`` (bit 31, lag, lead), ``RTL9602C_BURST_CFG``
        (index, length), the twelve bytes of ``RTL9602C_BURST_DATA(i)`` and
        ``RTL9602C_GTC_US_TX_MODE`` (its two bits).
@@ -3659,6 +3751,12 @@ Known limitations
   counters.
 - The driver raises no signal-fail or signal-degrade alarm: it reports the BIP
   errors in bits, and the OMCI daemon judges both from them.
+- Status reporting counts in blocks of 48 bytes whatever the OLT sets: omcid
+  takes a new GEM block length into the ANI-G, but no interface carries it to
+  the driver, which writes 48 at every bring-up. An OLT that sets another
+  length reads the reports scaled by 48 over its own, and a length above 255
+  bytes does not fit the register at all. No OLT that asks for a DBRu has been
+  tried, so the reports themselves are not seen on the board.
 - Before O4 the optics set a lower transmit power level only at a set point
   kept from a measurement since probe, and they measure a level only when
   Change_Power_Level asks for it in O4 or O5: until then the default mode of
@@ -3842,6 +3940,13 @@ Assumptions the driver depends on
        1, 2, 0 ("Transmit power level").
      - An OLT that relies on the ONU's own levelling, or a later edition of
        G.984.3 clause 10.5.1.
+   * - That the block written into ``RTL9602C_PONSCH_DBRU_CFG`` is counted in
+       bytes, that clearing ``RTL9602C_GTC_US_CTRL_DBRU_DIS`` makes the MAC
+       answer every DBRu request, and that neither write disturbs activation
+       or OMCI ("Status reporting").
+     - The ``usburst`` view and the two debug lines after bring-up, the ONU
+       reaching O5 with OMCI passing both ways; an OLT that asks for mode 0
+       reports while a known amount waits in a T-CONT.
 
 Questions the code does not depend on
 -------------------------------------
@@ -3900,6 +4005,10 @@ Questions the code does not depend on
    * - What the ten bits of the upstream GEM framer's latch detect, and whether
        reading it clears it ("The debugfs views").
      - Two reads in a row under upstream traffic.
+   * - What the period field of ``RTL9602C_PONSCH_DBRU_CFG`` does, which the
+       driver leaves as it resets, and whether the reports need anything else
+       of the PON MAC ("Status reporting").
+     - An OLT that asks for a DBRu in every frame, with the reports it reads.
    * - What makes the MAC send the Dying_Gasp template it holds, and whether
        it puts the ONU-ID in place of the template's 255 ("PLOAM transmit",
        "Known limitations"). Bit 13 of ``RTL9602C_IRQ_PENDING``, taken to be

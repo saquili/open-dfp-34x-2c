@@ -40,9 +40,12 @@
  * that bring no ONU-ID, and follows Change_Power_Level from O4 on. Dying_Gasp
  * is sent before an orderly restart. Upstream FEC is taken to be the MAC's own
  * answer to the OLT's grants, with nothing for the driver to set; the driver
- * logs and shows the state the MAC reports. There is no signal-fail or
- * signal-degrade alarm, and what makes the MAC send the Dying_Gasp template it
- * holds by itself is not known.
+ * logs and shows the state the MAC reports. Status reporting is turned on: the
+ * MAC is taken to send a DBRu wherever an allocation asks for one, counting
+ * the T-CONT's queue in blocks of 48 bytes (not verified); a GEM block length
+ * that the OLT sets in the ANI-G does not reach the MAC. There is no
+ * signal-fail or signal-degrade alarm, and what makes the MAC send the
+ * Dying_Gasp template it holds by itself is not known.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
@@ -2810,6 +2813,7 @@ void rtl9602c_gpon_irq(struct rtl9602c_pon *p)
  */
 static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 {
+	u32 v;
 	int err;
 
 	/*
@@ -2887,6 +2891,21 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 		     FIELD_PREP(RTL9602C_GTC_US_RESP_DELAY_FINE,
 				RTL9602C_GTC_US_RESP_DELAY_FINE_DEF));
 	rtl9602c_pon_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_LOCK);
+
+	/*
+	 * Status reporting (G.984.3 clause 8.4): the reporting block in which a
+	 * T-CONT's queue is counted for the DBRu, 48 bytes, the default of
+	 * clause 8.4.2 and of the ANI-G's GEM block length (G.988 clause
+	 * 9.2.1). The block lies in the PON MAC, built above; the period
+	 * beside it keeps its reset value. That the MAC counts the block in
+	 * bytes is not verified. The debug line gives the word found first.
+	 */
+	v = rtl9602c_pon_r(p, RTL9602C_PONSCH_DBRU_CFG);
+	rtl9602c_pon_rmw(p, RTL9602C_PONSCH_DBRU_CFG, RTL9602C_PONSCH_DBRU_CFG_BLOCK,
+			 FIELD_PREP(RTL9602C_PONSCH_DBRU_CFG_BLOCK,
+				    RTL9602C_PONSCH_DBRU_CFG_BLOCK_DEF));
+	pr_debug("<GPON> status reporting: %08x, found %08x\n",
+		 rtl9602c_pon_r(p, RTL9602C_PONSCH_DBRU_CFG), v);
 
 	/*
 	 * A pulse every 8000 downstream frames, once a second of the OLT's
@@ -3033,18 +3052,25 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 
 	/*
 	 * Under the write key: flag a waiting normal PLOAM in the burst
-	 * header's Ind field, keep the PLOAMu field and the upstream scrambler
-	 * on, and set the burst-enable polarity. Which level that polarity
-	 * selects, and that the Ind bit does what its use suggests, are not
-	 * verified.
+	 * header's Ind field, keep the PLOAMu field, the DBRu and the upstream
+	 * scrambler on, and set the burst-enable polarity. An ONU answers every
+	 * allocation that asks for a DBRu with one of the length asked for,
+	 * whatever it reports (G.984.3 clause 8.4.5), or the OLT loses the
+	 * burst's delineation. Which level the polarity selects, and that the
+	 * Ind and DBRu bits do what their use suggests, are not verified. The
+	 * debug line gives the word found first.
 	 */
+	v = rtl9602c_pon_r(p, RTL9602C_GTC_US_CTRL);
 	rtl9602c_gpon_us_locked_rmw(p, RTL9602C_GTC_US_CTRL,
 				    RTL9602C_GTC_US_CTRL_IND_NORMAL_PLOAM |
 				    RTL9602C_GTC_US_CTRL_PLOAM_DIS |
+				    RTL9602C_GTC_US_CTRL_DBRU_DIS |
 				    RTL9602C_GTC_US_CTRL_SCRAMBLE_DIS |
 				    RTL9602C_GTC_US_CTRL_BEN_POL,
 				    RTL9602C_GTC_US_CTRL_IND_NORMAL_PLOAM |
 				    RTL9602C_GTC_US_CTRL_BEN_POL);
+	pr_debug("<GPON> upstream control: %08x, found %08x\n",
+		 rtl9602c_pon_r(p, RTL9602C_GTC_US_CTRL), v);
 
 	/*
 	 * Under the write key: a burst whose StartTime is smaller than its
@@ -3702,7 +3728,9 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gemusintr);
 
 /*
  * usburst: the upstream burst settings, read back: the laser lead and lag; the
- * upstream control word; burst power save in the GTC, and in the GEM framer
+ * upstream control word, with its DBRu bit; the status-reporting block and
+ * period, read only once the PON MAC, in whose part of the window they lie, is
+ * built; burst power save in the GTC, and in the GEM framer
  * with its window and bit 31, shown as tx-disable but not verified; the burst
  * overhead's repeat index and length, and its bytes; and the small-StartTime
  * and suppression bits.
@@ -3721,7 +3749,17 @@ static int rtl9602c_usburst_show(struct seq_file *s, void *unused)
 	seq_printf(s, "laser         %08x  on-lead %lu  off-lag %lu\n", laser,
 		   FIELD_GET(RTL9602C_GTC_US_LASER_ON_LEAD, laser),
 		   FIELD_GET(RTL9602C_GTC_US_LASER_OFF_LAG, laser));
-	seq_printf(s, "tx ctrl       %08x\n", cfg);
+	seq_printf(s, "tx ctrl       %08x  dbru %s\n", cfg,
+		   cfg & RTL9602C_GTC_US_CTRL_DBRU_DIS ? "off" : "on");
+	if (p->ponmac_up) {
+		u32 dbru = rtl9602c_pon_r(p, RTL9602C_PONSCH_DBRU_CFG);
+
+		seq_printf(s, "dbru cfg      %08x  block %lu  period %lu\n", dbru,
+			   FIELD_GET(RTL9602C_PONSCH_DBRU_CFG_BLOCK, dbru),
+			   FIELD_GET(RTL9602C_PONSCH_DBRU_CFG_PERIOD, dbru));
+	} else {
+		seq_puts(s, "dbru cfg      not read: the PON MAC is not built\n");
+	}
 	seq_printf(s, "power save    %08x  %s\n", ps,
 		   ps & RTL9602C_GTC_US_POWERSAVE_EN ? "on" : "off");
 	seq_printf(s, "gem power sv  %08x  tx-disable %u  lag %lu  lead %lu\n",
