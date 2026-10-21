@@ -22,8 +22,11 @@ the open cage of a stick that is powered and connected can emit it. The
 stick's own measurement of one burst in operation read a bias of 7 mA to 8 mA
 and a transmitted power of 1672 uW to 1682 uW, about +2.2 dBm (M: the hwmon
 device ``gn25l95``, ``curr1_input`` and ``power1_input``, on the
-DFP-34X-2C3 in O5 on a lab OLT, 2026-10-12). Never look into the cage, a
-connector or a fibre. Keep the caps on whatever is not connected. The
+DFP-34X-2C3 in O5 on a lab OLT, 2026-10-12). With the module's automatic
+extinction-ratio loop on, as the driver leaves it since, the bias read
+13.8 mA and the power 1687 uW, about the same light (M: the same,
+2026-10-21). Never look into the cage, a connector or a fibre. Keep the
+caps on whatever is not connected. The
 DFP-34X-2C2 and the DFP-34X-2C3 are one stick, the 2C2 with a UPC optical
 connector and the 2C3 with an APC one; use the cord of the kind the stick has.
 
@@ -95,12 +98,17 @@ little as it can:
   (``gn25l95.rst``, "The modules the driver writes"). Whether the part
   of an unlisted module is the same laser driver is not known (I: a module of
   the same name with another laser driver would be written as this one).
-* At each bring-up it writes registers of the part, not its EEPROM. It reads
-  the persistence control first and, if register changes would reach the
-  EEPROM, logs ``EEPROM updates are enabled`` and writes no table byte (M:
-  ``gn25l95.rst``, "The modulation hold"). The one byte the module
-  would keep is the page select, which holds the page the driver wants on this
-  board, so a bring-up writes nothing that stays.
+* At each bring-up it writes registers of the part, not its EEPROM: it puts
+  back the configuration the module loads at power-up, its automatic
+  extinction-ratio loop on, which a kernel before it may have changed in the
+  registers (``gn25l95.rst``, "The factory configuration"). It reads the
+  persistence control first and, if register changes would reach the EEPROM,
+  logs ``EEPROM updates are enabled`` and writes no table byte (M: the same
+  section). It does not reset the part, which would load that configuration
+  from the EEPROM again but writes bytes the module may keep (I: the same
+  section). The one byte the module would keep is the page select, which
+  holds the page the driver wants on this board, so a bring-up writes nothing
+  that stays.
 * The entry that stores bytes in the EEPROM, ``t2write``, exists only in a
   kernel built with ``CONFIG_PON_GN25L95_STORE`` (until 2026-10-19
   ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``), which is off by default and meant
@@ -147,7 +155,10 @@ What it cannot do
   lower level until it loses power: the one the OLT named or set, or, before
   the ONU was ranged, the one it took itself after serial-number requests went
   unanswered (M: a warm restart from the lowest level without the restore;
-  ``gn25l95.rst``, "Transmit power levelling"). The ONU sends at a lower level
+  ``gn25l95.rst``, "Transmit power levelling"). The next kernel takes that
+  level for the normal one, since the module's own lives only in its EEPROM,
+  which only a reset of the part, not used, would load again (I:
+  ``gn25l95.rst``, "The factory configuration"). The ONU sends at a lower level
   only from O3 to O6; below O3 and in O7 the driver asks for the normal level
   again (M: a disable to O7 from either lower level, and TO1 after the ONU's
   own step, each put the normal level back, 2026-10-20; I: the same on a
