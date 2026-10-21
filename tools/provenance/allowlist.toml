@@ -337,3 +337,32 @@ The build system's option that names the tarball of its "make sdk" target and
 the one directory in it, which a release of the toolchain workflow carries;
 the option's name is the build system's.
 """
+
+[[allow]]
+gate = "unit-ids"
+rules = ["password"]
+commits = [
+  "0346523a045863231527f99d70ce905258c8f337",
+  "4fb9cc266e478ce933f7add05a880022f293969f",
+  "651d591a487d4670fe5a2627fa8100fff00b17dd",
+]
+match = 'password: (?:true|false|boolean|said|this)'
+reason = """
+The panel's confirmation of a change named its flag of a refusal that
+concerns root's password, and its flag of an action that asks for none, by
+that word, of the type boolean, set to true or false; a comment and its
+English words of a wrong password put a colon after the word, and the install
+guide quoted those words. None of them holds a secret. The commits after
+these name the flags rootPassword and atField and say the words as two
+sentences.
+"""
+
+[[allow]]
+gate = "commit-message"
+rules = ["body-line-length"]
+commits = ["0346523a045863231527f99d70ce905258c8f337"]
+reason = """
+One line of the message of the panel's confirmation runs to 77 columns, two
+past the limit; a later commit cannot mend a message, and the history keeps
+every commit as it was made.
+"""
