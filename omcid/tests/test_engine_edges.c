@@ -684,8 +684,9 @@ static void test_a_get_of_every_attribute_is_answered_by_the_rule(void)
 				unsupported = (uint16_t)(unsupported | bit);
 			else if (stopped)
 				failed = (uint16_t)(failed | bit);
-			else if (!omci_me_attr_is_table(a) &&
-				 used + a->size > 25u) {
+			else if (used + (omci_me_attr_is_table(a) ? 4u :
+								    a->size) >
+				 25u) {
 				failed = (uint16_t)(failed | bit);
 				stopped = true;
 			} else {
@@ -859,8 +860,6 @@ static void test_the_model_keeps_what_the_engine_relies_on(void)
 	for (size_t k = 0; k < omci_me_class_count; k++) {
 		const struct omci_me_class *cls = &omci_me_classes[k];
 		size_t by_create = 0;
-		size_t off = 2;
-		bool fits = true;
 
 		for (uint8_t n = 1; n <= cls->attr_count; n++) {
 			const struct omci_me_attr *a = omci_me_attr_get(cls, n);
@@ -884,18 +883,10 @@ static void test_the_model_keeps_what_the_engine_relies_on(void)
 				      policy.key_len <= a->size);
 			}
 
-			if (omci_me_attr_is_table(a)) {
+			if (omci_me_attr_is_table(a))
 				CHECK(a->size >= 2u ||
 				      (cls->class_id == 287u && n == 2u &&
 				       a->size == 1u));
-				if (fits)
-					CHECK(off + 4u <= 2u + 25u);
-				off += 4u;
-			} else {
-				off += a->size;
-			}
-			if (off > 2u + 25u)
-				fits = false;
 		}
 		CHECK(by_create <= OMCI_CONTENTS_LEN);
 	}

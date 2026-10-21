@@ -1550,6 +1550,12 @@ static void handle_get_inner(struct omci_engine *eng,
 		}
 
 		if (is_table(req->class_id, attr)) {
+			/* Its size takes four bytes, which must fit as a value does. */
+			if (off + 4u > 2u + GET_VALUE_BYTES) {
+				failed |= omci_attr_bit(attr);
+				break;
+			}
+
 			const size_t bytes = table_entries(eng, req->class_id,
 							   req->instance,
 							   attr) *
