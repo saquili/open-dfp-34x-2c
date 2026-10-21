@@ -118,6 +118,59 @@ static void test_the_instances_are_the_ones_the_onu_creates(void)
 	omci_mib_fini(mib);
 }
 
+/*
+ * The subscriber ports told to the OLT, as an ONT stood in for had them:
+ * four Ethernet UNIs of one slot and the VEIP; the UNIs alone; the VEIP
+ * alone, without the UNIs' slot and queues.
+ */
+static void test_the_ports_told_are_those_chosen(void)
+{
+	struct omci_hw_caps caps;
+	struct omci_mib *mib = NULL;
+	const struct omci_hw_port pon = { .pptp_instance = 0,
+					  .cardholder = 0x0180,
+					  .plugin_type = 0xf8 };
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	for (unsigned int i = 0; i < 4u; i++)
+		caps.ports[i] =
+			(struct omci_hw_port){ .pptp_instance =
+						       (uint16_t)(0x0101u + i),
+					       .cardholder = 0x0101,
+					       .plugin_type = 0x2f };
+	caps.ports[4] = pon;
+	caps.port_count = 5;
+	caps.uni_port_count = 4;
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 11u), 4u);
+	CHECK_EQ(instances_of(mib, 264u), 4u);
+	CHECK(omci_mib_exists(mib, 11u, 0x0104u));
+	/* One slot of the four UNIs, the PON's and the VEIP's. */
+	CHECK_EQ(instances_of(mib, 5u), 3u);
+	CHECK_EQ(read_u(mib, 6u, 0x0101u, 2u), 4u);
+	CHECK_EQ(instances_of(mib, 329u), 1u);
+	CHECK_EQ(instances_of(mib, 277u),
+		 (unsigned int)(caps.num_tcont * caps.num_priq_per_tcont +
+				4u * caps.num_priq_per_port));
+
+	caps.uni_report = OMCI_HW_UNI_PPTP;
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 11u), 4u);
+	CHECK_EQ(instances_of(mib, 329u), 0u);
+	CHECK_EQ(instances_of(mib, 5u), 2u);
+
+	caps.uni_report = OMCI_HW_UNI_VEIP;
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 11u), 0u);
+	CHECK_EQ(instances_of(mib, 264u), 0u);
+	CHECK_EQ(instances_of(mib, 329u), 1u);
+	CHECK(!omci_mib_exists(mib, 5u, 0x0101u));
+	CHECK_EQ(instances_of(mib, 277u),
+		 (unsigned int)(caps.num_tcont * caps.num_priq_per_tcont));
+	omci_mib_fini(mib);
+}
+
 static void test_the_identifiers_follow_the_rules_of_the_standard(void)
 {
 	struct omci_hw_caps caps;
@@ -343,7 +396,7 @@ static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 	CHECK_EQ(instances_of(mib, 277u), 3u * 5u + 3u);
 	CHECK_EQ(read_u(mib, 6u, caps.ports[0].cardholder, 2u), 4u);
 
-	caps.port_count = 9u;
+	caps.port_count = (uint8_t)(ARRAY_SIZE(caps.ports) + 1u);
 	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_ERR_INVAL);
 	CHECK_EQ(omci_me_defaults_apply(NULL, &caps), OMCI_ERR_INVAL);
 	CHECK_EQ(omci_me_defaults_apply(mib, NULL), OMCI_ERR_INVAL);
@@ -506,6 +559,7 @@ int main(int argc, char **argv)
 	}
 
 	RUN(test_the_instances_are_the_ones_the_onu_creates);
+	RUN(test_the_ports_told_are_those_chosen);
 	RUN(test_the_identifiers_follow_the_rules_of_the_standard);
 	RUN(test_the_values_the_sheet_states);
 	RUN(test_the_identity_the_seam_gives_is_the_identity_the_mib_holds);

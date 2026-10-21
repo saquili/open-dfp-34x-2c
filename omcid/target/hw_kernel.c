@@ -623,6 +623,47 @@ static void board_caps(struct omci_hw_caps *out)
 	out->identity.omcc_version = OMCC_BASELINE;
 }
 
+/*
+ * The subscriber ports the stick tells the OLT of, as the ONT it stands in
+ * for had them: "uni_ports" of the identity file, 1 to OMCI_HW_UNI_MAX
+ * Ethernet UNIs of slot 1, each of them the one SFP lane, 1 when it names
+ * none or another number; and "uni_report", "pptp" for the Ethernet UNIs
+ * alone, "veip" for the VEIP alone, both for anything else.
+ */
+static void identity_ports(struct omci_hw_caps *caps)
+{
+	unsigned long n = 1;
+	char report[8] = "";
+
+	if (!identity_number("uni_ports", &n) || n < 1 || n > OMCI_HW_UNI_MAX)
+		n = 1;
+	for (unsigned long i = 0; i < n; i++)
+		caps->ports[i] = (struct omci_hw_port){
+			.pptp_instance = (uint16_t)(UNI_INSTANCE + i),
+			.cardholder = UNI_INSTANCE,
+			.plugin_type = PLUGIN_ETHERNET
+		};
+	caps->ports[n] = (struct omci_hw_port){ .pptp_instance = 0,
+						.cardholder = PON_CARDHOLDER,
+						.plugin_type = PLUGIN_GPON };
+	caps->port_count = (uint8_t)(n + 1);
+	caps->uni_port_count = (uint8_t)n;
+	(void)identity_copy("uni_report", report, sizeof(report));
+	caps->uni_report = !strcmp(report, "pptp") ? OMCI_HW_UNI_PPTP :
+			   !strcmp(report, "veip") ? OMCI_HW_UNI_VEIP :
+						     OMCI_HW_UNI_BOTH;
+	if (caps->uni_report == OMCI_HW_UNI_VEIP)
+		OMCI_INFO(
+			"caps: the VEIP alone told to the OLT, no Ethernet UNI");
+	else if (caps->uni_report == OMCI_HW_UNI_PPTP)
+		OMCI_INFO("caps: %lu Ethernet UNI(s) told to the OLT, no VEIP",
+			  n);
+	else if (n > 1)
+		OMCI_INFO(
+			"caps: %lu Ethernet UNIs and the VEIP told to the OLT",
+			n);
+}
+
 /* The GEM ports the driver can carry, up to what the daemon handles. */
 static void caps_gem_ports(struct omci_hw_caps *caps)
 {
@@ -662,6 +703,7 @@ static enum omci_status kernel_caps(struct omci_hw_caps *out)
 		return OMCI_ERR_INVAL;
 
 	board_caps(out);
+	identity_ports(out);
 	tconts = caps_tconts(out);
 	caps_tcont_queues(out);
 	caps_gem_ports(out);

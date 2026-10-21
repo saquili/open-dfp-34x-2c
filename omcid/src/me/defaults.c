@@ -275,12 +275,26 @@ static void make_uni_g(struct build *b, const struct omci_hw_port *p)
 	finish(b);
 }
 
-/* The equipment of one port; a subscriber port also gets its UNI. */
+/*
+ * The equipment of port @i: its cardholder and circuit pack, which the
+ * Ethernet UNIs of one slot share, the first of them making them; a
+ * subscriber port also gets its UNI. A device that tells the OLT of its
+ * VEIP alone tells it of no Ethernet UNI, nor of their slot.
+ */
 static void make_slot(struct build *b, const struct omci_hw_caps *caps,
-		      const struct omci_hw_port *p)
+		      unsigned int i)
 {
-	make_cardholder(b, p);
-	make_circuit_pack(b, caps, p);
+	const struct omci_hw_port *p = &caps->ports[i];
+	bool made = false;
+
+	if (p->pptp_instance != 0 && caps->uni_report == OMCI_HW_UNI_VEIP)
+		return;
+	for (unsigned int k = 0; k < i; k++)
+		made = made || caps->ports[k].cardholder == p->cardholder;
+	if (!made) {
+		make_cardholder(b, p);
+		make_circuit_pack(b, caps, p);
+	}
 	if (p->pptp_instance != 0) {
 		make_pptp(b, p);
 		make_uni_g(b, p);
@@ -391,7 +405,8 @@ static void make_downstream_queues(struct build *b,
 	for (unsigned int i = 0; i < caps->port_count; i++) {
 		const struct omci_hw_port *p = &caps->ports[i];
 
-		if (p->pptp_instance == 0)
+		if (p->pptp_instance == 0 ||
+		    caps->uni_report == OMCI_HW_UNI_VEIP)
 			continue;
 		for (unsigned int q = 0; q < caps->num_priq_per_port;
 		     q++, number++)
@@ -489,7 +504,7 @@ enum omci_status omci_me_defaults_apply(struct omci_mib *mib,
 	make_onu2_g(&b, caps);
 	make_olt_g(&b);
 	for (unsigned int i = 0; i < caps->port_count; i++)
-		make_slot(&b, caps, &caps->ports[i]);
+		make_slot(&b, caps, i);
 	make_ani_g(&b, caps);
 	for (unsigned int n = 0; n < caps->num_tcont; n++)
 		make_tcont(&b, n);
@@ -501,7 +516,8 @@ enum omci_status omci_me_defaults_apply(struct omci_mib *mib,
 		make_software_image(&b, caps, n);
 	for (unsigned int n = 0; n < caps->ip_host_count; n++)
 		make_ip_host(&b, caps, n);
-	make_veip(&b, caps);
+	if (caps->uni_report != OMCI_HW_UNI_PPTP)
+		make_veip(&b, caps);
 	make_lct_uni(&b);
 	make_omci(&b);
 

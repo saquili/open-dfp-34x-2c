@@ -35,6 +35,21 @@ struct omci_hw_port {
 	uint8_t plugin_type;
 };
 
+/* The most Ethernet UNIs a device tells the OLT of, as many as an ONT it stands in for has. */
+#define OMCI_HW_UNI_MAX 8u
+
+/**
+ * enum omci_hw_uni_report - The subscriber ports a device tells the OLT of.
+ * @OMCI_HW_UNI_BOTH: its Ethernet UNIs and its VEIP
+ * @OMCI_HW_UNI_PPTP: its Ethernet UNIs alone
+ * @OMCI_HW_UNI_VEIP: its VEIP alone
+ */
+enum omci_hw_uni_report {
+	OMCI_HW_UNI_BOTH = 0,
+	OMCI_HW_UNI_PPTP = 1,
+	OMCI_HW_UNI_VEIP = 2,
+};
+
 /**
  * struct omci_hw_caps - What the device has and how it identifies itself.
  * @ports: its slots
@@ -53,10 +68,12 @@ struct omci_hw_port {
  * @num_tcont: the T-CONTs
  * @num_priq_per_tcont: the upstream priority queues of each T-CONT
  * @num_priq_per_port: the downstream priority queues of each UNI
- * @uni_port_count: the subscriber ports
+ * @uni_port_count: the subscriber ports, the Ethernet UNIs of one slot
+ * @uni_report: which subscriber ports it tells the OLT of (enum
+ *	omci_hw_uni_report): the Ethernet UNIs of @ports, its VEIP, or both
  */
 struct omci_hw_caps {
-	struct omci_hw_port ports[8];
+	struct omci_hw_port ports[OMCI_HW_UNI_MAX + 2];
 	uint8_t port_count;
 
 	uint16_t ani_instance;
@@ -91,6 +108,7 @@ struct omci_hw_caps {
 	uint8_t num_priq_per_port;
 
 	uint8_t uni_port_count;
+	uint8_t uni_report;
 };
 
 /**

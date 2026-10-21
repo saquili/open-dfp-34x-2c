@@ -258,3 +258,54 @@ void omci_publish_services(const struct omci_publish_ops *ops, void *ctx)
 		write_rule(&made[i], ops, ctx);
 	ops->close(ctx, true);
 }
+
+/* Class 148, Authentication security method, and its fields of 25 bytes. */
+enum {
+	ME_AUTH = 148,
+	AUTH_USER1 = 2,
+	AUTH_PASSWORD = 3,
+	AUTH_REALM = 4,
+	AUTH_USER2 = 5,
+	AUTH_FIELD = 25,
+};
+
+/*
+ * Field @attr of instance @inst of class 148 as text after the @len bytes
+ * of @out: its printable ASCII up to the first other byte. Returns the new
+ * length.
+ */
+static size_t auth_text(const struct omci_mib *mib, uint16_t inst, uint8_t attr,
+			char *out, size_t len)
+{
+	uint8_t v[AUTH_FIELD] = { 0 };
+
+	(void)!omci_mib_attr_get(mib, ME_AUTH, inst, attr, v, sizeof(v), NULL);
+	for (size_t i = 0; i < sizeof(v) && v[i] >= 0x20u && v[i] < 0x7fu; i++)
+		out[len++] = (char)v[i];
+	out[len] = '\0';
+	return len;
+}
+
+void omci_publish_login(const struct omci_mib *mib,
+			const struct omci_publish_ops *ops, void *ctx)
+{
+	struct omci_mib_cursor cur;
+	char user[2 * AUTH_FIELD + 1], text[AUTH_FIELD + 1];
+
+	for (enum omci_status w = omci_mib_walk_first(mib, &cur); w == OMCI_OK;
+	     w = omci_mib_walk_next(mib, &cur)) {
+		if (cur.class_id != ME_AUTH)
+			continue;
+		size_t n = auth_text(mib, cur.instance, AUTH_USER1, user, 0);
+
+		n = auth_text(mib, cur.instance, AUTH_USER2, user, n);
+		if (n == 0u)
+			continue;
+		ops->str(ctx, "user", user);
+		(void)auth_text(mib, cur.instance, AUTH_PASSWORD, text, 0);
+		ops->str(ctx, "secret", text);
+		(void)auth_text(mib, cur.instance, AUTH_REALM, text, 0);
+		ops->str(ctx, "realm", text);
+		return;
+	}
+}

@@ -301,6 +301,47 @@ static void test_the_services(struct omci_mib *mib)
 	omci_hw_service_rules_set(person, 0u);
 }
 
+/*
+ * The PPPoE login of class 148: none, then of the first instance whose
+ * username is not blank, its two usernames together, a byte that is no
+ * printable ASCII ending a field.
+ */
+static void test_the_login(struct omci_mib *mib)
+{
+	uint8_t blank[25] = { 0 }, user1[25] = { 0 }, user2[25] = { 0 };
+	uint8_t secret[25] = { 0 }, realm[25] = { 0 };
+	struct text t = { .p = g_out, .cap = sizeof(g_out) };
+
+	fill(mib);
+	t.first[0] = true;
+	t_put(&t, "{");
+	omci_publish_login(mib, &g_text_ops, &t);
+	t_put(&t, "}");
+	CHECK_EQ(strcmp(g_out, "{}"), 0);
+
+	memcpy(user1, "abcdefghijklmnopqrstuvwxy", 25);
+	memcpy(user2, "z@isp.example\x01x", 15);
+	memcpy(secret, "example-secret", 14);
+	memcpy(realm, "isp.example", 11);
+	CHECK_EQ(omci_mib_create(mib, 148u, 1u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 148u, 1u, 2u, blank, 25u), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, 148u, 2u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 148u, 2u, 2u, user1, 25u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 148u, 2u, 5u, user2, 25u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 148u, 2u, 3u, secret, 25u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 148u, 2u, 4u, realm, 25u), OMCI_OK);
+	t = (struct text){ .p = g_out, .cap = sizeof(g_out) };
+	t.first[0] = true;
+	t_put(&t, "{");
+	omci_publish_login(mib, &g_text_ops, &t);
+	t_put(&t, "}");
+	CHECK(strstr(g_out,
+		     "\"user\":\"abcdefghijklmnopqrstuvwxyz@isp.example\"") !=
+	      NULL);
+	CHECK(strstr(g_out, "\"secret\":\"example-secret\"") != NULL);
+	CHECK(strstr(g_out, "\"realm\":\"isp.example\"") != NULL);
+}
+
 int main(void)
 {
 	RUN_MIB(test_the_classes_asked_for_in_their_order);
@@ -308,5 +349,6 @@ int main(void)
 	RUN_MIB(test_what_does_not_fit_is_left_out_whole);
 	RUN_MIB(test_the_status);
 	RUN_MIB(test_the_services);
+	RUN_MIB(test_the_login);
 	return OMCI_T_REPORT("test_publish");
 }

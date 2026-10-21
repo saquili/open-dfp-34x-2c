@@ -83,4 +83,18 @@ void omci_publish_status(const struct omci_mib *mib,
  */
 void omci_publish_services(const struct omci_publish_ops *ops, void *ctx);
 
+/**
+ * omci_publish_login() - Write the PPPoE login an OLT sent (Authentication
+ *	security method, class 148, G.988 9.12.4): {"user":U,"secret":S,
+ *	"realm":R} of the first instance whose username is not blank, its
+ *	usernames 1 and 2 together; {} when there is none.
+ * @mib: the MIB
+ * @ops: the writer
+ * @ctx: passed to @ops
+ *
+ * A byte that is no printable ASCII ends a field.
+ */
+void omci_publish_login(const struct omci_mib *mib,
+			const struct omci_publish_ops *ops, void *ctx);
+
 #endif

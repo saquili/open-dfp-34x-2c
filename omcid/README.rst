@@ -84,6 +84,21 @@ Layout
 ``data/g988-me-min.tsv``
    the managed entity classes, from which ``src/me/table.[ch]`` are made
 
+The ports told to the OLT
+=========================
+
+The stick tells the OLT of the subscriber ports the ONT it stands in for
+had, as the identity file says (``target/hw_kernel.c``,
+``identity_ports()``): ``uni_ports``, 1 to 8 Ethernet UNIs of slot 1, one
+cardholder and circuit pack of that many ports, each UNI the one SFP lane;
+and ``uni_report``, ``pptp`` for the Ethernet UNIs alone, without the VEIP,
+``veip`` for the VEIP alone, without the UNIs, their slot and their
+downstream queues, or both. A change of them is a change of the identity:
+the stick registers again and builds its MIB anew. The ubus method
+``login`` gives the PPPoE login an OLT sent in an instance of the
+Authentication security method (class 148): its usernames together, its
+password and realm (``omci_publish_login()``).
+
 The rules of the services
 =========================
 
