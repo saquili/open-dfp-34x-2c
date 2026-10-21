@@ -264,7 +264,7 @@ function MenuSection({
           {section.icon}
           {t(section.key)}
         </summary>
-        <ul className="mt-0.5 flex flex-col">
+        <ul className="mt-1 flex flex-col gap-1">
           {section.pages.map((p) => (
             <li key={p.to}>
               <Link
