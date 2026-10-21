@@ -397,10 +397,10 @@ The engine's registers
 The engine's own registers are the 4 KiB of the switch's window from
 ``0x800000``. Three registers that the bring-up writes lie outside it, in
 blocks of the switch: the engine's master enable in the switch's lookup block,
-an auxiliary word, and the control of the per-L3-interface counters. The block
-needs nothing opened before it answers, unlike the PON MAC behind its enable in
-the system controller (see the *main* page), so the driver reads and writes it
-from setup on.
+an auxiliary word, and the reset select of the per-L3-interface counters. The
+block needs nothing opened before it answers, unlike the PON MAC behind its
+enable in the system controller (see the *main* page), so the driver reads and
+writes it from setup on.
 
 .. list-table::
    :header-rows: 1
@@ -415,10 +415,10 @@ from setup on.
    * - ``RTL9602C_L3_AUX_CFG``
      - ``0x02a104``
      - An auxiliary word (outside the engine's window).
-   * - ``RTL9602C_MIB_L3IF_CTRL``
+   * - ``RTL9602C_MIB_L3IF_RESET``
      - ``0x03401c``
-     - The control of the per-L3-interface counters (outside the engine's
-       window).
+     - The L3 interfaces whose counters a reset of the counter block clears
+       (outside the engine's window).
    * - ``RTL9602C_L3_CFG``
      - ``0x800010``
      - The configuration word.
@@ -477,8 +477,8 @@ from setup on.
        frame capture ``0x800200`` to ``0x800293``, NAPT hit bitmap ``0x800400``
        to ``0x8005fc``. Three registers that the bring-up writes lie outside
        it: the global enable at ``0x01106c`` (in the switch's lookup block), an
-       auxiliary word at ``0x02a104``, and the per-L3-interface counter control
-       at ``0x03401c``.
+       auxiliary word at ``0x02a104``, and the reset select of the
+       per-L3-interface counters at ``0x03401c``.
      - M
      - A read of every register after a full chip reset; the ``l3nat`` and
        ``l3flow`` views read them on every use.
@@ -494,9 +494,9 @@ from setup on.
 Global enable and configuration
 ===============================
 
-Four words configure the engine and a fifth turns on counters. The master
-enable is outside the engine's window. The configuration word has two fields
-that the driver changes; the driver changes nothing else in it, because
+Four words configure the engine, and a fifth selects counters for a reset. The
+master enable is outside the engine's window. The configuration word has two
+fields that the driver changes; the driver changes nothing else in it, because
 changing further fields turned a translated flow's verdict into one for the
 CPU. The binding-action word and the auxiliary word are written with values
 that changed nothing measurable, and whether they are needed is not
@@ -677,14 +677,18 @@ The binding, auxiliary and counter words
      - I
      - Omitting the write and repeating the routing test and the PPPoE test
        would settle it.
-   * - ``RTL9602C_MIB_L3IF_CTRL`` (``0x03401c``) reads 0 in the reset state.
-       Setup sets ``RTL9602C_MIB_L3IF_CTRL_EN`` so that the per-L3-interface
-       packet and octet counters count; nothing in the driver reads those
-       counters. That the bit enables them and affects nothing else is
-       inferred, not measured.
+   * - ``RTL9602C_MIB_L3IF_RESET`` (``0x03401c``) reads 0 in the reset state,
+       and setup sets ``RTL9602C_MIB_L3IF_RESET_IF(0)`` (bit 0). The register
+       enables no counting: it selects, bit n for row n of the L3-interface
+       table, the interfaces whose packet and octet counters a reset command
+       of the counter block clears, and a set bit does nothing until such a
+       command runs. The driver issues no reset command and reads none of
+       those counters, so setting bit 0 is taken to change nothing.
      - I
-     - Reading the per-interface counters around a flow, with the bit set and
-       clear, would confirm it.
+     - Not load-bearing. A board image without the write, repeating the
+       routing test and the PPPoE test, would show whether it can go; the
+       per-interface counters of row 0, read around a flow with the bit set
+       and clear, would show that it does not gate counting.
 
 The table access port
 =====================
@@ -1139,8 +1143,9 @@ of setup is on the *main* page ("Setup, in order").
    binding, IPv6 neighbour, WAN type, five-tuple. Purpose: reset every table
    engine before the engine is enabled. Whether the order matters is not
    established. (I)
-4. Set ``RTL9602C_MIB_L3IF_CTRL_EN``. Purpose: the per-interface counters count.
-   (I)
+4. Set ``RTL9602C_MIB_L3IF_RESET_IF(0)``. Purpose: none established; it
+   selects interface 0 for a reset of its counters that the driver never
+   issues. (I)
 5. Write ``RTL9602C_L3_BIND_CFG_INIT`` to ``RTL9602C_L3_BIND_CFG`` and log it.
    Purpose: defined actions for a binding mismatch. (I)
 6. Read-modify-write ``RTL9602C_L3_CFG``: NAPT mode, and interface lookup by
@@ -3870,10 +3875,11 @@ Questions the code does not depend on
    * - Whether the auxiliary word ``0xf5`` is needed, and what its bits enable
        ("Global enable and configuration"; step 8).
      - Omitting the write and repeating the routing test and the PPPoE test.
-   * - Whether the counter-control bit enables the per-L3-interface counters and
-       nothing else ("Global enable and configuration"; step 4).
-     - Reading the per-interface counters around a flow, with the bit set and
-       clear.
+   * - Whether the write of the counter reset select is needed, and that it
+       gates no counting ("Global enable and configuration"; step 4).
+     - Omitting the write and repeating the routing test and the PPPoE test;
+       reading the per-interface counters of row 0 around a flow, with the bit
+       set and clear.
    * - Whether an index at or beyond a table's last entry wedges the table port
        as an unlisted selector does ("The table access port"). The driver never
        issues one.

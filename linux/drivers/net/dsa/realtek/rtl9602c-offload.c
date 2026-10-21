@@ -4616,10 +4616,13 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 	tables = rtl9602c_l34_tables_reset(p, &done, &busy);
 
 	/*
-	 * The per-L3-interface counters, which nothing reads; that the bit
-	 * enables them and nothing else is not verified.
+	 * Select L3 interface 0 for a reset of its counters, which nothing
+	 * reads. The bit enables no counting, and the reset command that would
+	 * act on it is never issued, so the write is taken to change nothing;
+	 * whether it is needed is not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_MIB_L3IF_CTRL, 0, RTL9602C_MIB_L3IF_CTRL_EN);
+	rtl9602c_rmw(p, RTL9602C_MIB_L3IF_RESET, 0,
+		     RTL9602C_MIB_L3IF_RESET_IF(0));
 
 	/*
 	 * The actions for frames whose WAN binding disagrees with the lookup;

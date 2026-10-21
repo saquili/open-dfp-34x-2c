@@ -417,9 +417,14 @@
 #define RTL9602C_TBLACC_WDATA(i)		(0x012008 + 4 * (i))
 #define RTL9602C_TBLACC_RDATA(i)		(0x01201c + 4 * (i))
 
-/* Taken to enable the per-L3-interface counters (not verified). */
-#define RTL9602C_MIB_L3IF_CTRL		0x03401c
-#define RTL9602C_MIB_L3IF_CTRL_EN	BIT(0)
+/*
+ * The L3 interfaces whose counters a reset command of the counter block
+ * clears: bit n for row n of the L3-interface table. A set bit is taken to
+ * do nothing until such a command runs, and the driver issues none (not
+ * verified).
+ */
+#define RTL9602C_MIB_L3IF_RESET		0x03401c
+#define RTL9602C_MIB_L3IF_RESET_IF(n)	BIT(n)
 
 /* The L3/NAT engine's master enable; clear, the switch ignores its verdict. */
 #define RTL9602C_L3_GLOBAL_CTRL		0x01106c
