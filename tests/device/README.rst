@@ -109,6 +109,9 @@ today's image, but none has run on it. What a case expects of the image:
   without closing it properly, so that nobody feeds an armed watchdog.
 * The ssh server takes root's key and root's password (ADR 0009), which
   ``net.ssh-login`` checks.
+* ``omci.tcont-map`` and ``data.cpu-limit`` read the kernel's debugfs, which
+  only a RAM image's kernel has (``make ram-image``); on the flash's kernel
+  they are skipped and say so.
 * ``omci.gem-ports`` knows both shapes of the stick: bridged by omcid, or
   holding PPPoE sessions that each run on a GEM port. ``data.igmp`` needs the
   bridge ``omcibr0``, which omcid builds only while the stick holds no PPPoE

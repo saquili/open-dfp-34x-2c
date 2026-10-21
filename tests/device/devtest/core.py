@@ -45,6 +45,18 @@ def verdict(ok: bool, evidence: str) -> Outcome:
     return Outcome(PASS if ok else FAIL, evidence)
 
 
+# What a case that reads the kernel's debugfs says on a kernel without it: the
+# flash's image leaves debugfs out, a RAM image has it.
+NO_DEBUGFS = ("needs the kernel's debugfs, which a RAM image has (make ram-image) and the "
+              "flash's image has not")
+
+
+def debugfs(ctx: Context, path: str) -> bool:
+    """Whether /sys/kernel/debug/@path is there, with debugfs mounted for it."""
+    return ctx.stick.run("mountpoint -q /sys/kernel/debug || mount -t debugfs none "
+                         f"/sys/kernel/debug; test -e /sys/kernel/debug/{path}").ok
+
+
 @dataclasses.dataclass
 class Context:
     settings: Settings

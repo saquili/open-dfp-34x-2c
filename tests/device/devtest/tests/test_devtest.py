@@ -321,6 +321,9 @@ class Cases(unittest.TestCase):
         self.assertEqual(outcome("tcont 0=-/- 1=300/-   (bound/mapped)\n").evidence,
                          "no T-CONT mapped")
         self.assertEqual(outcome("aes   key 0\n").status, FAIL)
+        without = cases_pon.tcont_map(context(stick=[("mountpoint", 1, "")]))
+        self.assertEqual(without.status, SKIP)
+        self.assertIn("RAM image", without.evidence)
 
     def test_alarms_needs_the_power_level_and_no_alarm(self):
         line2 = "     alarms none  GEM ports up to 128  power level high  serial number set\n"

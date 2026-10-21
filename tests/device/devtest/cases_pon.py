@@ -9,7 +9,7 @@ import math
 import re
 import time
 
-from .core import Context, case, failed, passed, verdict
+from .core import NO_DEBUGFS, Context, case, debugfs, failed, passed, skipped, verdict
 
 def pon(ctx: Context) -> str:
     """What the pon tool reports of the PON device and its ONU."""
@@ -121,7 +121,8 @@ def gem_ports(ctx: Context):
 @case("omci.tcont-map", "OMCI",
       "Each T-CONT the OLT mapped to an Alloc-ID through OMCI holds that Alloc-ID")
 def tcont_map(ctx: Context):
-    ctx.stick.run("mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug")
+    if not debugfs(ctx, "rtl9602c/gpon"):
+        return skipped(NO_DEBUGFS)
     line = ctx.stick.run("grep '^tcont' /sys/kernel/debug/rtl9602c/gpon").out
     tconts = re.findall(r"(\d+)=(\S+)/(\S+)", line)
     if not tconts:

@@ -32,7 +32,7 @@ import shlex
 import time
 
 from .access import sudo
-from .core import Context, case, failed, skipped, verdict
+from .core import NO_DEBUGFS, Context, case, debugfs, failed, skipped, verdict
 
 FRAME = 1514           # bytes, without the FCS
 COUNT = 400000         # frames offered per burst
@@ -1171,7 +1171,6 @@ def omci_counts(ctx: Context) -> tuple[int, int]:
     """The OMCI messages that the PON MAC received and those that reached the
     OMCI port, so far."""
     mac, port = ctx.stick.text(
-        "mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; "
         "sed -n 's/.*omci rx *\\([0-9]*\\) pkts.*/\\1/p' /sys/kernel/debug/rtl9602c/ponmac; "
         "cat /sys/class/pon/pon0omci0/statistics/rx_messages").split()
     return int(mac), int(port)
@@ -1184,6 +1183,8 @@ def omci_counts(ctx: Context) -> tuple[int, int]:
 def cpu_limit(ctx: Context):
     if (skip := needs(ctx)):
         return skip
+    if not debugfs(ctx, "rtl9602c"):
+        return skipped(NO_DEBUGFS)
     prime(ctx)
     param = "devlink dev param {} " + ctx.stick.text("devlink dev show | head -n 1") + \
         " name cpu_rx_pps"
