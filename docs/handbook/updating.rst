@@ -45,9 +45,9 @@ The parts
        commits the bank once the system is up, and restarts into the committed
        bank when it is not.
    * - The panel
-     - The System page's Software tab lists system A (bank 0) and system B
-       (bank 1; see ``boot-contract.rst``, "The names of a bank"), uploads an
-       update file, offers to start the new system, downloads the running one,
+     - System, Software lists system A (bank 0) and system B (bank 1; see
+       ``boot-contract.rst``, "The names of a bank"), uploads an update file,
+       offers to start the new system, downloads the running one,
        starts the other one when it holds a whole system of its own, goes back
        to the shipped firmware when the other bank holds that, and copies the
        whole flash. pond hands the upload on a pipe to onu-act, which runs
@@ -98,12 +98,13 @@ writes only a bank that is named, and ``onu-trial`` does nothing.
 Updating
 ========
 
-From the panel: System, tab Software, root's password in "Root password",
-"Upload new software", and the file ``update.bin``. The page shows how much
-has gone; the stick then checks and reads back the bank, some 45 seconds in
-all, and says which version it wrote where. "Start the new software" restarts
-the stick into it, once; with "Start it on trial right after the upload"
-turned on, the restart follows the write by itself. ``install-guide.rst``
+From the panel: System, Software, "Upload new software", the file
+``update.bin``, and root's password in the dialog that asks for it. The
+dialog shows how much has gone; the stick then checks and reads back the
+bank, some 45 seconds in all, and the card says which version it wrote where.
+"Start system B" (or A), under Systems, restarts the stick into it, once;
+with "Start it on trial right after the upload" turned on, the restart
+follows the write by itself. ``install-guide.rst``
 gives the steps with what the panel shows at each.
 
 From a shell on the stick, with the file streamed in over ssh, or from
@@ -364,14 +365,14 @@ firmware is gone; the way back with it.
 
 Keep a copy of the whole flash before the first update, at the latest right
 after the install: over ssh, the way that was tried on a stick, or with "Copy
-the whole flash" on the panel's System page, which has not been tried on a
+the whole flash" under System, Software, which has not been tried on a
 stick yet (``backup.rst``). The copy holds the unit's registration identity
 and this system's secrets: keep it private. ``backup.rst``, "Writing it back",
 says how to write it back, which needs the serial console, a host port at
 2500BASE-X and a RAM image built from the sources.
 
 While the other bank holds the shipped firmware, the same page has "Go back to
-the shipped firmware (system A)", or B, which needs root's password, commits
+the shipped firmware (system A)", or B, which asks for root's password, commits
 that bank and restarts, so that the next start and every one after it are the
 shipped firmware's, with its own settings (``POST /api/firmware/return``,
 ``onu-update return``). It refuses a bank whose kernel is not whole. Once the

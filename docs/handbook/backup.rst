@@ -76,8 +76,8 @@ hash of root's password, the PPPoE accounts, the token of scripts, the ssh
 server's host key, the panel's key and the private key of an own certificate
 of the panel, beside the public keys root logs in to ssh with and whether
 ssh takes them alone. Whoever has the copy has those keys: after a copy went
-where it should not, make the servers' keys anew under System, tab Access,
-and change root's password.
+where it should not, make the servers' keys and the token of scripts anew
+under System, Access, and change root's password there.
 
 Taking the copy
 ===============
@@ -106,14 +106,14 @@ Check the copy against the stick: run the same loop on the stick into
 
 The two digests have to be the same. Keep the digest with the copy.
 
-From the panel, which has not been tried on a stick yet: the System page's
-Software tab has "Copy the whole flash", which needs root's password in "Root
-password" and is made to download the eight partitions in order as one file,
+From the panel, which has not been tried on a stick yet: System, Software
+has "Copy the whole flash", which asks for root's password in a dialog and
+is made to download the eight partitions in order as one file,
 ``buchos-gpon-flash-<version>.bin`` of 8388608 bytes
 (``GET /api/firmware/backup``, ``onu-update backup`` on the stick;
 ``pond/README.rst``). The file's name begins with the product name the
 panel shows, in lower case with a hyphen for each gap: BuchOS's, unless
-another name was set under System, tab Settings
+another name was set under System, Device
 (``fibre-box-gpon-flash-<version>.bin`` for "Fibre Box"). It is tested on the
 build machine only
 (``onu-utils/tests/test_onu_update.sh``): check the size of what it saved,

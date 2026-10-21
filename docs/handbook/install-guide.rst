@@ -210,9 +210,10 @@ restart the stick answers::
 Open ``https://192.168.1.1/``. The panel answers over HTTPS; its port 80 only
 sends a browser on to HTTPS. The browser warns about the certificate, which
 the stick signed itself (ADR 0013). Its SHA-256 fingerprint is printed on the
-console at every start, and shown in the panel under System, tab Access,
-card "HTTPS of the panel", as "Certificate fingerprint (SHA-256)". Accept the
-certificate to go on, and compare the fingerprint once you are in. A
+console at every start, and shown in the panel under System, Access, card
+"HTTPS of the panel", in the row of the address under "Fingerprint
+(SHA-256)". Accept the certificate to go on, and compare the fingerprint once
+you are in. A
 certificate that an authority you trust signed may take its place there
 later ("Keys of ssh and of the panel", below).
 
@@ -230,7 +231,7 @@ shipped firmware's administrator into "Password" and press "Sign in".
   password", 8 to 128 characters, and press "Save password". Until then ssh
   takes keys only.
 
-Then check the install under System, tab Software. The card "Updates" lists
+Then check the install under System, Software. The card "Systems" lists
 system A (bank 0) and system B (bank 1):
 
 * the one that runs, with the release's version, marked "running now" and
@@ -274,12 +275,13 @@ loop on the stick, into ``sha256sum``, has to give the digest of the file::
 Keep the digest with the copy.
 
 The panel has a button for the same copy, which has not been tried on a stick
-yet: under System, tab Software, type root's password into "Root password" and
-press "Copy the whole flash". It is made to say "Reading the flash, about a
-minute…" and then "The copy of the flash is saved.", and to have the browser
-save ``buchos-gpon-flash-<version>.bin`` of 8388608 bytes. The name begins
-with the product name the panel shows, BuchOS unless another was set under
-System, tab Settings, card "Device", "Product name". Check the size, and the
+yet: under System, Software, card "Copies", press "Copy the whole flash",
+type root's password into the dialog that asks for it and press "Copy". The
+dialog stays while the stick reads the flash, about a minute, and the card
+then says "The copy of the flash is saved.", the browser having saved
+``buchos-gpon-flash-<version>.bin`` of 8388608 bytes. The name begins with
+the product name the panel shows, BuchOS unless another was set under
+System, Device, card "Device", "Product name". Check the size, and the
 digest against the stick's as above, before you rely on such a copy.
 
 The copy holds the unit's registration identity, its MAC address and this
@@ -293,39 +295,59 @@ the first update", below; ``backup.rst``, "Writing it back").
 Keys of ssh and of the panel
 ============================
 
-Under System, tab Access, the panel changes the keys of the stick's two
-servers. Each change there needs root's password again: type it into "Root
-password" at the top of the tab; it goes with each change and is not kept. A
-wrong one is refused, and counts as a wrong sign-in. These changes have been
-tried against the panel's mock stick and pond's tests, not yet on a stick.
+Under System, Access, the panel changes the keys of the stick's two
+servers. Each change there needs root's password again, which a dialog asks
+for when the change's button is pressed: type it, and press Enter or the
+dialog's button; it goes with that change alone and is not kept. A wrong one
+is said in the dialog, which stays open, and counts as a wrong sign-in; after
+five wrong ones the stick takes none for half a minute, and the dialog says
+how long is left. These changes have been tried against the panel's mock
+stick and pond's tests, not yet on a stick.
 
 To log in to ssh with a key, paste one line of your public key, such as the
 content of ``~/.ssh/id_ed25519.pub``, into "Public key" under "Keys for ssh
 login (root)" and press "Add the key": Ed25519, ECDSA (P-256, P-384, P-521)
-or RSA of 2048 to 4096 bits, eight keys at most. The row shows its comment,
-kind and SHA-256 fingerprint, as ``ssh-keygen -l -f key.pub`` prints it.
+or RSA of 2048 to 4096 bits, eight keys at most. The row shows its type, its
+bits, its SHA-256 fingerprint, as ``ssh-keygen -l -f key.pub`` prints it, its
+comment and its source, "panel". The keys of an image built with a bench's
+keys stand in the table too, of the source "image": ssh takes them, the panel
+cannot remove them, and they do not count towards the eight.
 ``ssh root@192.168.1.1`` then takes the key. Once a key works, "Take keys
 only, no password" makes the ssh server refuse root's password, as a key's
 owner may want; the panel and the console still take the password. The
-switch waits for a key, and the last key cannot be removed while it is on.
+switch waits for a key of the panel's, and the last one cannot be removed
+while it is on.
 
 "Make a new host key" gives the ssh server a new key: an ssh client that knew
 the old one refuses to connect, as for a key it does not know, until the line
 of the stick is taken out of its ``known_hosts`` (``ssh-keygen -R
-192.168.1.1``); compare the fingerprint it shows then with the one on the tab.
+192.168.1.1``); compare the fingerprint it shows then with the one on the
+page.
 
-Under "HTTPS of the panel", "Make a new key" makes new certificates of the
-stick's own; "Your own certificate" takes a certificate that an authority your
-browsers trust signed, with the CA certificates between it and the
-authority's root, in PEM, and its key, an unencrypted ECDSA key of P-256 (the
-panel's HTTPS takes no other kind). It should name the address the panel is
-opened at among its alternative names, ``IP:192.168.1.1`` for instance; the
-panel warns when it does not, when it ends within 30 days, and when it has
-ended. "Back to the stick's own certificate" takes it away. After each of
-these the browser warns once about a certificate it was not shown before,
-unless it trusts the authority: reload the page, and compare the fingerprint
-the browser shows with the one on the tab. The console prints the fingerprint
-of the certificate served at every start.
+The card "HTTPS of the panel" lists each address the panel answers on with
+its certificate, the stick's own or yours, its SHA-256 fingerprint, its end
+and whether it names the address; "Make a new key" makes new certificates of
+the stick's own. The card "Your own certificate" takes a certificate that an
+authority your browsers trust signed, with the CA certificates between it and
+the authority's root, in PEM, and its key, an unencrypted ECDSA key of P-256
+(the panel's HTTPS takes no other kind), typed, pasted or read from a file.
+It should name the address the panel is opened at among its alternative
+names, ``IP:192.168.1.1`` for instance; the panel warns when it does not,
+when it ends within 30 days, and when it has ended. "Back to the stick's own
+certificate" takes it away. After each of these the browser warns once about
+a certificate it was not shown before, unless it trusts the authority: reload
+the page, and compare the fingerprint the browser shows with the one on the
+page. The console prints the fingerprint of the certificate served at every
+start.
+
+The same page has the rest of the ways in. "Root password" changes root's
+password, the console's, ssh's and the panel's, and logs the other sessions
+of the panel out. "Sessions of the panel" lists the sessions open, when each
+signed in, its last request and its address, this browser's marked; "Log out
+the others" ends all but this one, with root's password. "Token for scripts"
+says whether a token is in force, makes a new one, which it shows once, to
+copy then, and revokes it, each with root's password (``pond/README.rst``,
+"The token of scripts").
 
 The keys and the certificate are kept in the stick's store, so they hold
 after a restart and an update, and a copy of the flash holds them
@@ -345,23 +367,25 @@ shipped firmware as well.
 
 1. Check ``update.bin`` of the new release against its ``SHA256SUMS``, as in
    step 1.
-2. Under System, tab Software, type root's password into "Root password".
-3. Leave "Start it on trial right after the upload" off, so that the start
-   waits for you. Turned on, it has the stick start the new system as soon as
-   it is written, after one more question.
-4. Press "Upload new software". While the other system is the shipped
-   firmware, the panel warns under the button and asks first: "System B holds
-   the firmware the stick shipped with. An update writes over it, and then the
-   only way back to it is a copy of the whole flash taken before. Write over
-   it?" Answer OK only with the copy in hand.
-5. Choose ``update.bin``. The panel shows "Sending… N %", then "Writing and
-   checking, about a minute…", and then "Written into system B, version
-   <version>." The running system is not touched.
-6. Press "Start the new software", and confirm: "The stick restarts from
-   system B, on trial. If it does not come up within 5 minutes, it goes back
-   to system A by itself. Go on?" The panel says "The stick is restarting from
-   system B. This page reconnects by itself."
-7. Some half a minute later the panel answers again. A restart ends every
+2. Under System, Software, card "Update", leave "Start it on trial right
+   after the upload" off, so that the start waits for you. Turned on, it has
+   the stick start the new system as soon as it is written.
+3. Press "Upload new software" and choose ``update.bin``. A dialog says where
+   it goes, "Write system B", and asks for root's password. While the other
+   system is the shipped firmware, the card warns under the button and the
+   dialog says it once more: "System B holds the firmware the stick shipped
+   with. This writes over it, and then the only way back to it is a copy of
+   the whole flash taken before." Press "Write" only with the copy in hand.
+4. The dialog shows "Sending… N %", then "Writing and checking, about a
+   minute…"; it closes when the stick has written and checked the file, and
+   the card says "Written into system B, version <version>. Start it on trial
+   with "Start system B" under Systems." The running system is not touched.
+5. In the card "Systems", press "Start system B"; the dialog says "The stick
+   restarts from system B, on trial. If it does not come up within 5 minutes,
+   it goes back to system A by itself." and asks for root's password again.
+   Press "Start on trial": the card says "The stick is restarting from system
+   B. This page reconnects by itself."
+6. Some half a minute later the panel answers again. A restart ends every
    session: sign in again. System B shows "running now" and "on trial" until
    the stick keeps it, and then "starts by default"; system A holds the
    version of before.
@@ -390,11 +414,11 @@ To the other system of this project
 After an update both banks hold this system: the one that runs, and the one of
 before. To go back to the one of before:
 
-1. Under System, tab Software, type root's password into "Root password".
-2. Press "Start system A", with the letter of the other bank, and confirm:
-   "The stick restarts from system A, on trial. If it does not come up within
-   5 minutes, it goes back to system B by itself. Go on?"
-3. The stick restarts into it on trial and keeps it once it is up, as after
+1. Under System, Software, card "Systems", press "Start system A", with the
+   letter of the other bank. The dialog says "The stick restarts from system
+   A, on trial. If it does not come up within 5 minutes, it goes back to
+   system B by itself."; type root's password and press "Start on trial".
+2. The stick restarts into it on trial and keeps it once it is up, as after
    an update; it then shows "running now" and "starts by default". The newer
    system stays in the other bank, and "Start system B" brings it back the
    same way.
@@ -415,15 +439,16 @@ To the shipped firmware
 While the other bank holds the shipped firmware, that is before the first
 update:
 
-1. Under System, tab Software, type root's password into "Root password".
-2. Press "Go back to the shipped firmware (system A)", with the letter of the
-   bank that holds it, and confirm: "The stick restarts into the firmware it
-   shipped with, in system A, and starts it from now on. [...] Go on?"
-3. The panel says "The stick is restarting into the shipped firmware. Its page
+1. Under System, Software, card "Systems", press "Go back to the shipped
+   firmware (system A)", with the letter of the bank that holds it. The
+   dialog says "The stick restarts into the firmware it shipped with, in
+   system A, and starts it from now on. [...]"; type root's password and press
+   "Go back".
+2. The panel says "The stick is restarting into the shipped firmware. Its page
    is where it was before this system was installed." From now on every start
    is the shipped firmware's, with its own settings; this system stays in the
    other bank.
-4. Move the router's address back onto the port itself::
+3. Move the router's address back onto the port itself::
 
        ip link delete eth1.4094
        ip address add 192.168.1.2/24 dev eth1
@@ -528,10 +553,14 @@ When something fails
    * - "The stick cannot read its settings, so no password is known. [...]"
      - The store in the partition ``config`` cannot be read, and the panel
        refuses every sign-in (``recovery.rst``, "The password is lost").
-   * - "Wrong password. Root's password is needed for this."
-     - "Root password" holds another password than root's. It counts as a
-       wrong sign-in.
-   * - "Not written: [...]" after an upload
+   * - "Wrong password: this needs root's password." in a dialog
+     - The password typed into the dialog is not root's. It counts as a wrong
+       sign-in; the field is emptied for the next try.
+   * - "Too many wrong passwords: the stick takes none for N s. [...]"
+     - Five wrong passwords from one address stop every change that needs
+       root's password, the right one too, for 30 seconds. Wait, then try
+       again.
+   * - "Not done: [...]" in the dialog of an upload
      - The stick refused the file or the write failed; the reason follows.
        The running system is untouched. A file refused at its header (another
        board, images too big) leaves the other bank as it was; one refused

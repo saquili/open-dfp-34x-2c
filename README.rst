@@ -83,7 +83,7 @@ What it does
   `saquili.github.io/open-dfp-34x-2c
   <https://saquili.github.io/open-dfp-34x-2c/>`__. The panel calls this
   system BuchOS, the author's own name for it; another name can be set
-  under System, tab Settings, "Product name", and the panel's title and the
+  under System, Device, "Product name", and the panel's title and the
   names of the files it hands out follow it.
 * **Keeps time from the host**: PTP with the switch's hardware timestamps,
   or NTP, or the OLT's time of day and the seconds of its frames; and it is

@@ -375,12 +375,14 @@ password for it; while it is the default, ``admin``, the panel allows nothing
 but a change and ssh takes keys only (ADR 0009). The panel runs
 as an account of its own, which no one logs in with (ADR 0011), and answers
 with a certificate it signs itself (ADR 0013), or with an own certificate
-that an authority signed. The panel manages the servers' keys, under System,
-tab Access, each change with root's password again: the public keys root logs
-in to ssh with, eight at most, whether ssh takes them alone and no password,
-a new host key for ssh, a new key for the panel's certificates and an own
-certificate with its chain (``install-guide.rst``, "Keys of ssh and of the
-panel"). The store keeps them all (``onu-utils/README.rst``).
+that an authority signed. Every way in is managed under System, Access, each
+change with root's password again: root's password itself, the panel's
+sessions, the token of scripts, the public keys root logs in to ssh with,
+eight at most beside those an image was built with, whether ssh takes them
+alone and no password, a new host key for ssh, a new key for the panel's
+certificates and an own certificate with its chain (``install-guide.rst``,
+"Keys of ssh and of the panel"). The store keeps them all
+(``onu-utils/README.rst``).
 
 The stick talks to the host over its management VLAN, and takes from
 anywhere else only what is needed. A table of netfilter of its own, ``inet

@@ -132,7 +132,8 @@ count differently:
        bench (``BANK=``) and the programs: the bank, from 0
      - bank 0: ``k0``, ``r0``
      - bank 1: ``k1``, ``r1``
-   * - The panel's System page: a system, by letter
+   * - The panel (System, Software, and the partitions under System,
+       Resources): a system, by letter
      - system A
      - system B
    * - The kernel's command line: the root filesystem by number
