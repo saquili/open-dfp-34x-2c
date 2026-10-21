@@ -13,6 +13,7 @@ import {
   createRoute,
   createRouter,
   Outlet,
+  type RouterHistory,
   redirect,
   useRouter,
 } from "@tanstack/react-router";
@@ -38,7 +39,7 @@ import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";
 import { Stats } from "./pages/Stats";
 import { MacPage, RoutesPage, VlansPage } from "./pages/Switch";
-import { System } from "./pages/System";
+import { AccessPage, DevicePage, ResourcesPage, SoftwarePage, systemPath } from "./pages/System";
 
 interface Context {
   queryClient: QueryClient;
@@ -89,33 +90,20 @@ const signIn = createRoute({
   },
 });
 
-/* The default password must be changed before anything else. */
+/*
+ * The default password must be changed before anything else; a change of
+ * it later is under System, Access, where this address leads once it is.
+ */
 const forcedPassword = createRoute({
   getParentRoute: () => root,
   path: "/password",
-  component: () => <ChangePasswordRoute />,
+  component: ChangePassword,
   beforeLoad: async ({ context }) => {
     const s = await context.queryClient.ensureQueryData(sessionQuery);
     if (!s) throw redirect({ to: "/login" });
+    if (!s.must_change) throw redirect({ to: "/system/access" });
   },
 });
-
-function ChangePasswordRoute() {
-  const s = forcedPassword.useRouteContext({
-    select: (c) => c.queryClient.getQueryData(sessionQuery.queryKey),
-  });
-  return s?.must_change ? (
-    <ChangePassword forced />
-  ) : (
-    <AppShellWith>
-      <ChangePassword forced={false} />
-    </AppShellWith>
-  );
-}
-
-function AppShellWith({ children }: { children: React.ReactNode }) {
-  return <AppShell>{children}</AppShell>;
-}
 
 const app = createRoute({
   getParentRoute: () => root,
@@ -145,9 +133,9 @@ const moved = <P extends string>(path: P, to: (tab: string) => string) =>
 
 /*
  * The menu's sections, each a few pages: the internet, the switch with its
- * ports, and what the operator set up. They were pages of a few tabs, and
- * the local network a page of its own before that: an address of before
- * opens the page its tab named.
+ * ports, what the operator set up, and the stick itself. They were pages of
+ * a few tabs, and the local network a page of its own before that: an
+ * address of before opens the page its tab named.
  */
 const pages = [
   page("/", Overview),
@@ -166,7 +154,10 @@ const pages = [
   page("/operator/channels", ChannelsPage),
   page("/operator/identity", IdentityPage),
   page("/operator/omci", OmciPage),
-  page("/system", System),
+  page("/system/resources", ResourcesPage),
+  page("/system/software", SoftwarePage),
+  page("/system/device", DevicePage),
+  page("/system/access", AccessPage),
   moved("/internet", (tab) => `/internet/${INTERNET_PAGES.find((p) => p === tab) ?? "wan"}`),
   moved("/lan", (tab) => (tab === "devices" ? "/internet/clients" : "/internet/lan")),
   moved("/sfp", () => "/switch/sfp"),
@@ -192,13 +183,16 @@ const pages = [
   ),
   moved("/stats", (tab) => (tab ? `/switch/stats?tab=${tab}` : "/switch/stats")),
   moved("/operator", () => "/operator/services"),
+  moved("/system", systemPath),
 ];
 
 const tree = root.addChildren([signIn, forcedPassword, app.addChildren(pages)]);
 
-export function makeRouter(queryClient: QueryClient) {
+/** The panel's router; @history in place of the browser's, for the tests. */
+export function makeRouter(queryClient: QueryClient, history?: RouterHistory) {
   return createRouter({
     routeTree: tree,
+    history,
     /* "/" on the stick; the demo lives below its host's path. */
     basepath: import.meta.env.BASE_URL,
     context: { queryClient },

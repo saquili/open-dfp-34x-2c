@@ -3,8 +3,9 @@
 
 /*
  * The frame around every page: the menu (a drawer on a phone), with the
- * pages of the internet, of the switch and of the operator under an entry
- * each, the internet's with how many things each holds; whether the stick
+ * pages of the internet, of the switch, of the operator and of the system
+ * under an entry each, the internet's with how many things each holds;
+ * whether the stick
  * answers, the panel's own settings (its theme and language, kept in the
  * browser) and the user. When the stick stops answering,
  * the pages keep the last figures and a bar says since when. A change of the
@@ -80,13 +81,25 @@ const OPERATOR: Section = {
   ],
 };
 
+/* The stick itself: what it has, what it runs, what it is, and every way into it. */
+const SYSTEM: Section = {
+  key: "nav.system",
+  icon: <Settings2 className="size-4" />,
+  pages: [
+    { to: "/system/resources", key: "nav.resources" },
+    { to: "/system/software", key: "nav.software" },
+    { to: "/system/device", key: "nav.device" },
+    { to: "/system/access", key: "nav.access" },
+  ],
+};
+
 /* The menu; "internet" stands for the internet's section, whose pages show their counts. */
 const NAV: ((Entry & { icon: ReactNode }) | Section | "internet")[] = [
   { to: "/", key: "nav.overview", icon: <LayoutDashboard className="size-4" /> },
   "internet",
   SWITCH,
   OPERATOR,
-  { to: "/system", key: "nav.system", icon: <Settings2 className="size-4" /> },
+  SYSTEM,
 ];
 
 /** The time now, again every @ms milliseconds. */
@@ -459,7 +472,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
             </button>
             <ul className="menu dropdown-content z-30 mt-2 w-52 rounded-box border border-base-300 bg-base-100 p-1">
               <li>
-                <Link to="/password">
+                <Link to="/system/access">
                   <KeyRound className="size-4" />
                   {t("nav.changePassword")}
                 </Link>

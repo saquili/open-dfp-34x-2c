@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-/* Signing in, and the password change a new stick asks for first. */
+/*
+ * Signing in, and the password change a new stick asks for first. A change
+ * of the password later is under System, Access, with the same rules.
+ */
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useNavigate } from "@tanstack/react-router";
@@ -106,11 +109,11 @@ const AUTOCOMPLETE = {
   repeat: "new-password",
 } as const;
 
-export function ChangePassword({ forced }: { forced: boolean }) {
-  const { t } = useI18n();
-  const navigate = useNavigate();
-  const change = useChangePassword();
-  const schema = z
+type T = ReturnType<typeof useI18n>["t"];
+
+/** The rules of a new password: the current one, a new one of 8 or more, typed twice, another. */
+export function passwordSchema(t: T) {
+  return z
     .object({
       current: z.string().check(z.minLength(1, t("form.required"))),
       next: z.string().check(z.minLength(8, t("auth.tooShort"))),
@@ -120,6 +123,26 @@ export function ChangePassword({ forced }: { forced: boolean }) {
       z.refine((v) => v.next === v.repeat, { path: ["repeat"], message: t("auth.mismatch") }),
       z.refine((v) => v.next !== v.current, { path: ["next"], message: t("auth.sameAsOld") }),
     );
+}
+
+/** Why a change of the password was refused, in the panel's words; null for none. */
+export function passwordFailure(t: T, e: unknown): string | null {
+  if (e == null) return null;
+  if (e instanceof OfflineError) return t("auth.offline");
+  if (e instanceof ApiError && e.status === 403) return t("auth.wrong");
+  if (e instanceof ApiError && e.status === 423) return t("auth.noStore");
+  if (e instanceof ApiError && e.status === 429)
+    return t("auth.tooMany", { seconds: e.retryAfter ?? 30 });
+  if (e instanceof ApiError) return e.detail ?? e.message;
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** The change of the default password, before anything else. */
+export function ChangePassword() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const change = useChangePassword();
+  const schema = passwordSchema(t);
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
     defaultValues: { current: "", next: "", repeat: "" },
@@ -130,24 +153,15 @@ export function ChangePassword({ forced }: { forced: boolean }) {
     change.mutate({ current, next }, { onSuccess: () => navigate({ to: "/" }) }),
   );
 
-  const failed =
-    change.error instanceof OfflineError
-      ? t("auth.offline")
-      : change.error instanceof ApiError && change.error.status === 403
-        ? t("auth.wrong")
-        : change.error instanceof ApiError && change.error.status === 423
-          ? t("auth.noStore")
-          : change.error
-            ? change.error.message
-            : null;
+  const failed = passwordFailure(t, change.error);
 
-  const body = (
-    <>
+  return (
+    <Frame>
       <div className="flex items-start gap-3">
         <KeyRound className="mt-1 size-5 text-primary" />
         <div>
           <h1 className="text-xl font-semibold">{t("auth.changeTitle")}</h1>
-          {forced && <p className="text-sm text-base-content/70">{t("auth.changeForced")}</p>}
+          <p className="text-sm text-base-content/70">{t("auth.changeForced")}</p>
         </div>
       </div>
       <form onSubmit={submit} className="grid gap-3" noValidate>
@@ -180,16 +194,6 @@ export function ChangePassword({ forced }: { forced: boolean }) {
           {t("auth.save")}
         </button>
       </form>
-    </>
-  );
-
-  return forced ? (
-    <Frame>{body}</Frame>
-  ) : (
-    <div className="mx-auto max-w-md">
-      <div className="card border border-base-300 bg-base-100">
-        <div className="card-body gap-4">{body}</div>
-      </div>
-    </div>
+    </Frame>
   );
 }

@@ -2,21 +2,40 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * System, tab Access: the keys of the stick's two servers. The ssh server's
- * host key, the public keys root logs in with and whether it takes them
- * alone; the panel's HTTPS, its certificate, a new key for it and an own
- * certificate in its place. Every change here needs root's password again,
- * which the field at the top takes once for all of them and the stick checks
- * with each; it is sent with the change and not kept. After a new key or
- * certificate of the panel the browser meets a certificate it has not seen,
- * and warns once unless it trusts its authority: the card says so and shows
- * the fingerprint to compare, with a button that reloads the page.
+ * System, Access: every way into the stick, in one place. Root's password,
+ * which the console, ssh and the panel take; the sessions of the panel, this
+ * browser's among them, and the end of the others; the token of scripts,
+ * made anew or taken away; the ssh server, its host key and whether it takes
+ * keys alone, and the keys root logs in with, the panel's and the image's;
+ * the panel's HTTPS, the certificate of each address, and an own
+ * certificate in place of the stick's. Every change but the password's own
+ * asks for root's password at the moment it is made (components/Confirm),
+ * and it is never kept. After a new key or certificate of the panel the
+ * browser meets a certificate it has not seen, and warns once unless it
+ * trusts its authority: the HTTPS card says so and shows the fingerprint to
+ * compare, with a button that reloads the page.
  */
 
-import { CircleAlert, KeyRound, RotateCw, ShieldCheck, Trash2, Undo2 } from "lucide-react";
-import { type ReactNode, useState } from "react";
-import { OfflineError } from "../../api/client";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useNavigate } from "@tanstack/react-router";
 import {
+  Check,
+  CircleAlert,
+  Copy,
+  KeyRound,
+  LogOut,
+  RotateCw,
+  ShieldCheck,
+  Trash2,
+  Undo2,
+  Users,
+} from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { useForm } from "react-hook-form";
+import { useChangePassword, useSignOut } from "../../api/auth";
+import {
+  useEndOthers,
+  useSessions,
   useSsh,
   useSshHostKey,
   useSshKeyAdd,
@@ -26,11 +45,16 @@ import {
   useTlsCertificate,
   useTlsKey,
   useTlsSelfSigned,
+  useToken,
+  useTokenNew,
+  useTokenOff,
 } from "../../api/config";
-import type { SshKey, Tls } from "../../api/types";
-import { SaveState, SecretInput } from "../../components/Field";
+import type { Sessions, SshKey, Tls } from "../../api/types";
+import { useConfirm } from "../../components/Confirm";
+import { Field, SaveState } from "../../components/Field";
+import { Page } from "../../components/Page";
 import { QueryNote, QueryState } from "../../components/Read";
-import { Badge, Card, Cell, Facts, Row, Table } from "../../components/ui";
+import { Badge, Card, Cell, Detail, Dot, Facts, Row, Table } from "../../components/ui";
 import { type Key, useI18n } from "../../i18n";
 import { day } from "../../lib/format";
 import {
@@ -43,7 +67,9 @@ import {
   keyKind,
   type PemProblem,
 } from "../../lib/keys";
-import { reason } from "../../lib/read";
+import type { z } from "../../lib/schemas";
+import { passwordFailure, passwordSchema } from "../SignIn";
+import { Hint, Mono, Pair } from "./shared";
 
 const KEY_PROBLEM: Record<KeyProblem, Key> = {
   empty: "access.keyEmpty",
@@ -70,72 +96,310 @@ const WARNING: Record<CertWarning, Key> = {
   unnamed: "access.certUnnamed",
 };
 
-/** A change's state line: under way, done with @done, or why it failed. */
-function useOutcome(
-  change: { isPending: boolean; isSuccess: boolean; error: Error | null },
-  done?: string,
-): { state: "idle" | "busy" | "ok" | "bad"; message?: string } {
-  const { t } = useI18n();
-  if (change.isPending) return { state: "busy", message: t("internet.saving") };
-  if (change.error)
-    return {
-      state: "bad",
-      message:
-        change.error instanceof OfflineError
-          ? t("connection.offline")
-          : t("internet.failed", { reason: reason(t, change.error) }),
-    };
-  if (change.isSuccess && done) return { state: "ok", message: done };
-  return { state: "idle" };
-}
-
-/** A fingerprint, read character by character. */
-const Mono = ({ children }: { children: ReactNode }) => (
-  <span className="break-all font-mono text-xs">{children}</span>
+/** A warning in words, after its icon in the state's colour. */
+const Warn = ({ children }: { children: ReactNode }) => (
+  <p className="flex items-start gap-2 text-sm">
+    <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+    <span>{children}</span>
+  </p>
 );
 
-/** A value too long for a row of facts: its label above it, it under the label. */
-function Pair({ label, children }: { label: string; children: ReactNode }) {
+/* ------------------------------------------------------------- password */
+
+/*
+ * Root's password: the console's, ssh's and the panel's. The form asks for
+ * the one in force itself, so it needs no confirmation; a new one ends
+ * every other session of the panel.
+ */
+function RootPassword() {
+  const { t } = useI18n();
+  const change = useChangePassword();
+  const schema = passwordSchema(t);
+  const form = useForm<z.infer<typeof schema>>({
+    resolver: zodResolver(schema),
+    defaultValues: { current: "", next: "", repeat: "" },
+  });
+  const errors = form.formState.errors;
+  const failed = passwordFailure(t, change.error);
   return (
-    <div className="grid gap-1">
-      <span className="text-xs text-base-content/70">{label}</span>
-      <div className="grid gap-1 text-sm">{children}</div>
+    <Card title={t("access.passwordTitle")}>
+      <form
+        className="grid gap-4"
+        noValidate
+        onSubmit={form.handleSubmit(({ current, next }) =>
+          change.mutate(
+            { current, next },
+            { onSuccess: () => form.reset({ current: "", next: "", repeat: "" }) },
+          ),
+        )}
+      >
+        <Field
+          label={t("auth.current")}
+          secret
+          autoComplete="current-password"
+          error={errors.current?.message}
+          {...form.register("current")}
+        />
+        <Field
+          label={t("auth.next")}
+          secret
+          autoComplete="new-password"
+          error={errors.next?.message}
+          {...form.register("next")}
+        />
+        <Field
+          label={t("auth.repeat")}
+          secret
+          autoComplete="new-password"
+          error={errors.repeat?.message}
+          hint={t("access.passwordRules")}
+          {...form.register("repeat")}
+        />
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="submit" className="btn btn-primary btn-sm" disabled={change.isPending}>
+            <KeyRound className="size-4" />
+            {t("auth.save")}
+          </button>
+          <SaveState
+            state={change.isPending ? "busy" : failed ? "bad" : change.isSuccess ? "ok" : "idle"}
+            message={
+              change.isPending
+                ? t("internet.saving")
+                : (failed ?? (change.isSuccess ? t("access.passwordChanged") : undefined))
+            }
+          />
+        </div>
+      </form>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------- sessions */
+
+/** How long ago @s seconds were, in words: "2 min ago". */
+function ago(s: number, lang: "pl" | "en") {
+  const rel = new Intl.RelativeTimeFormat(lang, { numeric: "always", style: "narrow" });
+  if (s < 60) return rel.format(-Math.max(0, Math.round(s)), "second");
+  if (s < 3600) return rel.format(-Math.floor(s / 60), "minute");
+  return rel.format(-Math.floor(s / 3600), "hour");
+}
+
+function SessionRows({ v }: { v: Sessions }) {
+  const { t, lang } = useI18n();
+  const head = [t("access.sessionOpened"), t("access.sessionSeen"), t("access.sessionFrom")];
+  return (
+    <Table head={head}>
+      {v.sessions.map((s) => (
+        <Row key={`${s.since_s}-${s.from}-${s.seen_s}`}>
+          <Cell head={head[0]}>
+            <span className="flex flex-wrap items-center gap-2">
+              {ago(v.now_s - s.since_s, lang)}
+              {s.this && <Badge tone="good">{t("access.thisBrowser")}</Badge>}
+            </span>
+          </Cell>
+          <Cell head={head[1]}>{ago(v.now_s - s.seen_s, lang)}</Cell>
+          <Cell head={head[2]}>
+            <span className="font-mono">{s.from || "–"}</span>
+          </Cell>
+        </Row>
+      ))}
+    </Table>
+  );
+}
+
+/* The panel's sessions: this browser's and the others, which may be ended. */
+function SessionsCard() {
+  const { t } = useI18n();
+  const sessions = useSessions();
+  const others = useEndOthers();
+  const signOut = useSignOut();
+  const navigate = useNavigate();
+  const confirm = useConfirm();
+  const v = sessions.data;
+  const count = v ? v.sessions.filter((s) => !s.this).length : 0;
+  return (
+    <Card
+      title={t("access.sessions")}
+      action={
+        v && (
+          <span className="tabular text-xs text-base-content/70">
+            {t("access.count", { n: v.sessions.length, max: v.max })}
+          </span>
+        )
+      }
+    >
+      <QueryState reads={sessions}>{() => v && <SessionRows v={v} />}</QueryState>
+      <Hint>
+        {t("access.sessionsHint", {
+          max: v?.max ?? 3,
+          idle: Math.round((v?.idle_timeout_s ?? 900) / 60),
+          age: Math.round((v?.max_age_s ?? 43200) / 3600),
+        })}
+      </Hint>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="btn btn-sm btn-outline"
+          disabled={!count}
+          title={count ? undefined : t("access.noOthers")}
+          onClick={() =>
+            confirm.open({
+              title: t("access.endOthers"),
+              body: t("access.endOthersConfirm", { n: count }),
+              action: t("access.endOthersAction"),
+              run: (secret) => others.mutateAsync({ secret }),
+            })
+          }
+        >
+          <Users className="size-4" />
+          {t("access.endOthers")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          disabled={signOut.isPending}
+          onClick={() => signOut.mutate(undefined, { onSettled: () => navigate({ to: "/login" }) })}
+        >
+          <LogOut className="size-4" />
+          {t("nav.signOut")}
+        </button>
+      </div>
+      {others.isSuccess && (
+        <SaveState state="ok" message={t("access.ended", { n: others.data?.ended ?? 0 })} />
+      )}
+      {confirm.dialog}
+    </Card>
+  );
+}
+
+/* ---------------------------------------------------------------- token */
+
+/* The token a new one's answer carried: shown here once, with a copy, until hidden. */
+function NewToken({ token, onHide }: { token: string; onHide: () => void }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  return (
+    <div role="status" className="grid gap-2 rounded-box border border-base-300 p-3">
+      <p className="flex items-start gap-2 text-sm">
+        <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+        {t("access.tokenOnce")}
+      </p>
+      <code className="break-all rounded-field bg-base-200 px-2 py-1.5 font-mono text-xs">
+        {token}
+      </code>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(token);
+              setCopied(true);
+            } catch {
+              setCopied(false);
+            }
+          }}
+        >
+          {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+          {t(copied ? "access.copied" : "access.copy")}
+        </button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onHide}>
+          {t("access.hide")}
+        </button>
+      </div>
+      <Hint>{t("access.tokenUse")}</Hint>
     </div>
   );
 }
 
-function Password({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/* The token of scripts: whether one is in force, a new one, none. */
+function TokenCard() {
   const { t } = useI18n();
+  const token = useToken();
+  const made = useTokenNew();
+  const off = useTokenOff();
+  const confirm = useConfirm();
+  const set = token.data?.set;
   return (
-    <Card title={t("access.passwordTitle")}>
-      <div className="grid max-w-md gap-1">
-        <label htmlFor="access-password" className="text-sm font-semibold">
-          {t("system.password")}
-        </label>
-        <SecretInput
-          id="access-password"
-          small
-          autoComplete="current-password"
-          value={value}
-          onInput={(e) => onChange((e.currentTarget as HTMLInputElement).value)}
-        />
-        <p className="text-xs text-base-content/70">{t("access.passwordHint")}</p>
+    <Card title={t("access.token")}>
+      <QueryState reads={token}>
+        {() => (
+          <Facts
+            rows={[
+              [
+                t("access.tokenState"),
+                <Badge key="token" tone="neutral">
+                  {t(set ? "access.tokenSet" : "access.tokenNone")}
+                </Badge>,
+              ],
+            ]}
+          />
+        )}
+      </QueryState>
+      <Hint>{t("access.tokenHint")}</Hint>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={`btn btn-sm ${set ? "btn-outline" : "btn-primary"}`}
+          disabled={!token.data}
+          onClick={() => {
+            off.reset();
+            confirm.open({
+              title: t(set ? "access.tokenReplace" : "access.tokenNew"),
+              body: t(set ? "access.tokenReplaceConfirm" : "access.tokenNewConfirm"),
+              action: t(set ? "access.tokenReplaceAction" : "access.tokenNewAction"),
+              run: (secret) => made.mutateAsync({ secret }),
+            });
+          }}
+        >
+          <KeyRound className="size-4" />
+          {t(set ? "access.tokenReplace" : "access.tokenNew")}
+        </button>
+        {set && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost hover:text-error"
+            onClick={() => {
+              made.reset();
+              confirm.open({
+                title: t("access.tokenOff"),
+                body: t("access.tokenOffConfirm"),
+                action: t("access.tokenOffAction"),
+                danger: true,
+                run: (secret) => off.mutateAsync({ secret }),
+              });
+            }}
+          >
+            <Trash2 className="size-4" />
+            {t("access.tokenOff")}
+          </button>
+        )}
       </div>
+      {made.isSuccess &&
+        (made.data?.token ? (
+          <NewToken token={made.data.token} onHide={() => made.reset()} />
+        ) : (
+          <p className="text-sm text-error">{t("access.tokenUnseen")}</p>
+        ))}
+      {off.isSuccess && <SaveState state="ok" message={t("access.tokenGone")} />}
+      {confirm.dialog}
     </Card>
   );
 }
 
 /* ------------------------------------------------------------------ ssh */
 
-function SshServer({ secret }: { secret: string }) {
+/** The panel's keys, which it may change, apart from the image's. */
+const panelKeys = (keys: SshKey[]) => keys.filter((k) => k.source !== "image");
+
+function SshServer() {
   const { t } = useI18n();
   const ssh = useSsh();
   const hostKey = useSshHostKey();
   const only = useSshKeysOnly();
+  const confirm = useConfirm();
   const s = ssh.data;
-  const keyState = useOutcome(hostKey, t("access.hostKeyDone"));
-  const onlyState = useOutcome(only, t("internet.saved"));
-  const noKey = !s || s.keys.length === 0;
+  const noKey = !s || panelKeys(s.keys).length === 0;
   return (
     <Card title={t("access.ssh")}>
       <QueryState reads={ssh}>
@@ -145,7 +409,7 @@ function SshServer({ secret }: { secret: string }) {
               rows={[
                 [
                   t("access.login"),
-                  <Badge key="login" tone={s?.keys_only ? "good" : "neutral"}>
+                  <Badge key="login" tone="neutral">
                     {t(s?.keys_only ? "access.keysOnly" : "access.passwordOrKey")}
                   </Badge>,
                 ],
@@ -161,94 +425,153 @@ function SshServer({ secret }: { secret: string }) {
                 t("access.hostKeyNone")
               )}
             </Pair>
+            <Hint>{t("access.hostKeyHint")}</Hint>
             <label className="label cursor-pointer justify-start gap-3 whitespace-normal">
               <input
                 type="checkbox"
                 className="toggle toggle-sm"
                 checked={!!s?.keys_only}
-                disabled={!secret || only.isPending || (noKey && !s?.keys_only)}
-                onChange={(e) => only.mutate({ on: e.currentTarget.checked, secret })}
+                disabled={noKey && !s?.keys_only}
+                onChange={(e) => {
+                  const on = e.currentTarget.checked;
+                  /* The switch shows the server's state until the change is done. */
+                  e.currentTarget.checked = !on;
+                  confirm.open({
+                    title: t(on ? "access.keysOnlyOn" : "access.keysOnlyOff"),
+                    body: t(on ? "access.keysOnlyOnConfirm" : "access.keysOnlyOffConfirm"),
+                    action: t(on ? "access.keysOnlyOnAction" : "access.keysOnlyOffAction"),
+                    run: (secret) => only.mutateAsync({ on, secret }),
+                  });
+                }}
               />
               <span>
                 <span className="text-sm">{t("access.keysOnlyToggle")}</span>
                 <span className="block text-xs text-base-content/70">
-                  {t(noKey ? "access.keysOnlyNeedsKey" : "access.keysOnlyHint")}
+                  {t(noKey && !s?.keys_only ? "access.keysOnlyNeedsKey" : "access.keysOnlyHint")}
                 </span>
               </span>
             </label>
-            <SaveState {...onlyState} />
             <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 className="btn btn-sm"
-                disabled={!secret || hostKey.isPending}
                 onClick={() =>
-                  window.confirm(t("access.hostKeyConfirm")) && hostKey.mutate({ secret })
+                  confirm.open({
+                    title: t("access.hostKeyNew"),
+                    body: t("access.hostKeyConfirm"),
+                    action: t("access.hostKeyAction"),
+                    run: (secret) => hostKey.mutateAsync({ secret }),
+                  })
                 }
               >
                 <RotateCw className="size-4" />
                 {t("access.hostKeyNew")}
               </button>
-              <SaveState {...keyState} />
+              {hostKey.isSuccess && <SaveState state="ok" message={t("access.hostKeyDone")} />}
             </div>
-            <p className="text-xs text-base-content/70">{t("access.hostKeyHint")}</p>
           </>
         )}
       </QueryState>
+      {confirm.dialog}
     </Card>
   );
 }
 
-function KeyRow({ k, secret, last }: { k: SshKey; secret: string; last: boolean }) {
+function KeyRow({
+  k,
+  last,
+  onRemove,
+}: {
+  k: SshKey;
+  last: boolean;
+  onRemove: (k: SshKey) => void;
+}) {
   const { t } = useI18n();
-  const remove = useSshKeyRemove();
-  const state = useOutcome(remove);
+  const image = k.source === "image";
+  const known = k.type !== "unknown";
+  const head = [
+    t("access.keyKind"),
+    t("access.keyBits"),
+    t("access.keyFingerprint"),
+    t("access.keyCommentHead"),
+    t("access.keySource"),
+  ];
   return (
     <Row>
-      <Cell head={t("access.key")}>
-        <span className="break-words">{k.comment || keyKind(k.type, k.bits)}</span>
-        {k.comment && (
-          <span className="text-xs text-base-content/70">{keyKind(k.type, k.bits)}</span>
-        )}
-        <Mono>{k.fingerprint}</Mono>
-        {state.state === "bad" && <span className="text-xs text-error">{state.message}</span>}
+      <Cell head={head[0]}>
+        <span className={known ? "whitespace-nowrap" : ""}>
+          {known ? keyKind(k.type) : t("access.keyUnknown")}
+        </span>
+      </Cell>
+      <Cell head={head[1]}>
+        <span className="tabular whitespace-nowrap">{k.bits || "–"}</span>
+      </Cell>
+      <Cell head={head[2]}>{known ? <Mono>{k.fingerprint}</Mono> : "–"}</Cell>
+      <Cell head={head[3]}>
+        <span className="break-words">{k.comment || "–"}</span>
+      </Cell>
+      <Cell head={head[4]}>
+        <Badge tone="neutral">{t(image ? "access.fromImage" : "access.fromPanel")}</Badge>
       </Cell>
       <Cell actions>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm btn-square text-base-content/70 hover:text-error"
-          disabled={!secret || remove.isPending || last}
-          title={last ? t("access.lastKey") : t("access.remove")}
-          aria-label={t("access.remove")}
-          onClick={() =>
-            window.confirm(t("access.removeConfirm", { fingerprint: k.fingerprint })) &&
-            remove.mutate({ fingerprint: k.fingerprint, secret })
-          }
-        >
-          {remove.isPending ? (
-            <span className="loading loading-spinner loading-xs" />
-          ) : (
+        {image ? (
+          <span className="sr-only">{t("access.imageKeyHint")}</span>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm btn-square text-base-content/70 hover:text-error"
+            disabled={last}
+            title={last ? t("access.lastKey") : t("access.remove")}
+            aria-label={t("access.remove")}
+            onClick={() => onRemove(k)}
+          >
             <Trash2 className="size-4" />
-          )}
-        </button>
+          </button>
+        )}
       </Cell>
     </Row>
   );
 }
 
-function SshKeys({ secret }: { secret: string }) {
+/* The keys root logs in to ssh with: the panel's, and the image's, read-only. */
+function SshKeys() {
   const { t } = useI18n();
   const ssh = useSsh();
   const add = useSshKeyAdd();
+  const remove = useSshKeyRemove();
+  const confirm = useConfirm();
   const [line, setLine] = useState("");
   const [problem, setProblem] = useState<KeyProblem | null>(null);
   const s = ssh.data;
-  const full = !!s && s.keys.length >= s.keys_max;
-  const state = useOutcome(add, t("access.added"));
+  const mine = s ? panelKeys(s.keys) : [];
+  const image = s ? s.keys.length - mine.length : 0;
+  const full = !!s && mine.length >= s.keys_max;
+  const head = [
+    t("access.keyKind"),
+    t("access.keyBits"),
+    t("access.keyFingerprint"),
+    t("access.keyCommentHead"),
+    t("access.keySource"),
+    "",
+  ];
   const submit = () => {
     const c = checkKey(line);
     setProblem(c.ok ? null : c.problem);
-    if (c.ok) add.mutate({ key: line, secret }, { onSuccess: () => setLine("") });
+    if (!c.ok) return;
+    add.reset();
+    remove.reset();
+    confirm.open({
+      title: t("access.add"),
+      body: t("access.addConfirm", {
+        kind: keyKind(c.type, c.bits),
+        comment: c.comment || "–",
+      }),
+      action: t("access.addAction"),
+      run: async (secret) => {
+        await add.mutateAsync({ key: line, secret });
+        setLine("");
+      },
+    });
   };
   return (
     <Card
@@ -256,27 +579,36 @@ function SshKeys({ secret }: { secret: string }) {
       action={
         s && (
           <span className="tabular text-xs text-base-content/70">
-            {t("access.count", { n: s.keys.length, max: s.keys_max })}
+            {t("access.keysCount", { n: mine.length, max: s.keys_max, image })}
           </span>
         )
       }
     >
       <QueryNote reads={ssh} />
-      {s && s.keys.length === 0 && (
-        <p className="text-sm text-base-content/70">{t("access.keysEmpty")}</p>
-      )}
+      {s && s.keys.length === 0 && <p className="text-sm">{t("access.keysEmpty")}</p>}
       {s && s.keys.length > 0 && (
-        <Table head={[t("access.key"), ""]}>
+        <Table head={head}>
           {s.keys.map((k) => (
             <KeyRow
-              key={k.fingerprint}
+              key={`${k.source}-${k.fingerprint}-${k.comment}`}
               k={k}
-              secret={secret}
-              last={s.keys_only && s.keys.length === 1}
+              last={s.keys_only && mine.length === 1}
+              onRemove={(key) => {
+                add.reset();
+                remove.reset();
+                confirm.open({
+                  title: t("access.remove"),
+                  body: t("access.removeConfirm", { fingerprint: key.fingerprint }),
+                  action: t("access.removeAction"),
+                  danger: true,
+                  run: (secret) => remove.mutateAsync({ fingerprint: key.fingerprint, secret }),
+                });
+              }}
             />
           ))}
         </Table>
       )}
+      {image > 0 && <Hint>{t("access.imageKeyHint")}</Hint>}
       <form
         className="grid gap-3"
         noValidate
@@ -304,22 +636,21 @@ function SshKeys({ secret }: { secret: string }) {
           {problem ? (
             <p className="text-xs text-error">{t(KEY_PROBLEM[problem])}</p>
           ) : (
-            <p className="text-xs text-base-content/70">{t("access.publicKeyHint")}</p>
+            <Hint>
+              {t(full ? "access.full" : "access.publicKeyHint", { max: s?.keys_max ?? 8 })}
+            </Hint>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="submit"
-            className="btn btn-primary btn-sm"
-            disabled={!secret || !line.trim() || add.isPending || full}
-            title={full ? t("access.full", { max: s?.keys_max ?? 8 }) : undefined}
-          >
+          <button type="submit" className="btn btn-primary btn-sm" disabled={!line.trim() || full}>
             <KeyRound className="size-4" />
             {t("access.add")}
           </button>
-          <SaveState {...state} />
+          {add.isSuccess && <SaveState state="ok" message={t("access.added")} />}
+          {remove.isSuccess && <SaveState state="ok" message={t("access.removed")} />}
         </div>
       </form>
+      {confirm.dialog}
     </Card>
   );
 }
@@ -333,10 +664,7 @@ function Reload({ tls }: { tls: Tls | undefined }) {
   if (!cert) return null;
   return (
     <div role="status" className="grid gap-2 rounded-box border border-base-300 p-3 text-sm">
-      <p className="flex items-start gap-2">
-        <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
-        {t("access.changed")}
-      </p>
+      <Warn>{t("access.changed")}</Warn>
       <Mono>{cert.sha256}</Mono>
       <div>
         <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>
@@ -345,6 +673,108 @@ function Reload({ tls }: { tls: Tls | undefined }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/* The panel's HTTPS: this connection, the certificate of each address, a new key. */
+function Https({ changed, onChanged }: { changed: boolean; onChanged: () => void }) {
+  const { t, lang } = useI18n();
+  const tls = useTls();
+  const newKey = useTlsKey();
+  const confirm = useConfirm();
+  const here = window.location.hostname;
+  const secure = window.location.protocol === "https:";
+  const v = tls.data;
+  const warnings = certWarnings(v, here, Date.now());
+  const head = [
+    t("access.address"),
+    t("access.issuedBy"),
+    t("access.fingerprint"),
+    t("access.validUntil"),
+    t("access.namesIt"),
+  ];
+  return (
+    <Card title={t("access.https")}>
+      <Facts
+        rows={[
+          [
+            t("system.connection"),
+            <span key="tls" className="flex items-center gap-2">
+              <Dot tone={secure ? "good" : "warn"} />
+              {t(secure ? "system.connectionHttps" : "system.connectionHttp")}
+            </span>,
+          ],
+        ]}
+      />
+      <QueryState reads={tls}>
+        {() => (
+          <>
+            {v && v.certificates.length > 0 ? (
+              <Table head={head}>
+                {v.certificates.map((c) => (
+                  <Row key={`${c.address}:${c.port}`}>
+                    <Cell head={head[0]}>
+                      <span className="font-mono">{c.address}</span>
+                      {c.port !== 443 && <Detail>{t("access.port", { port: c.port })}</Detail>}
+                      {c.address === here && <Detail>{t("access.openHere")}</Detail>}
+                    </Cell>
+                    <Cell head={head[1]}>{t(v.own ? "access.own" : "access.selfSigned")}</Cell>
+                    <Cell head={head[2]}>
+                      <Mono>{c.sha256}</Mono>
+                    </Cell>
+                    <Cell head={head[3]}>{day(Date.parse(c.not_after) / 1000, lang)}</Cell>
+                    <Cell head={head[4]}>
+                      <span className="flex items-center gap-2">
+                        <Dot tone={c.named ? "good" : "warn"} />
+                        {t(c.named ? "access.yes" : "access.no")}
+                      </span>
+                    </Cell>
+                  </Row>
+                ))}
+              </Table>
+            ) : (
+              <p className="text-sm">{t("access.noHttps")}</p>
+            )}
+            {warnings.map((w) => (
+              <Warn key={w}>
+                {t(WARNING[w], {
+                  host: here,
+                  date: v?.own ? day(Date.parse(v.own.not_after) / 1000, lang) : "",
+                })}
+              </Warn>
+            ))}
+            {!v?.own && v && v.certificates.length > 0 && (
+              <Hint>{t("system.certificateHint")}</Hint>
+            )}
+            {changed && <Reload tls={v} />}
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() =>
+                  confirm.open({
+                    title: t("access.newKey"),
+                    body: t(v?.own ? "access.newKeyOwnConfirm" : "access.newKeyConfirm"),
+                    action: t("access.newKeyAction"),
+                    run: async (secret) => {
+                      await newKey.mutateAsync({ secret });
+                      if (!v?.own) onChanged();
+                    },
+                  })
+                }
+              >
+                <RotateCw className="size-4" />
+                {t("access.newKey")}
+              </button>
+              {newKey.isSuccess && v?.own && (
+                <SaveState state="ok" message={t("access.newKeyWaits")} />
+              )}
+            </div>
+          </>
+        )}
+      </QueryState>
+      {confirm.dialog}
+    </Card>
   );
 }
 
@@ -376,9 +806,10 @@ function PemField({
             className="hidden"
             accept=".pem,.crt,.cer,.key,text/plain"
             onChange={async (e) => {
-              const file = e.currentTarget.files?.[0];
+              const input = e.currentTarget;
+              const file = input.files?.[0];
               if (file) onChange(await file.text());
-              e.currentTarget.value = "";
+              input.value = "";
             }}
           />
         </label>
@@ -386,7 +817,7 @@ function PemField({
       <textarea
         id={id}
         className={`textarea w-full font-mono text-xs ${invalid ? "textarea-error" : ""}`}
-        rows={5}
+        rows={4}
         spellcheck={false}
         value={value}
         onInput={(e) => onChange((e.currentTarget as HTMLTextAreaElement).value)}
@@ -395,188 +826,157 @@ function PemField({
   );
 }
 
-function Https({ secret }: { secret: string }) {
+/* An own certificate: what it is, when there is one, and the form that sets one. */
+function OwnCertificate({ onChanged }: { onChanged: () => void }) {
   const { t, lang } = useI18n();
   const tls = useTls();
-  const newKey = useTlsKey();
   const own = useTlsCertificate();
   const back = useTlsSelfSigned();
+  const confirm = useConfirm();
   const [certificate, setCertificate] = useState("");
   const [key, setKey] = useState("");
   const [problem, setProblem] = useState<PemProblem | null>(null);
-  const here = window.location.hostname;
-  const v = tls.data;
-  const cert = certificateOf(v, here);
-  const warnings = certWarnings(v, here, Date.now());
-  const changed = newKey.isSuccess || own.isSuccess || back.isSuccess;
-  const keyState = useOutcome(newKey);
-  const ownState = useOutcome(own);
-  const backState = useOutcome(back);
-  const busy = newKey.isPending || own.isPending || back.isPending;
+  const o = tls.data?.own;
   const send = () => {
     const p = checkPem(certificate, key);
     setProblem(p);
-    if (!p)
-      own.mutate(
-        { certificate, key, secret },
-        {
-          onSuccess: () => {
-            setCertificate("");
-            setKey("");
-          },
-        },
-      );
+    if (p) return;
+    confirm.open({
+      title: t("access.use"),
+      body: t("access.useConfirm"),
+      action: t("access.useAction"),
+      run: async (secret) => {
+        await own.mutateAsync({ certificate, key, secret });
+        setCertificate("");
+        setKey("");
+        onChanged();
+      },
+    });
   };
   return (
-    <Card title={t("access.https")}>
+    <Card title={t("access.ownTitle")}>
       <QueryState reads={tls}>
-        {() => (
-          <>
-            <Facts
-              rows={[
-                [
-                  t("access.inUse"),
-                  v?.own ? (
-                    <Badge key="own" tone="good">
-                      {t("access.own")}
-                    </Badge>
-                  ) : (
-                    <Badge key="self" tone="neutral">
-                      {t("access.selfSigned")}
-                    </Badge>
-                  ),
-                ],
-                cert && [
-                  t("system.certificateUntil"),
-                  day(Date.parse(cert.not_after) / 1000, lang),
-                ],
-                v?.own && [t("access.chain"), v.own.chain],
-              ]}
-            />
-            {v?.own && (
-              <>
-                <Pair label={t("access.subject")}>{v.own.subject}</Pair>
-                <Pair label={t("access.issuer")}>{v.own.issuer}</Pair>
-                <Pair label={t("access.names")}>
-                  {v.own.names.map((n) => (
-                    <Mono key={n}>{n}</Mono>
-                  ))}
-                </Pair>
-              </>
-            )}
-            {cert && (
-              <Pair label={t("system.certificate")}>
-                <Mono>{cert.sha256}</Mono>
+        {() =>
+          o ? (
+            <>
+              <Facts
+                rows={[
+                  [t("access.subject"), o.subject],
+                  [t("access.issuer"), o.issuer],
+                  [t("access.chain"), o.chain],
+                  [
+                    t("access.valid"),
+                    t("access.validSpan", {
+                      from: day(Date.parse(o.not_before) / 1000, lang),
+                      until: day(Date.parse(o.not_after) / 1000, lang),
+                    }),
+                  ],
+                ]}
+              />
+              <Pair label={t("access.names")}>
+                {o.names.length ? o.names.map((n) => <Mono key={n}>{n}</Mono>) : "–"}
               </Pair>
-            )}
-            {warnings.map((w) => (
-              <p key={w} className="flex items-start gap-2 text-sm">
-                <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
-                {t(WARNING[w], {
-                  host: here,
-                  date: v?.own ? day(Date.parse(v.own.not_after) / 1000, lang) : "",
-                })}
-              </p>
-            ))}
-            {!v?.own && cert && (
-              <p className="text-xs text-base-content/70">{t("system.certificateHint")}</p>
-            )}
-            {changed && <Reload tls={v} />}
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={!secret || busy}
-                onClick={() =>
-                  window.confirm(t(v?.own ? "access.newKeyOwnConfirm" : "access.newKeyConfirm")) &&
-                  newKey.mutate({ secret })
-                }
-              >
-                <RotateCw className="size-4" />
-                {t("access.newKey")}
-              </button>
-              {v?.own && (
+              <div>
                 <button
                   type="button"
                   className="btn btn-sm btn-outline"
-                  disabled={!secret || busy}
-                  onClick={() => window.confirm(t("access.backConfirm")) && back.mutate({ secret })}
+                  onClick={() =>
+                    confirm.open({
+                      title: t("access.back"),
+                      body: t("access.backConfirm"),
+                      action: t("access.backAction"),
+                      run: async (secret) => {
+                        await back.mutateAsync({ secret });
+                        onChanged();
+                      },
+                    })
+                  }
                 >
                   <Undo2 className="size-4" />
                   {t("access.back")}
                 </button>
-              )}
-            </div>
-            <SaveState {...keyState} />
-            <SaveState {...backState} />
-
-            <form
-              className="grid gap-3 border-t border-base-300 pt-4"
-              noValidate
-              onSubmit={(e) => {
-                e.preventDefault();
-                send();
-              }}
-            >
-              <div>
-                <h3 className="text-sm font-semibold">{t("access.ownTitle")}</h3>
-                <p className="text-xs text-base-content/70">{t("access.ownHint")}</p>
               </div>
-              <PemField
-                id="access-certificate"
-                label={t("access.certificateField")}
-                value={certificate}
-                onChange={(x) => {
-                  setCertificate(x);
-                  setProblem(null);
-                }}
-                invalid={problem === "noCertificate"}
-              />
-              <PemField
-                id="access-key-pem"
-                label={t("access.keyField")}
-                value={key}
-                onChange={(x) => {
-                  setKey(x);
-                  setProblem(null);
-                }}
-                invalid={!!problem && problem !== "noCertificate"}
-              />
-              {problem && <p className="text-xs text-error">{t(PEM_PROBLEM[problem])}</p>}
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="submit"
-                  className="btn btn-primary btn-sm"
-                  disabled={!secret || !certificate.trim() || !key.trim() || busy}
-                >
-                  <ShieldCheck className="size-4" />
-                  {t("access.use")}
-                </button>
-                <SaveState {...ownState} />
-              </div>
-            </form>
-          </>
-        )}
+            </>
+          ) : (
+            <p className="text-sm">{t("access.ownNone")}</p>
+          )
+        }
       </QueryState>
+      <form
+        className="grid gap-3 border-t border-base-300 pt-4"
+        noValidate
+        onSubmit={(e) => {
+          e.preventDefault();
+          send();
+        }}
+      >
+        <div className="grid gap-1">
+          <h3 className="text-sm font-semibold">{t(o ? "access.ownReplace" : "access.ownSet")}</h3>
+          <Hint>{t("access.ownHint")}</Hint>
+        </div>
+        <PemField
+          id="access-certificate"
+          label={t("access.certificateField")}
+          value={certificate}
+          onChange={(x) => {
+            setCertificate(x);
+            setProblem(null);
+          }}
+          invalid={problem === "noCertificate"}
+        />
+        <PemField
+          id="access-key-pem"
+          label={t("access.keyField")}
+          value={key}
+          onChange={(x) => {
+            setKey(x);
+            setProblem(null);
+          }}
+          invalid={!!problem && problem !== "noCertificate"}
+        />
+        {problem && <p className="text-xs text-error">{t(PEM_PROBLEM[problem])}</p>}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="submit"
+            className="btn btn-primary btn-sm"
+            disabled={!certificate.trim() || !key.trim()}
+          >
+            <ShieldCheck className="size-4" />
+            {t("access.use")}
+          </button>
+          {own.isSuccess && <SaveState state="ok" message={t("access.ownTaken")} />}
+          {back.isSuccess && <SaveState state="ok" message={t("access.backDone")} />}
+        </div>
+      </form>
+      {confirm.dialog}
     </Card>
   );
 }
 
-export function AccessTab() {
-  const [secret, setSecret] = useState("");
+export function AccessPage() {
+  const { t } = useI18n();
+  /* A new certificate is served: the HTTPS card asks for a reload. */
+  const [changed, setChanged] = useState(false);
+  const onChanged = () => setChanged(true);
   return (
-    <div className="grid min-h-0 flex-1 content-start gap-4 lg:grid-cols-2">
-      <div className="lg:col-span-2">
-        <Password value={secret} onChange={setSecret} />
+    <Page title={t("nav.access")} hint={t("access.hint")}>
+      <div className="grid shrink-0 content-start gap-4">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <RootPassword />
+          <div className="grid min-w-0 content-start gap-4">
+            <SessionsCard />
+            <TokenCard />
+          </div>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <SshServer />
+          <SshKeys />
+        </div>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <Https changed={changed} onChanged={onChanged} />
+          <OwnCertificate onChanged={onChanged} />
+        </div>
       </div>
-      {/* A fingerprint in a reason or a name breaks where it must, in its column. */}
-      <div className="grid min-w-0 content-start gap-4 wrap-anywhere">
-        <SshServer secret={secret} />
-        <SshKeys secret={secret} />
-      </div>
-      <div className="grid min-w-0 content-start wrap-anywhere">
-        <Https secret={secret} />
-      </div>
-    </div>
+    </Page>
   );
 }
