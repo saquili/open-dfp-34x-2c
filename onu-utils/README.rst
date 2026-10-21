@@ -152,10 +152,12 @@ by its whole path where procd starts it.
    takes it away, and ``onu-config token install`` hands the one in force to the
    status daemon, whose copy is ``/run/pond/token`` for the account ``pond``
    alone: the boot script after it made that directory, and ``token new`` and
-   ``token off`` themselves. A person runs it, on the stick; the status daemon
-   cannot (ubusd's access list has no method for it), so that a daemon taken
-   over cannot make itself a token. Without a store the new token lasts until
-   the next start.
+   ``token off`` themselves. A person runs it, on the stick, or has the panel
+   run ``token new`` and ``token off`` through onu-act, with root's password
+   (``pond/README.rst``); the status daemon cannot print the token in force,
+   and cannot make one without root's password, so that a daemon taken over
+   cannot make itself a token. Without a store the new token lasts until the
+   next start.
    The keys of the stick's two servers are kept there too, and the status
    daemon changes them through onu-act, each change with root's password
    (``pond/README.rst``): ``onu-config ssh new`` makes a new host key for the
@@ -649,7 +651,8 @@ by its whole path where procd starts it.
    of ``onu-update read`` or ``backup``, and the keys of the ssh server and of
    the panel (``onu-config ssh show`` and ``new``, ``ssh-keys add``,
    ``remove`` and ``only``, ``tls new``, ``own`` and ``self-signed``), a key's
-   fingerprint, which holds a slash, on the standard input. It is the object ``onu-act`` on ubus, with a method for each
+   fingerprint, which holds a slash, on the standard input, and the token of
+   scripts (``onu-config token new`` and ``off``). It is the object ``onu-act`` on ubus, with a method for each
    entry of its table (``src/act.c``): the method runs its program, with no
    shell, the caller's values in their places once each is short enough, of
    the characters its place allows and no option, and the caller's text,
@@ -659,8 +662,9 @@ by its whole path where procd starts it.
    a program that runs past its time is killed. A new password, an update
    written, a start of the other bank and the way back to the shipped
    firmware, what would give a caller root, the copy of the whole flash,
-   which holds the unit's credentials, and every change of the keys of the
-   ssh server and of the panel, a key to log in with as root among them, run only when the call carries root's password in force, ``password``,
+   which holds the unit's credentials, every change of the keys of the
+   ssh server and of the panel, a key to log in with as root among them, and
+   a new token of scripts or none, run only when the call carries root's password in force, ``password``,
    which ``onu-config password-check`` judges; otherwise the call is refused
    with ``UBUS_STATUS_PERMISSION_DENIED``. The status daemon, taken over,
    cannot do them alone. ubusd's access lists say who may call which method. procd keeps it (``rcS``); it ends without

@@ -127,9 +127,13 @@ static void test_values_in_their_places(void)
 	CHECK(!strcmp(run("tls_own_store", NULL, &bad), "/usr/sbin/onu-config tls own"));
 	CHECK(act_find("tls_own_store")->input);
 	CHECK(!strcmp(run("tls_own_remove", NULL, &bad), "/usr/sbin/onu-config tls self-signed"));
+	/* The token of scripts: a new one, printed, or none. */
+	CHECK(!strcmp(run("token_new", NULL, &bad), "/usr/sbin/onu-config token new"));
+	CHECK(!strcmp(run("token_off", NULL, &bad), "/usr/sbin/onu-config token off"));
+	CHECK(!act_find("token_new")->input && !act_find("token_new")->background);
 	/*
 	 * What would give a caller root, or change the keys of the stick's
-	 * servers, needs root's password, and no more.
+	 * servers or the token of scripts, needs root's password, and no more.
 	 */
 	for (size_t i = 0; i < act_method_count; i++) {
 		const char *n = act_methods[i].name;
@@ -145,7 +149,9 @@ static void test_values_in_their_places(void)
 						  !strcmp(n, "ssh_keys_only") ||
 						  !strcmp(n, "tls_key_new") ||
 						  !strcmp(n, "tls_own_store") ||
-						  !strcmp(n, "tls_own_remove")));
+						  !strcmp(n, "tls_own_remove") ||
+						  !strcmp(n, "token_new") ||
+						  !strcmp(n, "token_off")));
 	}
 }
 

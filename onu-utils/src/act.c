@@ -32,12 +32,15 @@
  * as a copy of the whole flash does (onu-update backup), and the keys of
  * the ssh server and of the panel's HTTPS: the host key, the public keys root
  * logs in with and whether the server takes them alone, the panel's key and
- * an own certificate (onu-config ssh, ssh-keys and tls). A new password, an
- * update written, a start of the other bank, the way back to the shipped
- * firmware, the copy of the flash, which holds the unit's credentials, and
- * every change of those keys, a key to log in with as root among them, need
- * root's password in force with the call. A key's fingerprint, which holds a
- * slash, goes on the standard input, never in an argument's place.
+ * an own certificate (onu-config ssh, ssh-keys and tls), and the token of
+ * scripts, a new one, which onu-config prints once, or none (onu-config
+ * token new and off). A new password, an update written, a start of the
+ * other bank, the way back to the shipped firmware, the copy of the flash,
+ * which holds the unit's credentials, every change of those keys, a key to
+ * log in with as root among them, and of the token, which signs a script
+ * in, need root's password in force with the call. A key's fingerprint,
+ * which holds a slash, goes on the standard input, never in an argument's
+ * place.
  */
 const struct act_method act_methods[] = {
 	{ .name = "lane_status", .program = LIB "onu-lane", .fixed = { "status" } },
@@ -108,6 +111,10 @@ const struct act_method act_methods[] = {
 	  .input = true, .needs_password = true },
 	{ .name = "tls_own_remove", .program = "/usr/sbin/onu-config",
 	  .fixed = { "tls", "self-signed" }, .needs_password = true },
+	{ .name = "token_new", .program = "/usr/sbin/onu-config", .fixed = { "token", "new" },
+	  .needs_password = true },
+	{ .name = "token_off", .program = "/usr/sbin/onu-config", .fixed = { "token", "off" },
+	  .needs_password = true },
 };
 
 const size_t act_method_count = ARRAY_SIZE(act_methods);
