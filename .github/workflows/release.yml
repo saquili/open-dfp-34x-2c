@@ -183,7 +183,7 @@ jobs:
       - name: What the comparison needs
         run: |
           mkdir compare
-          cp build/image-${{ matrix.build }}/images/{k0.uImage,r0.squashfs,update.bin,web-install.tar,SHA256SUMS} compare/
+          cp build/image-${{ matrix.build }}/images/{k0.uImage,k0.System.map,r0.squashfs,update.bin,web-install.tar,SHA256SUMS} compare/
           br2-external/tests/image/tree-digest build/image-${{ matrix.build }}/target > compare/tree.txt
       - name: Keep what the comparison needs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -203,7 +203,7 @@ jobs:
         run: |
           version=${{ steps.version.outputs.version }}
           mkdir dist
-          cp build/image-a/images/{k0.uImage,r0.squashfs,update.bin,web-install.tar} dist/
+          cp build/image-a/images/{k0.uImage,k0.System.map,r0.squashfs,update.bin,web-install.tar} dist/
           tar -C build/image-a --sort=name --owner=0 --group=0 --numeric-owner \
             --mtime="@$(git log -1 --format=%ct)" \
             -cf "dist/open-dfp-34x-2c-$version-sources.tar" legal-info
@@ -232,7 +232,7 @@ jobs:
         run: |
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name build-a --dir a
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name build-b --dir b
-          for f in k0.uImage r0.squashfs update.bin web-install.tar; do
+          for f in k0.uImage k0.System.map r0.squashfs update.bin web-install.tar; do
             cmp "a/$f" "b/$f"
           done
           diff a/SHA256SUMS b/SHA256SUMS
@@ -291,6 +291,9 @@ jobs:
             panel or with \`onu-update write\`.
           - \`k0.uImage\`, \`r0.squashfs\`: the two images, for the bench
             (docs/handbook/flashing.rst).
+          - \`k0.System.map\`: the symbols of the kernel in \`k0.uImage\`,
+            which names no function in its reports: an address of a report
+            is read by them.
           - \`open-dfp-34x-2c-${VERSION}-sources.tar\`: the licences and
             the sources of everything in the images, the toolchain's among
             them.
