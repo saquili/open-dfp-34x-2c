@@ -279,9 +279,10 @@ the loader's ``md.l`` before you compose the macro.
      - Clear PDOWN, bit 11.
      - Take the fibre PHY out of power-down.
    * - 6
-     - ``RTL9602C_PHY_CTRL`` (``0x000110``)
+     - ``RTL9602C_GPHY_CTRL`` (``0x000110``)
      - Set PATCH_DONE, bit 0.
-     - Set the PHY's patch-done flag.
+     - Set the patch-done flag of the switch's embedded copper PHY, which is
+       not the lane's; whether the lane needs it is not known.
    * - 7
      - ``RTL9602C_SERDES_RESET`` (``0x021500``)
      - Write ``0x10``, then ``0x30``, then ``0x00``.
