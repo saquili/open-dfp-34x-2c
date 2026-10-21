@@ -210,7 +210,7 @@ restart the stick answers::
 Open ``https://192.168.1.1/``. The panel answers over HTTPS; its port 80 only
 sends a browser on to HTTPS. The browser warns about the certificate, which
 the stick signed itself (ADR 0013). Its SHA-256 fingerprint is printed on the
-console at every start, and shown in the panel under System, Access, card
+console at every start, and shown in the panel under System, HTTPS, card
 "HTTPS of the panel", in the row of the address under "Fingerprint
 (SHA-256)". Accept the certificate to go on, and compare the fingerprint once
 you are in. A
@@ -295,8 +295,8 @@ the first update", below; ``backup.rst``, "Writing it back").
 Keys of ssh and of the panel
 ============================
 
-Under System, Access, the panel changes the keys of the stick's two
-servers. Each change there needs root's password again, which a dialog asks
+Under System, SSH and System, HTTPS, the panel changes the keys of the
+stick's two servers. Each change there needs root's password again, which a dialog asks
 for when the change's button is pressed: type it, and press Enter or the
 dialog's button; it goes with that change alone and is not kept. A wrong one
 is said in the dialog, which stays open, and counts as a wrong sign-in; after
@@ -340,7 +340,7 @@ the page, and compare the fingerprint the browser shows with the one on the
 page. The console prints the fingerprint of the certificate served at every
 start.
 
-The same page has the rest of the ways in. "Root password" changes root's
+System, Panel has the rest of the ways in. "Root password" changes root's
 password, the console's, ssh's and the panel's, and logs the other sessions
 of the panel out. "Sessions of the panel" lists the sessions open, when each
 signed in, its last request and its address, this browser's marked; "Log out

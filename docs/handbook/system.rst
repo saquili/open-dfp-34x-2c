@@ -375,8 +375,8 @@ password for it; while it is the default, ``admin``, the panel allows nothing
 but a change and ssh takes keys only (ADR 0009). The panel runs
 as an account of its own, which no one logs in with (ADR 0011), and answers
 with a certificate it signs itself (ADR 0013), or with an own certificate
-that an authority signed. Every way in is managed under System, Access, each
-change with root's password again: root's password itself, the panel's
+that an authority signed. Every way in is managed under System, on the pages
+Panel, SSH and HTTPS, each change with root's password again: root's password itself, the panel's
 sessions, the token of scripts, the public keys root logs in to ssh with,
 eight at most beside those an image was built with, whether ssh takes them
 alone and no password, a new host key for ssh, a new key for the panel's

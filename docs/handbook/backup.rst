@@ -76,8 +76,9 @@ hash of root's password, the PPPoE accounts, the token of scripts, the ssh
 server's host key, the panel's key and the private key of an own certificate
 of the panel, beside the public keys root logs in to ssh with and whether
 ssh takes them alone. Whoever has the copy has those keys: after a copy went
-where it should not, make the servers' keys and the token of scripts anew
-under System, Access, and change root's password there.
+where it should not, make the servers' keys anew under System, SSH and
+System, HTTPS, and the token of scripts under System, Panel, and change
+root's password there.
 
 Taking the copy
 ===============

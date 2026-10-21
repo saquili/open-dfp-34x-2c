@@ -498,7 +498,7 @@ Known limitations
   keys only, and the console takes ``admin``; the shells of root say so at
   every login. Once another password is set, ssh takes it as well as keys.
 * The status daemon has no token for scripts until root makes one, under
-  System, Access, "Token for scripts", or on the stick (``onu-config token
+  System, Panel, "Token for scripts", or on the stick (``onu-config token
   new``, over ssh or on the console), so a script signs in as root with
   root's password, as a person does. The token is kept in the
   configuration store, like the keys above, and stays across restarts and
@@ -509,7 +509,7 @@ Known limitations
   first start and keeps in its store, and a certificate it signs itself (ADR
   0013); port 80 sends a browser there. The browser warns at the first visit:
   the boot prints the certificate's fingerprint on the console, and the panel
-  shows it under System, Access, for a person to compare with the browser's.
+  shows it under System, HTTPS, for a person to compare with the browser's.
 * If the configuration store cannot be read, or the partition ``config`` is
   not mounted, root's password is not known: the panel refuses every sign-in
   and says why, the ssh server takes keys only, and the console takes
@@ -524,7 +524,7 @@ An image that a bench uses needs its ssh key and perhaps its own addresses,
 which do not belong in the repository (a stick's owner adds keys through the
 panel instead, which the store keeps; the image's come first in the ssh
 server's list, ``/run/dropbear/authorized_keys``, and the panel shows them
-apart, read-only, under System, Access). ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` names a
+apart, read-only, under System, SSH). ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` names a
 directory whose files the post-image script lays over a copy of the root
 filesystem tree before it packs ``r0.squashfs``::
 

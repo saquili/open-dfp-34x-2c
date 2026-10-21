@@ -338,18 +338,27 @@ The menu
 The menu at the left (a drawer on a phone) has a few sections, each an entry
 that folds its pages: Internet, Switch, Operator and System, beside the
 Overview. Every page of a section has an address of its own
-(``/system/access``), so that a link, a reload or the browser's back opens it
+(``/system/ssh``), so that a link, a reload or the browser's back opens it
 again, and the menu marks the page open. A section's pages are what a person
 looks for under its name: System has Resources (what the stick has: processor,
 memory, flash), Software (the two systems and their update), Device (the stick
-itself: model, names, clock, upkeep) and Access (every way in). Tabs are for
-views of one thing within a page (the statistics' counters, of the ports, of
-the fibre and of the interfaces), never for pages of their own. A page that moved keeps its old address, which opens the new one
-(``moved`` in ``router.tsx``).
+itself: model, names, clock, upkeep), and the ways in: Panel (root's password,
+the sessions, the token of scripts), SSH (the server and its keys) and HTTPS
+(the panel's certificates). Tabs are for views of one thing within a page (the
+statistics' counters, of the ports, of the fibre and of the interfaces), never
+for pages of their own. A page that moved keeps its old address, which opens
+the new one (``moved`` in ``router.tsx``).
+
+A page fits the screen of a laptop: the page itself never scrolls. A list that
+can grow scrolls inside its own card; what does not fit beside the rest is a
+page of its own in the section's menu, as Panel, SSH and HTTPS are, never a
+longer page. Cards side by side keep their own heights (``Columns`` and
+``Stack``), so that no card is stretched to its neighbour's with empty space
+inside.
 
 Each fact stands on one page alone, under one name: the version and the system
 that runs are under Software, the flash's partitions and how full a system is
-under Resources, the state of HTTPS under Access. Another page that needs the
+under Resources, the state of HTTPS under HTTPS. Another page that needs the
 fact links to its page rather than show it again, and names it the same way:
 "system A" and "system B" everywhere, never "bank", which is the flash's word
 of the programs.
