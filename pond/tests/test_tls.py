@@ -161,6 +161,7 @@ def main():
     downloads(pond, os.path.dirname(key), token)
     own_file(pond, os.path.dirname(key), sys.argv[3])
     servers_keys(pond, os.path.dirname(key), sys.argv[3])
+    sessions(pond)
 
 
 # A second scalar of P-256, for a new key of the panel.
@@ -521,6 +522,73 @@ def servers_keys(pond, workdir, certs):
         proc.terminate()
         proc.wait(5)
         log.close()
+
+
+def sessions(pond):
+    """The sessions open, listed without their ids, and the others ended
+    with root's password."""
+    print("the sessions")
+    root = os.environ["POND_ROOT"]
+    os.makedirs(root + "/run", exist_ok=True)
+    # A password of root's own, which no session must change first.
+    secret = "sessions-test-1"
+    hashed = subprocess.run(["perl", "-e", "print crypt($ARGV[0], q($5$rounds=1000$teststandinsalt))",
+                             secret], capture_output=True, text=True, timeout=10).stdout
+    write(root + "/run/onu-auth", hashed + "\n")
+    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}", "-t", "/tls-token"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def ask(method, path, headers, body=None):
+        c = http.client.HTTPConnection("127.0.0.1", HTTP, timeout=10)
+        status, head, reply = request(c, method, path, body, headers)
+        c.close()
+        try:
+            return status, head, json.loads(reply)
+        except ValueError:
+            return status, head, {}
+
+    def sign_in():
+        status, head, _ = ask("POST", "/api/auth/login",
+                              {"Content-Type": "application/json", "X-Pond": "1"},
+                              json.dumps({"user": "root", "secret": secret}))
+        return {"Cookie": head.get("Set-Cookie", "").split(";")[0]} if status == 200 else {}
+
+    try:
+        if not started(proc, HTTP):
+            check(False, "the daemon listens")
+            return
+        first, second = sign_in(), sign_in()
+        check(bool(first and second), "two sessions, root's password set")
+        status, _, body = ask("GET", "/api/auth/sessions", first)
+        s = body.get("sessions", [])
+        check(status == 200 and len(s) == 2 and body.get("max") == 3
+              and body.get("idle_timeout_s") == 900 and body.get("max_age_s") == 43200
+              and abs(body.get("now_s", 0) - time.time()) < 5,
+              "the sessions listed, with how many there may be and how long they last")
+        check([x.get("this") for x in s] == [True, False]
+              and all(x.get("from") == "127.0.0.1" and x["since_s"] <= x["seen_s"] for x in s)
+              and all(sorted(x) == ["from", "seen_s", "since_s", "this"] for x in s),
+              "the one that asks marked, each with its address, and none with its id")
+        status, _, body = ask("GET", "/api/auth/sessions", {"Authorization": f"Bearer {TOKEN}"})
+        check(status == 200 and [x["this"] for x in body.get("sessions", [])] == [False, False],
+              "a script with the token is none of them")
+        mine = dict(first, **{"X-Pond": "1"})
+        status, _, body = ask("POST", "/api/auth/sessions/others", mine, "")
+        check(status == 403 and body.get("error") == "wrong password",
+              "the others are not ended without root's password")
+        status, _, body = ask("POST", "/api/auth/sessions/others", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 200 and body == {"ok": True, "ended": 1}, "with it, the other one ends")
+        status, _, _ = ask("GET", "/api/auth/sessions", second)
+        check(status == 401, "and its browser is signed out")
+        status, _, body = ask("GET", "/api/auth/sessions", first)
+        check(status == 200 and [x["this"] for x in body.get("sessions", [])] == [True],
+              "the one that asked stays")
+        status, _, _ = ask("GET", "/api/auth/sessions/others", first)
+        check(status == 405, "ending them is a POST")
+    finally:
+        proc.terminate()
+        proc.wait(5)
+        os.unlink(root + "/run/onu-auth")
 
 
 def downloads(pond, workdir, token):

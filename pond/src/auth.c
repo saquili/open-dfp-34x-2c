@@ -35,15 +35,17 @@
 #define LOCK_S 30
 #define FORGET_S 300
 #define SOURCES 16
-#define SOURCE_LEN 48
+#define SOURCE_LEN AUTH_FROM_LEN
 
 /* What onu-config password-check says of a password (onu-utils). */
 enum { CHECK_MATCHES = 0, CHECK_DEFAULT = 3, CHECK_OLDER = 4, CHECK_UNKNOWN = 5 };
 
+/* The sessions, each with the address its sign-in came from, for the panel's list. */
 static struct {
 	char id[AUTH_ID_LEN + 1];
 	time_t created;
 	time_t seen;
+	char from[SOURCE_LEN];
 } g_sess[AUTH_SESSIONS];
 
 /* The wrong passwords of each address lately, and of all together. */
@@ -290,8 +292,11 @@ static void op_end(int rc, const char *id)
 		done(ctx, rc, id ? id : "");
 }
 
-/* Open a session at @now for a password that was right: 0, or -EIO. */
-static int open_session(time_t now, char id[AUTH_ID_LEN + 1])
+/*
+ * Open a session at @now for a password that was right, given from @from:
+ * 0, or -EIO.
+ */
+static int open_session(time_t now, const char *from, char id[AUTH_ID_LEN + 1])
 {
 	int i, slot = 0;
 
@@ -311,6 +316,7 @@ static int open_session(time_t now, char id[AUTH_ID_LEN + 1])
 	}
 	g_sess[slot].created = now;
 	g_sess[slot].seen = now;
+	snprintf(g_sess[slot].from, sizeof(g_sess[slot].from), "%s", from);
 	memcpy(id, g_sess[slot].id, AUTH_ID_LEN + 1);
 	return 0;
 }
@@ -373,7 +379,7 @@ static void checked(void *ctx, int code, const char *output)
 	 */
 	if (older && store_password(g_op.secret, g_op.secret))
 		fprintf(stderr, "pond: the password stays in its older form\n");
-	rc = open_session(g_op.now, id);
+	rc = open_session(g_op.now, g_op.from, id);
 	op_end(rc, rc ? NULL : id);
 	explicit_bzero(id, sizeof(id));
 }
@@ -489,6 +495,42 @@ void auth_sign_out(const char *id)
 
 	if (i >= 0)
 		memset(&g_sess[i], 0, sizeof(g_sess[i]));
+}
+
+int auth_list(const char *self, time_t now, struct auth_open out[AUTH_SESSIONS])
+{
+	int me = slot_of(self, now), n = 0;
+
+	for (int i = 0; i < AUTH_SESSIONS; i++) {
+		struct auth_open o;
+		int at;
+
+		if (!g_sess[i].id[0])
+			continue;
+		o.created = g_sess[i].created;
+		o.seen = g_sess[i].seen;
+		snprintf(o.from, sizeof(o.from), "%s", g_sess[i].from);
+		o.self = i == me;
+		/* In the order they were opened. */
+		for (at = n; at > 0 && out[at - 1].created > o.created; at--)
+			out[at] = out[at - 1];
+		out[at] = o;
+		n++;
+	}
+	return n;
+}
+
+int auth_end_others(const char *keep, time_t now)
+{
+	int me = slot_of(keep, now), n = 0;
+
+	for (int i = 0; i < AUTH_SESSIONS; i++) {
+		if (i == me || !g_sess[i].id[0])
+			continue;
+		memset(&g_sess[i], 0, sizeof(g_sess[i]));
+		n++;
+	}
+	return n;
 }
 
 int auth_confirm(const char *secret, const char *from, time_t now, int *retry_after)

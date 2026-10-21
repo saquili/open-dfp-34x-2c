@@ -7,7 +7,9 @@
  * its hash, of crypt()'s form, in the configuration store and in
  * /run/onu-auth, which root alone reads: onu-config checks a password and
  * hashes a new one, which the panel has onu-act run (ADR 0011). A few
- * sessions, each a random id the browser holds in an HttpOnly cookie.
+ * sessions, each a random id the browser holds in an HttpOnly cookie, kept
+ * in memory alone with the address its sign-in came from: the panel lists
+ * them, without their ids, and may end all but its own.
  *
  * Until a password is set, the password is "admin" and every session must
  * change it before it may do anything else. Five wrong passwords in a row
@@ -32,6 +34,8 @@
 #define AUTH_SECRET_MIN 8
 #define AUTH_SECRET_MAX 128
 #define AUTH_HASH_MAX 160
+/* An address a sign-in comes from, as text: an IPv6 one fits. */
+#define AUTH_FROM_LEN 48
 
 /* No session, no failure, and whether the default password is in force, asked. */
 void auth_init(void);
@@ -93,6 +97,36 @@ int auth_change_begin(const char *current, const char *next, const char *keep,
 bool auth_session(const char *id, time_t now);
 
 void auth_sign_out(const char *id);
+
+/**
+ * struct auth_open - A session open, as the panel lists it: never its id.
+ * @created: when it was opened
+ * @seen: when it last asked for anything
+ * @from: the address its sign-in came from
+ * @self: whether it is the session that asks
+ */
+struct auth_open {
+	time_t created;
+	time_t seen;
+	char from[AUTH_FROM_LEN];
+	bool self;
+};
+
+/**
+ * auth_list() - The sessions open at @now, the oldest first.
+ * @self: the id of the session that asks; NULL or another for none
+ *
+ * Return: how many, each in @out.
+ */
+int auth_list(const char *self, time_t now, struct auth_open out[AUTH_SESSIONS]);
+
+/**
+ * auth_end_others() - End every session but @keep's: all of them for a
+ *	@keep that is none, as for a script with the token.
+ *
+ * Return: how many ended.
+ */
+int auth_end_others(const char *keep, time_t now);
 
 /**
  * auth_confirm() - Check root's password again, for what needs it as well

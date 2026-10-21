@@ -3,7 +3,8 @@
 
 /*
  * Tests of the sign-in: the default password, the stop after wrong
- * passwords, sessions that end, a change of password, a password of the
+ * passwords, sessions that end, their list and the end of the others, a
+ * change of password, a password of the
  * older form that a sign-in stores again, and none known without a store. onu-config checks the passwords,
  * as onu-act has it do on the stick (onu-utils tests the hashes); a
  * stand-in in front of it keeps a new one.
@@ -88,6 +89,44 @@ static void test_sessions(void)
 		auth_sign_in("root", "admin", FROM, t + 3000 + i, ids[i], &retry);
 	check(!auth_session(ids[0], t + 3010), "a sign-in past the last slot ends the oldest session");
 	check(auth_session(ids[AUTH_SESSIONS], t + 3010), "and the new one is open");
+}
+
+static void test_list(void)
+{
+	char a[AUTH_ID_LEN + 1], b[AUTH_ID_LEN + 1], c[AUTH_ID_LEN + 1];
+	struct auth_open open[AUTH_SESSIONS];
+	int retry = 0;
+	time_t t = 2000000;
+
+	puts("the sessions listed, and the others ended");
+	auth_init();
+	check(auth_list(NULL, t, open) == 0, "none at first");
+	/* Opened at t + 20, t + 10 and t + 30, in this order, into the slots. */
+	auth_sign_in("root", "admin", FROM, t + 20, a, &retry);
+	auth_sign_in("root", "admin", OTHER, t + 10, b, &retry);
+	auth_sign_in("root", "admin", FROM, t + 30, c, &retry);
+	auth_session(a, t + 40);
+	check(auth_list(b, t + 50, open) == 3 && open[0].created == t + 10 &&
+	      open[1].created == t + 20 && open[2].created == t + 30,
+	      "three, the oldest first");
+	check(open[0].self && !open[1].self && !open[2].self, "the one that asks is marked");
+	check(!strcmp(open[0].from, OTHER) && !strcmp(open[1].from, FROM),
+	      "each with the address it came from");
+	check(open[1].seen == t + 40 && open[2].seen == t + 30, "and its last request");
+	check(auth_list("not a session", t + 50, open) == 3 &&
+	      !open[0].self && !open[1].self && !open[2].self,
+	      "an id that is no session's marks none");
+	check(auth_list(NULL, t + 30 + AUTH_IDLE_S + 1, open) == 1 && open[0].created == t + 20,
+	      "the idle ones are gone from the list");
+	auth_init();
+	auth_sign_in("root", "admin", FROM, t, a, &retry);
+	auth_sign_in("root", "admin", OTHER, t, b, &retry);
+	auth_sign_in("root", "admin", FROM, t, c, &retry);
+	check(auth_end_others(b, t + 1) == 2 && auth_session(b, t + 1) &&
+	      !auth_session(a, t + 1) && !auth_session(c, t + 1),
+	      "the others ended, the one that asks kept");
+	check(auth_end_others(NULL, t + 2) == 1 && auth_list(NULL, t + 2, open) == 0,
+	      "with none that asks, a script's token, all of them");
 }
 
 /*
@@ -267,6 +306,7 @@ int main(void)
 	}
 
 	test_sessions();
+	test_list();
 	test_change();
 	test_older_form();
 	test_confirm();

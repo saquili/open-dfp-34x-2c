@@ -9,6 +9,9 @@
  *   /api/auth/session  who is signed in
  *   /api/auth/logout   a POST: end the session
  *   /api/auth/password a POST of {current, next}: a new password
+ *   /api/auth/sessions the sessions open, without their ids
+ *   /api/auth/sessions/others  a POST, with root's password: end all but
+ *                      the one that asks
  *   /api/schema        the list of values
  *   /api/get/ID        one value; ?since=N from a point on, for a log
  *   /api/getm?ids=A,B  several values at once, slow ones left out
@@ -485,6 +488,74 @@ static void api_password(struct mg_connection *c, struct mg_http_message *hm,
 	free(l);
 }
 
+/*
+ * The sessions open, the oldest first, the one that asks marked, none with
+ * its id: when each was opened, its last request and the address it came
+ * from; and how many there may be and how long one lasts.
+ */
+static void api_sessions(struct mg_connection *c, const char *sid)
+{
+	struct auth_open open[AUTH_SESSIONS];
+	time_t now = time(NULL);
+	int n = auth_list(sid, now, open);
+	char body[1024];
+	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
+
+	pv_open(&b, '{');
+	pv_key(&b, "now_s");
+	pv_num(&b, (long long)now);
+	pv_comma(&b);
+	pv_key(&b, "max");
+	pv_num(&b, AUTH_SESSIONS);
+	pv_comma(&b);
+	pv_key(&b, "idle_timeout_s");
+	pv_num(&b, AUTH_IDLE_S);
+	pv_comma(&b);
+	pv_key(&b, "max_age_s");
+	pv_num(&b, AUTH_MAX_AGE_S);
+	pv_comma(&b);
+	pv_key(&b, "sessions");
+	pv_open(&b, '[');
+	for (int i = 0; i < n; i++) {
+		if (i)
+			pv_comma(&b);
+		pv_open(&b, '{');
+		pv_key(&b, "since_s");
+		pv_num(&b, (long long)open[i].created);
+		pv_comma(&b);
+		pv_key(&b, "seen_s");
+		pv_num(&b, (long long)open[i].seen);
+		pv_comma(&b);
+		pv_key(&b, "from");
+		pv_str(&b, open[i].from);
+		pv_comma(&b);
+		pv_key(&b, "this");
+		pv_bool(&b, open[i].self);
+		pv_close(&b, '}');
+	}
+	pv_close(&b, ']');
+	pv_close(&b, '}');
+	reply_json(c, 200, body);
+}
+
+/*
+ * End every session but the one that asks, with root's password again, as
+ * a change of the keys takes it: whoever holds a session, a browser left
+ * open, cannot shut the owner out without it.
+ */
+static void api_end_others(struct mg_connection *c, struct mg_http_message *hm,
+			   const char *sid)
+{
+	char pw[AUTH_SECRET_MAX + 1], body[48];
+
+	if (!firmware_confirmed(c, hm, pw, sizeof(pw)))
+		return;
+	explicit_bzero(pw, sizeof(pw));
+	snprintf(body, sizeof(body), "{\"ok\":true,\"ended\":%d}",
+		 auth_end_others(sid, time(NULL)));
+	reply_json(c, 200, body);
+}
+
 /* Restart the stick a moment after the reply has gone. */
 static void api_restart(struct mg_connection *c)
 {
@@ -661,6 +732,17 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 	}
 	if (session && auth_default_password()) {
 		reply_err(c, 403, "must_change", "set a password of your own first");
+		return;
+	}
+	if (mg_match(hm->uri, mg_str("/api/auth/sessions"), NULL)) {
+		api_sessions(c, sid);
+		return;
+	}
+	if (mg_match(hm->uri, mg_str("/api/auth/sessions/others"), NULL)) {
+		if (post)
+			api_end_others(c, hm, sid);
+		else
+			reply_err(c, 405, "use POST", "end the other sessions with a POST");
 		return;
 	}
 	/* The servers' keys: answered now, or once onu-act has done the change. */

@@ -93,7 +93,9 @@ session ends after 15 minutes without a request or 12 hours in all. Five wrong
 passwords from one address stop sign-ins from that address for 30 seconds,
 and twenty from all addresses together stop every sign-in as long (429, with
 ``Retry-After``); behind a proxy every sign-in comes from the proxy's address.
-A change of password ends every other session.
+A change of password ends every other session. pond keeps the sessions in
+memory alone, each with the address its sign-in came from, which the panel
+lists (``/api/auth/sessions``), and a restart of the daemon ends them all.
 
 A sign-in, and a change made in a session, must carry the header ``X-Pond``,
 which a page of another site cannot add, so a forged form neither signs the
@@ -201,7 +203,16 @@ Routes
 ``/api/health`` answers anyone. ``POST /api/auth/login`` takes ``{"user",
 "secret"}``; ``/api/auth/session`` says who is signed in and whether the
 password must change; ``POST /api/auth/logout`` ends the session; ``POST
-/api/auth/password`` takes ``{"current", "next"}``. ``/api/schema``,
+/api/auth/password`` takes ``{"current", "next"}``. ``/api/auth/sessions``
+lists the sessions open, the oldest first, none with its id: ``{"now_s",
+"max", "idle_timeout_s", "max_age_s", "sessions": [{"since_s", "seen_s",
+"from", "this"}]}``, when each was opened, its last request and the address
+its sign-in came from, by the stick's clock, ``this`` for the one that asks;
+``POST /api/auth/sessions/others``, with root's password in
+``X-Pond-Password`` as the updates take it, ends every one but the one that
+asks, all of them for a request with the token, and answers ``{"ok": true,
+"ended": N}``: whoever holds a session, a browser left open somewhere,
+cannot shut the owner out without the password. ``/api/schema``,
 ``/api/get/ID``, ``/api/getm?ids=A,B`` (slow values left out) and ``POST
 /api/set/ID`` read and change values; ``POST /api/system/restart`` restarts the
 stick a second after it answers.
@@ -529,8 +540,9 @@ hostname (``POND_ONU_CONFIG``, ``POND_ONU_APPLY``, ``POND_ONU_LANE``,
 ``run/ubus/omcid.frames``.
 The tests of the sign-in run onu-config, behind a stand-in that keeps a new
 password, and check the default password, the stop after wrong passwords,
-the end of sessions, a change of password and a hash of the older form that
-a sign-in replaces; onu-utils tests the hashes themselves.
+the end of sessions, their list and the end of the others, a change of
+password and a hash of the older form that a sign-in replaces; onu-utils
+tests the hashes themselves.
 
 The tests of HTTPS write a certificate that OpenSSL then reads, its signature
 and its fingerprint (``tests/test_cert.c``), and run the daemon with a key on
@@ -543,7 +555,8 @@ as an authority would, a root, an intermediate and the server's: taken and
 refused (``tests/test_cert.c``), and served by the daemon, through which a
 client that trusts the root alone verifies it by the address, which it
 cannot without the intermediate (``tests/test_tls.py``); the routes of the
-servers' keys run against a stand-in for onu-config.
+servers' keys run against a stand-in for onu-config, and those of the
+sessions with a password of root's own.
 
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,
