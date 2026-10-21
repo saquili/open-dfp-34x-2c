@@ -28,6 +28,7 @@ struct omci_ctl_counters;
  * @str: a string
  * @num: a number
  * @flag: true or false
+ * @none: no value, null in JSON
  */
 struct omci_publish_ops {
 	void (*open)(void *ctx, const char *name, bool array);
@@ -35,6 +36,7 @@ struct omci_publish_ops {
 	void (*str)(void *ctx, const char *name, const char *value);
 	void (*num)(void *ctx, const char *name, uint32_t value);
 	void (*flag)(void *ctx, const char *name, bool value);
+	void (*none)(void *ctx, const char *name);
 };
 
 /**

@@ -735,6 +735,11 @@ int omci_engine_mcast_fd(const struct omci_engine *eng)
 	return omci_hw()->mcast_fd != NULL ? omci_hw()->mcast_fd() : -1;
 }
 
+struct omci_mcast *omci_engine_mcast(struct omci_engine *eng)
+{
+	return eng->mcast;
+}
+
 void omci_engine_mcast_service(struct omci_engine *eng)
 {
 	if (eng != NULL)

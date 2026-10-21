@@ -148,6 +148,16 @@ __must_check int omci_engine_mcast_fd(const struct omci_engine *eng);
  */
 void omci_engine_mcast_service(struct omci_engine *eng);
 
+struct omci_mcast;
+
+/**
+ * omci_engine_mcast() - The engine's multicast agent (mcast/agent.h).
+ * @eng: the engine
+ *
+ * Return: the agent, or NULL for an engine without one.
+ */
+struct omci_mcast *omci_engine_mcast(struct omci_engine *eng);
+
 /**
  * omci_engine_pon_fd() - The descriptor that tells of a change of the PON
  *	device.

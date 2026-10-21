@@ -315,6 +315,19 @@ static size_t omci_hw_service_rules(struct omci_svc_rule *out, size_t cap)
 	return n;
 }
 
+/* Whether a test chose the subscriber's own priority for IGMP. */
+static bool g_igmp_host;
+
+void omci_hw_igmp_host_priority_set(bool host)
+{
+	g_igmp_host = host;
+}
+
+static bool omci_hw_igmp_host_priority(void)
+{
+	return g_igmp_host;
+}
+
 const char *omci_hw_source(void)
 {
 	return "synthetic ONU (host build, no device present)";
@@ -684,7 +697,7 @@ static size_t g_mc_ds_n;
 static bool g_mc_fail_ds;
 static struct {
 	uint8_t group[OMCI_HW_MCAST_ADDR_LEN];
-	uint64_t frames;
+	uint64_t bytes;
 } g_mc_watch[OMCI_HW_MCAST_WATCH_MAX];
 static size_t g_mc_watch_n;
 static bool g_mc_fail_watch, g_mc_fail_seen;
@@ -707,6 +720,7 @@ void omci_hw_mcast_reset(void)
 	g_mc_watch_n = 0;
 	g_mc_fail_watch = false;
 	g_mc_fail_seen = false;
+	g_igmp_host = false;
 }
 
 void omci_hw_mcast_watch_fail_next(bool watch, bool seen)
@@ -727,12 +741,12 @@ static size_t watch_find(const uint8_t *group)
 }
 
 void omci_hw_mcast_flow(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
-			uint64_t frames)
+			uint64_t bytes)
 {
 	const size_t i = watch_find(group);
 
 	if (i < g_mc_watch_n)
-		g_mc_watch[i].frames = frames;
+		g_mc_watch[i].bytes = bytes;
 }
 
 enum omci_status
@@ -755,13 +769,13 @@ omci_hw_mcast_watch(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN], bool on)
 		return OMCI_ERR_NOMEM;
 	omci_wire_copy(g_mc_watch[g_mc_watch_n].group, group,
 		       OMCI_HW_MCAST_ADDR_LEN);
-	g_mc_watch[g_mc_watch_n++].frames = 0;
+	g_mc_watch[g_mc_watch_n++].bytes = 0;
 	return OMCI_OK;
 }
 
 enum omci_status
 omci_hw_mcast_seen(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
-		   uint64_t *frames)
+		   uint64_t *bytes)
 {
 	const size_t i = watch_find(group);
 
@@ -771,7 +785,7 @@ omci_hw_mcast_seen(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
 	}
 	if (i == g_mc_watch_n)
 		return OMCI_DECLINED;
-	*frames = g_mc_watch[i].frames;
+	*bytes = g_mc_watch[i].bytes;
 	return OMCI_OK;
 }
 
@@ -1072,6 +1086,7 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.mcast_ds = omci_hw_mcast_ds,
 	.mcast_watch = omci_hw_mcast_watch,
 	.mcast_seen = omci_hw_mcast_seen,
+	.igmp_host_priority = omci_hw_igmp_host_priority,
 	.filter_apply = omci_hw_filter_apply,
 	.uni_rate = omci_hw_uni_rate,
 };

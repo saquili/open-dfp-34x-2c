@@ -8,16 +8,21 @@
  * group the policy does not allow, sets the bridge's leave and timers, keeps
  * the static groups, and keeps the counts and the active groups that the
  * OLT reads from the multicast subscriber monitor. It counts the downstream
- * frames of the groups the bridge forwards and lists those whose stream
- * stopped in the lost groups of their profile.
+ * bytes of the groups the bridge forwards and lists those whose stream
+ * stopped in the lost groups of their profile. It gives the subscriber's
+ * messages upstream a priority the operator's rules take where the profile
+ * leaves the priority to the subscriber, keeps what the stick's panel shows,
+ * and tests a group from the stick itself.
  */
 
 #ifndef OMCI_MCAST_AGENT_H
 #define OMCI_MCAST_AGENT_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mcast/acl.h"
 #include "me/tables.h"
 #include "mib/store.h"
 #include "omcid/attrs.h"
@@ -78,8 +83,9 @@ void omci_mcast_service(struct omci_mcast *m, struct omci_mib *mib,
  *
  * Ends the previews whose time is up, starts the preview counts again a day
  * after they began, counts the allowed preview groups down a minute at a
- * time, and services; then reads the downstream frames of each group the
- * bridge forwards, a group that had none for a while being lost.
+ * time, and services; ends a test whose time is up; then reads the
+ * downstream bytes of each group the bridge forwards, a group that had none
+ * for a while being lost.
  */
 void omci_mcast_tick(struct omci_mcast *m, struct omci_mib *mib,
 		     uint64_t now_sec);
@@ -109,5 +115,69 @@ extern const struct omci_me_table_source omci_mcast_lost_groups;
  */
 size_t omci_mcast_lost_profiles(const struct omci_mcast *m, uint16_t *out,
 				size_t cap);
+
+struct omci_publish_ops;
+
+/**
+ * omci_mcast_publish() - Write what the agent holds of television, for the
+ *	stick's panel (sys/publish.h).
+ * @m: the agent, or NULL, which holds nothing
+ * @ops: the writer
+ * @ctx: passed to @ops
+ *
+ * As JSON: {"now_s":N,"policy":P,"groups":[...],"rejected":[...],
+ * "log":[...],"lost":[...],"counters":{...},"querier":Q,"priority":R}, the
+ * shape of pond's value "iptv" (pond/openapi.json): the OLT's policy, null
+ * without one; the groups the bridge forwards; the joins the policy refused
+ * and the events, the latest first; the groups whose stream stopped; the
+ * counts since the start; the OLT's latest query, null before one; who
+ * gives the subscriber's IGMP its priority upstream, null without a
+ * profile. Times are the agent's clock, in seconds.
+ */
+void omci_mcast_publish(const struct omci_mcast *m,
+			const struct omci_publish_ops *ops, void *ctx);
+
+/**
+ * omci_mcast_test_start() - Join a group from the stick and count its stream.
+ * @m: the agent
+ * @group: an IPv4 multicast group, in the form acl.h keeps addresses
+ * @vid: the VLAN a subscriber would join it in, 1 to 4094, or 0 untagged
+ * @seconds: how long the test lasts, 1 to 30; the agent ends it itself a few
+ *	seconds after, when nobody did
+ * @why: of a group the policy refuses, the word of the refusal, as
+ *	omci_mcast_publish() gives it; "" otherwise
+ *
+ * The agent sends the OLT a join of the group as a subscriber's would go,
+ * judged by the policy, and counts the group's downstream bytes, which the
+ * bridge does not forward to the subscriber side for the test.
+ *
+ * Return: %OMCI_OK; %OMCI_ERR_INVAL for another group or VLAN or time;
+ * %OMCI_ERR_BUSY while a test runs; %OMCI_DECLINED for a group the policy
+ * refuses; %OMCI_ERR_IO in a backend that cannot send or count;
+ * %OMCI_ERR_NOMEM when no counter is free; %OMCI_ERR_HW when the join could
+ * not be sent.
+ */
+__must_check enum omci_status
+omci_mcast_test_start(struct omci_mcast *m,
+		      const uint8_t group[static OMCI_MCAST_ADDR_LEN],
+		      uint16_t vid, unsigned int seconds, const char **why);
+
+/**
+ * omci_mcast_test_read() - The bytes of the group under test so far.
+ * @m: the agent, or NULL
+ * @bytes: the bytes since the test began, or of the whole test once it ended
+ * @running: whether the test still runs
+ *
+ * Return: %OMCI_OK, %OMCI_DECLINED before any test, or %OMCI_ERR_HW when the
+ * count could not be read.
+ */
+__must_check enum omci_status
+omci_mcast_test_read(struct omci_mcast *m, uint64_t *bytes, bool *running);
+
+/**
+ * omci_mcast_test_stop() - End the test: the group is left, and its count kept.
+ * @m: the agent, or NULL
+ */
+void omci_mcast_test_stop(struct omci_mcast *m);
 
 #endif

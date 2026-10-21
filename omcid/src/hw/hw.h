@@ -338,6 +338,8 @@ void omci_hw_vlan_fail_next(void);
 void omci_hw_vlan_reject_next(uint16_t key);
 
 void omci_hw_service_rules_set(const struct omci_svc_rule *rules, size_t n);
+
+void omci_hw_igmp_host_priority_set(bool host);
 #endif
 
 /* The GEM ports the PON MAC can carry. */
@@ -943,7 +945,7 @@ omci_hw_mcast_ds(const struct omci_hw_mcast_ds *rules, size_t n);
 #define OMCI_HW_MCAST_WATCH_MAX 16u
 
 /**
- * omci_hw_mcast_watch() - Count the downstream frames of a group, or stop
+ * omci_hw_mcast_watch() - Count the downstream bytes of a group, or stop
  *	(host backend).
  * @group: the group
  * @on: count (true) or stop
@@ -956,17 +958,17 @@ omci_hw_mcast_watch(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
 		    bool on);
 
 /**
- * omci_hw_mcast_seen() - The downstream frames of a counted group so far
+ * omci_hw_mcast_seen() - The downstream bytes of a counted group so far
  *	(host backend).
  * @group: the group
- * @frames: how many came
+ * @bytes: how many came
  *
  * Return: %OMCI_OK, %OMCI_DECLINED for a group not counted, or the failure
  * of the read.
  */
 __must_check enum omci_status
 omci_hw_mcast_seen(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
-		   uint64_t *frames);
+		   uint64_t *bytes);
 
 /**
  * omci_hw_mcast_port() - Set how the bridge snoops (host backend).
@@ -1072,7 +1074,7 @@ void omci_hw_mcast_send_fail_next(void);
 void omci_hw_mcast_ds_fail_next(void);
 
 void omci_hw_mcast_flow(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
-			uint64_t frames);
+			uint64_t bytes);
 
 void omci_hw_mcast_watch_fail_next(bool watch, bool seen);
 
@@ -1209,9 +1211,14 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  *	a backend that cannot tell, where the agent makes none
  * @mcast_ds: replace the downstream tags of the multicast VLANs; NULL in a
  *	backend without them
- * @mcast_watch: count the downstream frames of a group, or stop; NULL in a
+ * @mcast_watch: count the downstream bytes of a group, or stop; NULL in a
  *	backend that cannot, where no group is ever lost
- * @mcast_seen: the downstream frames of a counted group so far
+ * @mcast_seen: the downstream bytes of a counted group so far
+ * @igmp_host_priority: whether a person chose that the subscriber's IGMP and
+ *	MLD go up with the priority the subscriber gave them where the profile
+ *	leaves it to the subscriber (upstream IGMP tag control 0 and 3, G.988
+ *	9.3.27), rather than with one the operator's rules take, which the
+ *	agent finds; NULL in a backend without the choice, where it finds it
  * @filter_apply: replace the rules of the bridge port filters; NULL in a
  *	backend without them, where the filters are only kept
  * @mode_done: the data path is programmed again after a change of mode, the
@@ -1275,7 +1282,8 @@ struct omci_hw_ops {
 	enum omci_status (*mcast_ds)(const struct omci_hw_mcast_ds *rules,
 				     size_t n);
 	enum omci_status (*mcast_watch)(const uint8_t *group, bool on);
-	enum omci_status (*mcast_seen)(const uint8_t *group, uint64_t *frames);
+	enum omci_status (*mcast_seen)(const uint8_t *group, uint64_t *bytes);
+	bool (*igmp_host_priority)(void);
 	enum omci_status (*filter_apply)(const struct omci_hw_filter *rules,
 					 size_t n);
 	enum omci_status (*uni_rate)(uint64_t bytes_ps);

@@ -437,7 +437,7 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 	g_history.head = 0;
 	omci_engine_tap_set(eng, &tap_ops, ctl);
 	if (g_bus != NULL)
-		g_bus->open(mib, &counters, &g_history);
+		g_bus->open(mib, &counters, &g_history, omci_engine_mcast(eng));
 
 	size_t handled = 0;
 	size_t rejected = 0;

@@ -3703,6 +3703,27 @@ static size_t kernel_service_rules(struct omci_svc_rule *out, size_t cap)
 	return omci_svc_parse(text, out, cap);
 }
 
+/*
+ * The priority of the subscriber's IGMP and MLD where the profile leaves it
+ * to the subscriber: "host" in this file, which onu-apply writes from the
+ * settings, keeps the subscriber's own; anything else, or no file, has the
+ * agent give the one the operator's rules take.
+ */
+#define IGMP_PRIORITY_PATH OMCI_RUN_DIR "/igmp-priority"
+
+static bool kernel_igmp_host_priority(void)
+{
+	char text[8] = "";
+	FILE *f = fopen(IGMP_PRIORITY_PATH, "re");
+
+	if (f) {
+		text[fread(text, 1, sizeof(text) - 1, f)] = '\0';
+		fclose(f);
+	}
+	return strncmp(text, "host", 4) == 0 &&
+	       (text[4] == '\0' || text[4] == '\n');
+}
+
 static bool kernel_reprogram_due(void)
 {
 	const bool due = g_reprogram_due || rules_changed();
@@ -4120,9 +4141,10 @@ static enum omci_status kernel_mcast_ds(const struct omci_hw_mcast_ds *rules,
 }
 
 /*
- * The downstream frames of the groups the agent counts: a flower rule each
+ * The downstream bytes of the groups the agent counts: a flower rule each
  * on pon's ingress, with priorities from WATCH_PRIO and a handle of its
- * own, that passes the frames and only counts them. An IPv4 group is taken
+ * own, that passes the frames and only counts them, which the switch does
+ * in bytes for a rule that passes them. An IPv4 group is taken
  * by its address; an IPv6 group by the MAC address it maps to (RFC 2464),
  * as the switch compares no IPv6 address.
  */
@@ -4179,12 +4201,12 @@ static const uint8_t *nla_find(const uint8_t *p, const uint8_t *end,
 }
 
 /*
- * The frames the counting rule of priority @prio has passed: the counts of
+ * The bytes the counting rule of priority @prio has passed: the counts of
  * its action, which the kernel brings up to date from the switch as it
  * answers.
  */
-static int tc_watch_frames(int ifindex, unsigned int prio, uint16_t proto,
-			   uint64_t *frames)
+static int tc_watch_bytes(int ifindex, unsigned int prio, uint16_t proto,
+			  uint64_t *bytes)
 {
 	static uint8_t rsp[4096] __aligned(4);
 	uint8_t req[NL_HDRLEN + sizeof(struct tcmsg) + 16] __aligned(4);
@@ -4195,10 +4217,10 @@ static int tc_watch_frames(int ifindex, unsigned int prio, uint16_t proto,
 		.tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS),
 		.tcm_info = tc_info(prio, proto),
 	};
-	const uint8_t *a, *end, *pkt64;
+	const uint8_t *a, *end;
 	struct gnet_stats_basic basic;
 	size_t got = 0, off;
-	uint16_t len = 0, len64 = 0;
+	uint16_t len = 0;
 	int err;
 
 	memset(req, 0, sizeof(req));
@@ -4228,16 +4250,12 @@ static int tc_watch_frames(int ifindex, unsigned int prio, uint16_t proto,
 	if (!a)
 		return -EPROTO;
 
-	/* A count past 32 bits comes in an attribute of its own. */
 	end = a + len;
-	pkt64 = nla_find(a, end, TCA_STATS_PKT64, &len64);
 	a = nla_find(a, end, TCA_STATS_BASIC, &len);
 	if (!a || len < sizeof(basic))
 		return -EPROTO;
 	memcpy(&basic, a, sizeof(basic));
-	*frames = basic.packets;
-	if (pkt64 && len64 == sizeof(*frames))
-		memcpy(frames, pkt64, sizeof(*frames));
+	*bytes = basic.bytes;
 	return 0;
 }
 
@@ -4296,7 +4314,7 @@ static enum omci_status kernel_mcast_watch(const uint8_t *group, bool on)
 	if (err) {
 		if (err != g_mc_watch_err)
 			OMCI_WARN(
-				"mcast: the frames of a group cannot be counted: %s (%s)",
+				"mcast: the bytes of a group cannot be counted: %s (%s)",
 				strerror(-err), omci_hw_last_extack());
 		g_mc_watch_err = err;
 		return OMCI_ERR_HW;
@@ -4307,8 +4325,7 @@ static enum omci_status kernel_mcast_watch(const uint8_t *group, bool on)
 	return OMCI_OK;
 }
 
-static enum omci_status kernel_mcast_seen(const uint8_t *group,
-					  uint64_t *frames)
+static enum omci_status kernel_mcast_seen(const uint8_t *group, uint64_t *bytes)
 {
 	const int pon = (int)if_nametoindex(PON_IFNAME);
 	const size_t i = watch_slot(group);
@@ -4318,8 +4335,8 @@ static enum omci_status kernel_mcast_seen(const uint8_t *group,
 		return OMCI_DECLINED;
 	if (!pon)
 		return OMCI_ERR_HW;
-	err = tc_watch_frames(pon, WATCH_PRIO + (unsigned int)i,
-			      mapped_v4(group) ? ETH_P_IP : ETH_P_IPV6, frames);
+	err = tc_watch_bytes(pon, WATCH_PRIO + (unsigned int)i,
+			     mapped_v4(group) ? ETH_P_IP : ETH_P_IPV6, bytes);
 	if (err) {
 		OMCI_DEBUG("mcast: the count of a group could not be read: %s",
 			   strerror(-err));
@@ -5028,6 +5045,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.filter_apply = kernel_filter_apply,
 	.mcast_watch = kernel_mcast_watch,
 	.mcast_seen = kernel_mcast_seen,
+	.igmp_host_priority = kernel_igmp_host_priority,
 	.uni_rate = kernel_uni_rate,
 	.mode_done = kernel_mode_done,
 	.time_of_day = kernel_time_of_day,

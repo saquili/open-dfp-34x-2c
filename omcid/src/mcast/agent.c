@@ -20,6 +20,7 @@
 #include "omcid/array_size.h"
 #include "omcid/byteorder.h"
 #include "sys/log.h"
+#include "sys/publish.h"
 
 /*
  * The active groups, one per group, source and client; the VLANs of the
@@ -46,6 +47,17 @@
 #define LOST_SEC 10u
 
 /*
+ * The latest events and refused joins kept for the stick's panel
+ * (omci_mcast_publish()), and the most seconds a test of a group lasts
+ * (omci_mcast_test_start()), beyond which the agent ends it itself when
+ * nobody did after a few seconds more.
+ */
+#define MAX_EVENTS 32u
+#define MAX_REFUSED 16u
+#define TEST_MAX_SEC 30u
+#define TEST_GRACE_SEC 5u
+
+/*
  * The sizes of the rows of the active group lists (G.988 9.3.29) and of the
  * lost groups list (9.3.27).
  */
@@ -61,14 +73,15 @@ struct asker {
 
 /*
  * An active group: what the bridge forwards for a client, the VLAN of its
- * joins, the time of the latest, the imputed bandwidth and the package,
- * and when a preview ends; @held while the bridge has it.
+ * joins, the time of the first and of the latest, the imputed bandwidth and
+ * the package, and when a preview ends; @held while the bridge has it.
  */
 struct active {
 	struct asker asker;
 	uint8_t group[ADDR];
 	uint8_t source[ADDR];
 	uint8_t client[ADDR];
+	uint64_t since;
 	uint64_t joined;
 	uint32_t bandwidth;
 	uint16_t package;
@@ -102,14 +115,41 @@ struct count {
 };
 
 /*
- * A group whose downstream frames the backend counts: the count last read,
- * when it last grew or the counting began, and whether the group is lost.
+ * A group whose downstream bytes the backend counts: the count last read and
+ * when, the bits a second between the last two reads, when the count last
+ * grew or the counting began, and whether the group is lost.
  */
 struct watch {
 	uint8_t group[ADDR];
-	uint64_t frames;
+	uint64_t bytes;
+	uint64_t read_at;
+	uint64_t rate;
+	bool rated;
 	uint64_t since;
 	bool lost;
+};
+
+/* What happened, for the stick's panel. */
+enum event_kind { EV_JOIN, EV_LEAVE, EV_REJECT, EV_QUERY, EV_LOST, EV_BACK };
+
+static const char *const g_event[] = { "join",	"leave", "reject",
+				       "query", "lost",	 "back" };
+
+/* An event: when, its group (all zero for none) and VLAN (0 for none). */
+struct event {
+	uint64_t at;
+	uint8_t group[ADDR];
+	uint16_t vlan;
+	uint8_t kind;
+};
+
+/* A join the policy refused: when, the group, who asked, its VLAN, the verdict. */
+struct refusal {
+	uint64_t at;
+	uint8_t group[ADDR];
+	uint8_t client[ADDR];
+	uint16_t vlan;
+	uint8_t verdict;
 };
 
 struct omci_mcast {
@@ -157,6 +197,53 @@ struct omci_mcast {
 	struct omci_mcast_proxy proxy;
 	int function_asked;
 	int function_in_force;
+
+	/*
+	 * What the stick's panel shows (omci_mcast_publish()): the latest
+	 * events and refused joins, in rings; the counts since the start, of
+	 * new joins, leaves, refusals, the OLT's queries and the joins that
+	 * answered them; the OLT's latest query and its version.
+	 */
+	struct event events[MAX_EVENTS];
+	size_t event_next;
+	size_t n_events;
+	struct refusal refused[MAX_REFUSED];
+	size_t refused_next;
+	size_t n_refused;
+	struct {
+		uint32_t joins;
+		uint32_t leaves;
+		uint32_t rejected;
+		uint32_t queries;
+		uint32_t reports;
+	} tally;
+	bool queried;
+	uint64_t query_at;
+	uint8_t query_version;
+
+	/*
+	 * The priority the agent last gave a message upstream, -1 before
+	 * one, and the messages that went with the subscriber's priority
+	 * where the operator's rules took another (upstream_frame()).
+	 */
+	int pcp_given;
+	uint32_t pcp_dropped;
+
+	/*
+	 * A test of a group (omci_mcast_test_start()): whether one runs, its
+	 * group and VLAN, when the agent ends it, the count of the group's
+	 * bytes when it began, the bytes it counted when it ended, and
+	 * whether the agent started counting the group for it.
+	 */
+	struct {
+		bool on;
+		uint8_t group[ADDR];
+		uint16_t vid;
+		uint64_t end;
+		uint64_t base;
+		uint64_t bytes;
+		bool counted;
+	} test;
 };
 
 static struct omci_mcast g_mcast;
@@ -194,6 +281,11 @@ static const char *const g_verdict[] = {
 	"over the most groups",
 	"over the bandwidth",
 	"previewed too often",
+};
+
+/* The words of the refusals, as the stick's panel takes them. */
+static const char *const g_reason[] = {
+	"", "", "not_allowed", "max_groups", "max_bandwidth", "preview_over",
 };
 
 /*
@@ -569,6 +661,61 @@ static struct asker vlan_noted(const struct omci_mcast *m, const uint8_t *g,
 	return a.known ? a : any;
 }
 
+/* The VLAN of a join, for the panel: its VID when tagged, 0 otherwise. */
+static uint16_t vlan_of(const struct asker *a)
+{
+	return a->known && a->tagged ? a->vid : 0u;
+}
+
+/* Keep an event; @g NULL for none. */
+static void note(struct omci_mcast *m, enum event_kind kind, const uint8_t *g,
+		 uint16_t vlan)
+{
+	struct event *e = &m->events[m->event_next];
+
+	m->event_next = (m->event_next + 1u) % MAX_EVENTS;
+	if (m->n_events < MAX_EVENTS)
+		m->n_events++;
+	memset(e, 0, sizeof(*e));
+	e->at = m->now;
+	e->kind = (uint8_t)kind;
+	e->vlan = vlan;
+	if (g != NULL)
+		memcpy(e->group, g, ADDR);
+}
+
+/* Keep a join the policy refused, from @client (all zero when not known). */
+static void refuse(struct omci_mcast *m, const uint8_t *g,
+		   const uint8_t *client, uint16_t vlan, enum verdict v)
+{
+	struct refusal *r = &m->refused[m->refused_next];
+
+	m->refused_next = (m->refused_next + 1u) % MAX_REFUSED;
+	if (m->n_refused < MAX_REFUSED)
+		m->n_refused++;
+	r->at = m->now;
+	memcpy(r->group, g, ADDR);
+	memcpy(r->client, client, ADDR);
+	r->vlan = vlan;
+	r->verdict = (uint8_t)v;
+	m->tally.rejected++;
+	note(m, EV_REJECT, g, vlan);
+}
+
+/*
+ * Whether a refusal of @g was kept this second: the bridge snoops a join the
+ * agent refused as it heard it, and takes it back at once (look()).
+ */
+static bool refused_now(const struct omci_mcast *m, const uint8_t *g)
+{
+	bool found = false;
+
+	for (size_t k = 0; k < m->n_refused; k++)
+		found = found || (m->refused[k].at == m->now &&
+				  memcmp(m->refused[k].group, g, ADDR) == 0);
+	return found;
+}
+
 /*
  * The entry filed under the VLAN the OLT sends a channel in (alias_sync())
  * goes with the channel's last active entry.
@@ -629,6 +776,7 @@ static struct active *admit(struct omci_mcast *m, const uint8_t *g,
 		memcpy(x->group, g, ADDR);
 		memcpy(x->source, s, ADDR);
 		memcpy(x->client, client, ADDR);
+		x->since = m->now;
 		if (peer != NULL) {
 			x->bandwidth = peer->bandwidth;
 			x->package = peer->package;
@@ -768,20 +916,27 @@ static bool heard(struct omci_mcast *m, const struct omci_mcast_report *r,
 	}
 	for (uint8_t i = 0; i < r->n; i++) {
 		const struct omci_mcast_record *rec = &r->rec[i];
-		bool renew = false;
+		bool renew = false, again = false;
 		struct grant gr;
 		enum verdict v;
 		char text[40];
 
 		if (!rec->join) {
 			leave(m, rec->group, rec->source, r->client);
+			m->tally.leaves++;
+			note(m, EV_LEAVE, rec->group, vlan_of(&a));
 			left = true;
 			continue;
 		}
 		note_vlan(m, rec->group, rec->source, &a);
-		for (size_t k = 0; k < m->n_active; k++)
-			renew = renew || same_channel(&m->active[k], rec->group,
-						      rec->source);
+		for (size_t k = 0; k < m->n_active; k++) {
+			const bool same = same_channel(&m->active[k],
+						       rec->group, rec->source);
+
+			renew = renew || same;
+			again = again || (same && memcmp(m->active[k].client,
+							 r->client, ADDR) == 0);
+		}
 		v = judge(m, m->mib, rec->group, rec->source, &a,
 			  renew ? JUDGE_RENEW : JUDGE_NEW, &gr);
 		if (v == ALLOWED_OVER || v == DENIED_BANDWIDTH)
@@ -790,10 +945,17 @@ static bool heard(struct omci_mcast *m, const struct omci_mcast_report *r,
 			addr_text(rec->group, text);
 			OMCI_INFO("mcast: join of %s refused: %s", text,
 				  g_verdict[v]);
+			refuse(m, rec->group, r->client, vlan_of(&a), v);
 			refused = true;
 			continue;
 		}
 		monitors(m->mib, OMCI_MCAST_MONITOR_JOINS, 1, false);
+		if (again) {
+			m->tally.reports++;
+		} else {
+			m->tally.joins++;
+			note(m, EV_JOIN, rec->group, vlan_of(&a));
+		}
 		(void)admit(m, rec->group, rec->source, r->client, &a, &gr);
 		joined = true;
 	}
@@ -940,39 +1102,6 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 }
 
 /*
- * The frame that goes upstream: the tag the receive path took off put back,
- * then the upstream IGMP tag control of the profile (G.988 9.3.27): 0 the
- * extended VLAN tagging operation's rules, 1 a tag added, 2 the outer tag
- * replaced, 3 its VID replaced; with no tag to replace, one is added.
- * Returns its length, 0 when the rules discard it.
- */
-static size_t upstream_frame(const struct omci_mcast *m,
-			     const struct omci_hw_mcast_frame *f, uint8_t *out)
-{
-	size_t len = f->len;
-	unsigned int control = 0, tci = 0, have = 0;
-	uint16_t p;
-
-	memcpy(out, f->data, len);
-	if (f->tagged)
-		len = push_tag(out, len, 0x8100u, f->tci);
-	if (port_profile(m->mib, &p)) {
-		control = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
-				  OMCI_MCAST_PROFILE_US_TAG_CONTROL, 1);
-		tci = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
-			      OMCI_MCAST_PROFILE_US_TCI, 2);
-	}
-	if (control == 0u)
-		return tag_by_rules(out, len);
-	if (control == 1u || outer_tag(out, &have) == 0u)
-		return push_tag(out, len, 0x8100u, tci);
-	if (control == 3u)
-		tci = (have & 0xf000u) | (tci & 0x0fffu);
-	omci_be16_store(&out[14], tci);
-	return len;
-}
-
-/*
  * The GEM port a frame goes up: of the UNI's bridge, one that carries the
  * frame's VLAN, or every VLAN, upstream, and takes its priority, as the
  * switch and the mapper choose (gem.h, bridge.h). False without one.
@@ -1009,6 +1138,140 @@ static bool gem_for(const uint8_t *f, uint16_t *out)
 	return false;
 }
 
+/* The upstream IGMP tag control of the profile and its TCI; 0 without a profile. */
+static unsigned int us_control(const struct omci_mcast *m, unsigned int *tci)
+{
+	uint16_t p;
+
+	*tci = 0;
+	if (!port_profile(m->mib, &p))
+		return 0;
+	*tci = attr_be(m->mib, OMCI_MCAST_PROFILE, p, OMCI_MCAST_PROFILE_US_TCI,
+		       2);
+	return attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+		       OMCI_MCAST_PROFILE_US_TAG_CONTROL, 1);
+}
+
+/*
+ * The frame that goes upstream: the tag the receive path took off put back,
+ * the priority of the subscriber's C-tag made @pcp unless it is negative,
+ * then the upstream IGMP tag control of the profile (G.988 9.3.27): 0 the
+ * extended VLAN tagging operation's rules, 1 a tag added, 2 the outer tag
+ * replaced, 3 its VID replaced; with no tag to replace, one is added.
+ * Returns its length, 0 when the rules discard it.
+ */
+static size_t tag_up(const struct omci_mcast *m,
+		     const struct omci_hw_mcast_frame *f, int pcp, uint8_t *out)
+{
+	size_t len = f->len;
+	unsigned int control, tci, have = 0;
+
+	memcpy(out, f->data, len);
+	if (f->tagged)
+		len = push_tag(out, len, 0x8100u, f->tci);
+	if (pcp >= 0 && outer_tag(out, &have) == 0x8100u)
+		omci_be16_store(&out[14],
+				(unsigned int)pcp << 13 | (have & 0x1fffu));
+	control = us_control(m, &tci);
+	if (control == 0u)
+		return tag_by_rules(out, len);
+	if (control == 1u || outer_tag(out, &have) == 0u)
+		return push_tag(out, len, 0x8100u, tci);
+	if (control == 3u)
+		tci = (have & 0xf000u) | (tci & 0x0fffu);
+	omci_be16_store(&out[14], tci);
+	return len;
+}
+
+/*
+ * The priorities to try for a message of the subscriber's C-tag of VID @vid
+ * and priority @own: its own, then those the rules in force name for the
+ * VID, in their order, then the others from 0; all eight, each once.
+ */
+static void priorities(unsigned int vid, unsigned int own, uint8_t out[8])
+{
+	const struct omci_hw_vlan_xlate *r;
+	const size_t n = omci_vlan_in_force(&r);
+	unsigned int seen = 1u << own;
+	size_t k = 0;
+
+	out[k++] = (uint8_t)own;
+	for (size_t i = 0; i < n; i++)
+		if (r[i].kind != OMCI_HW_VLAN_DISCARD_VID &&
+		    r[i].kind != OMCI_HW_VLAN_DISCARD_TAGGED &&
+		    r[i].match_has_pri && r[i].match_cvid == vid &&
+		    !((seen >> r[i].match_pri) & 1u)) {
+			seen |= 1u << r[i].match_pri;
+			out[k++] = r[i].match_pri;
+		}
+	for (unsigned int p = 0; p < 8u; p++)
+		if (!((seen >> p) & 1u)) {
+			seen |= 1u << p;
+			out[k++] = (uint8_t)p;
+		}
+}
+
+/* The frame for priority @pcp, when the rules and a GEM port take it: its length, or 0. */
+static size_t taken(const struct omci_mcast *m,
+		    const struct omci_hw_mcast_frame *f, int pcp, uint8_t *out,
+		    uint16_t *port)
+{
+	const size_t len = tag_up(m, f, pcp, out);
+
+	return len != 0u && gem_for(out, port) ? len : 0u;
+}
+
+/*
+ * The frame that goes upstream (tag_up()) and the GEM port that carries it
+ * (gem_for()). Where the profile leaves the priority to the subscriber
+ * (control 0 and 3) and the message has a C-tag, a priority the operator's
+ * rules or the GEM ports do not take would lose it on the way: the agent
+ * gives it its own priority when they take that, or else the first they
+ * take of priorities(), unless a person chose the subscriber's own
+ * (igmp_host_priority), when such a message is counted as dropped. Returns
+ * the frame's length, 0 when none goes, @discarded saying that the rules
+ * discard it rather than that no GEM port carries it.
+ */
+static size_t upstream_frame(struct omci_mcast *m,
+			     const struct omci_hw_mcast_frame *f, uint8_t *out,
+			     uint16_t *port, bool *discarded)
+{
+	const struct omci_hw_ops *hw = omci_hw();
+	unsigned int control, tci = 0, own = 0;
+	uint8_t pri[8];
+	bool host, ctag;
+	size_t len;
+
+	control = us_control(m, &tci);
+	if (f->tagged)
+		own = f->tci;
+	ctag = f->tagged ||
+	       (f->len >= 18u && outer_tag(f->data, &own) == 0x8100u);
+	len = taken(m, f, -1, out, port);
+	*discarded = len == 0u && tag_up(m, f, -1, out) == 0u;
+	if ((control != 0u && control != 3u) || !ctag)
+		return len;
+	host = hw->igmp_host_priority != NULL && hw->igmp_host_priority();
+	if (len != 0u) {
+		if (!host)
+			m->pcp_given = (int)(own >> 13);
+		return len;
+	}
+	priorities(own & 0x0fffu, own >> 13, pri);
+	for (size_t k = 1; k < sizeof(pri); k++) {
+		len = taken(m, f, pri[k], out, port);
+		if (len == 0u)
+			continue;
+		if (host) {
+			m->pcp_dropped++;
+			return 0;
+		}
+		m->pcp_given = pri[k];
+		return len;
+	}
+	return 0;
+}
+
 /*
  * Send a message upstream, within the profile's upstream IGMP rate, in
  * messages a second (G.988 9.3.27): those over it are dropped. Return:
@@ -1019,14 +1282,19 @@ static bool forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f,
 		    bool warn)
 {
 	uint8_t out[OMCI_HW_MCAST_FRAME_MAX + 8u];
+	bool discarded;
 	uint32_t rate = 0;
 	uint16_t p, port;
 	size_t len;
 
-	len = upstream_frame(m, f, out);
+	len = upstream_frame(m, f, out, &port, &discarded);
 	if (len == 0u) {
-		OMCI_DEBUG(
-			"mcast: the VLAN rules discard a message in a VLAN they do not take");
+		if (discarded)
+			OMCI_DEBUG(
+				"mcast: the VLAN rules discard a message in a VLAN they do not take");
+		else if (warn)
+			OMCI_WARN(
+				"mcast: no GEM port carries the message upstream; dropped");
 		return false;
 	}
 	if (port_profile(m->mib, &p))
@@ -1040,12 +1308,6 @@ static bool forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f,
 		return false;
 	m->rate_used++;
 
-	if (!gem_for(out, &port)) {
-		if (warn)
-			OMCI_WARN(
-				"mcast: no GEM port carries the message upstream; dropped");
-		return false;
-	}
 	if (omci_hw()->mcast_send(port, out, len) != OMCI_OK) {
 		if (warn)
 			OMCI_WARN(
@@ -1206,12 +1468,16 @@ static bool look(struct omci_mcast *m)
 
 			if (x != NULL)
 				x->held = true;
+			m->tally.joins++;
+			note(m, EV_JOIN, g[i].group, vlan_of(&a));
 			continue;
 		}
 		(void)!omci_hw()->mcast_group_del(&g[i]);
 		addr_text(g[i].group, text);
 		OMCI_INFO("mcast: %s taken back from the bridge: %s", text,
 			  g_verdict[v]);
+		if (!refused_now(m, g[i].group))
+			refuse(m, g[i].group, none, vlan_of(&a), v);
 	}
 	for (size_t i = m->n_active; i-- > 0;)
 		if (!m->active[i].held)
@@ -1580,14 +1846,23 @@ static bool group_lost(const struct omci_mcast *m, const uint8_t *g)
 	return w != NULL && w->lost;
 }
 
+/* Whether a test of a group runs for @g. */
+static bool tested(const struct omci_mcast *m, const uint8_t *g)
+{
+	return m->test.on && memcmp(m->test.group, g, ADDR) == 0;
+}
+
 /*
  * Whether a group is to be counted: the bridge forwards it for an active
- * entry that a row of a dynamic access control list took.
+ * entry that a row of a dynamic access control list took, or a test of it
+ * runs.
  */
 static bool wanted(const struct omci_mcast *m, const uint8_t *g)
 {
 	uint16_t p, v;
 
+	if (tested(m, g))
+		return true;
 	for (size_t i = 0; i < m->n_active; i++)
 		if (m->active[i].held &&
 		    memcmp(m->active[i].group, g, ADDR) == 0 &&
@@ -1596,14 +1871,25 @@ static bool wanted(const struct omci_mcast *m, const uint8_t *g)
 	return false;
 }
 
+/* The VLAN of the joins of a group, for the panel; 0 when not known. */
+static uint16_t group_vlan(const struct omci_mcast *m, const uint8_t *g)
+{
+	size_t i = 0;
+
+	while (i < m->n_active && memcmp(m->active[i].group, g, ADDR) != 0)
+		i++;
+	return i < m->n_active ? vlan_of(&m->active[i].asker) : 0u;
+}
+
 /* Note whether a counted group is lost, and say when that changes. */
-static void set_lost(struct watch *w, bool lost)
+static void set_lost(struct omci_mcast *m, struct watch *w, bool lost)
 {
 	char text[40];
 
 	if (w->lost == lost)
 		return;
 	w->lost = lost;
+	note(m, lost ? EV_LOST : EV_BACK, w->group, group_vlan(m, w->group));
 	addr_text(w->group, text);
 	if (lost)
 		OMCI_INFO("mcast: %s lost: no frame downstream for %u s", text,
@@ -1613,9 +1899,11 @@ static void set_lost(struct watch *w, bool lost)
 }
 
 /*
- * Count the downstream frames of the groups to be counted, as many as the
- * backend can, and judge a group lost when none came for LOST_SEC (G.988
- * 9.3.27). A backend that cannot count loses no group.
+ * Count the downstream bytes of the groups to be counted, as many as the
+ * backend can, with the bits a second between two reads, and judge a group
+ * lost when none came for LOST_SEC (G.988 9.3.27); not one under test,
+ * whose stream the test is to find out about. A backend that cannot count
+ * loses no group.
  */
 static void watch(struct omci_mcast *m)
 {
@@ -1640,10 +1928,9 @@ static void watch(struct omci_mcast *m)
 			continue;
 		}
 		w = &m->watches[m->n_watches++];
+		memset(w, 0, sizeof(*w));
 		memcpy(w->group, g, ADDR);
-		w->frames = 0;
 		w->since = m->now;
-		w->lost = false;
 	}
 	if (short_now && !m->watch_short)
 		OMCI_WARN(
@@ -1651,18 +1938,150 @@ static void watch(struct omci_mcast *m)
 	m->watch_short = short_now;
 	for (size_t i = 0; i < m->n_watches; i++) {
 		struct watch *w = &m->watches[i];
-		uint64_t frames = 0;
+		uint64_t bytes = 0;
 
-		if (hw->mcast_seen(w->group, &frames) != OMCI_OK)
+		if (tested(m, w->group) ||
+		    hw->mcast_seen(w->group, &bytes) != OMCI_OK)
 			continue;
-		if (frames != w->frames) {
-			w->frames = frames;
+		if (w->read_at != 0u && m->now > w->read_at &&
+		    bytes >= w->bytes) {
+			w->rate =
+				(bytes - w->bytes) * 8u / (m->now - w->read_at);
+			w->rated = true;
+		}
+		w->read_at = m->now;
+		if (bytes != w->bytes) {
+			w->bytes = bytes;
 			w->since = m->now;
-			set_lost(w, false);
+			set_lost(m, w, false);
 		} else if (m->now - w->since >= LOST_SEC) {
-			set_lost(w, true);
+			set_lost(m, w, true);
 		}
 	}
+}
+
+/*
+ * A join or a leave of the group under test, from the agent itself, as the
+ * proxy speaks (message.h): from the stick's address and the profile's
+ * upstream IGMP address, in its IGMP version (2 when it names none of IGMP),
+ * tagged with the test's VLAN, if any, and sent upstream as a subscriber's
+ * message would be. Return: whether it was sent.
+ */
+static bool test_message(struct omci_mcast *m, bool join)
+{
+	struct omci_hw_mcast_frame f = { .tagged = m->test.vid != 0u,
+					 .tci = m->test.vid };
+	struct omci_mcast_env env = { .version = 2 };
+	struct omci_mcast_item it = { .any = join };
+	uint8_t querier[4];
+	size_t used;
+	uint16_t p;
+
+	if (omci_hw()->mcast_mac(env.mac) != OMCI_OK)
+		return false;
+	if (port_profile(m->mib, &p)) {
+		const uint32_t v = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+					   OMCI_MCAST_PROFILE_IGMP_VERSION, 1);
+
+		if (v >= 1u && v <= 3u)
+			env.version = (uint8_t)v;
+		omci_be32_store(querier,
+				attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+					OMCI_MCAST_PROFILE_QUERIER, 4));
+		if (omci_be32(querier) != 0u)
+			omci_mcast_addr_set_v4(env.source, querier);
+	}
+	memcpy(it.group, m->test.group, ADDR);
+	f.len = (uint16_t)omci_mcast_build_report(f.data, sizeof(f.data), &env,
+						  true, &it, 1, &used);
+	return f.len != 0u && forward(m, &f, true);
+}
+
+enum omci_status omci_mcast_test_start(struct omci_mcast *m,
+				       const uint8_t group[static ADDR],
+				       uint16_t vid, unsigned int seconds,
+				       const char **why)
+{
+	static const uint8_t none[ADDR];
+	const struct omci_hw_ops *hw = omci_hw();
+	const struct asker a = { .known = true,
+				 .tagged = vid != 0u,
+				 .vid = vid };
+	struct watch *w;
+	struct grant gr;
+	enum verdict v;
+
+	*why = "";
+	if (m == NULL || m->mib == NULL || !omci_mcast_addr_v4(group) ||
+	    (group[12] & 0xf0u) != 0xe0u || vid > 4094u || seconds == 0u ||
+	    seconds > TEST_MAX_SEC)
+		return OMCI_ERR_INVAL;
+	if (m->test.on)
+		return OMCI_ERR_BUSY;
+	if (hw->mcast_send == NULL || hw->mcast_mac == NULL ||
+	    hw->mcast_watch == NULL || hw->mcast_seen == NULL)
+		return OMCI_ERR_IO;
+	v = judge(m, m->mib, group, none, &a, JUDGE_NEW, &gr);
+	if (v != ALLOWED && v != ALLOWED_OVER) {
+		*why = g_reason[v];
+		return OMCI_DECLINED;
+	}
+	memset(&m->test, 0, sizeof(m->test));
+	memcpy(m->test.group, group, ADDR);
+	m->test.vid = vid;
+	m->test.end = m->now + seconds + TEST_GRACE_SEC;
+	if (watch_of(m, group) == NULL) {
+		if (m->n_watches == OMCI_HW_MCAST_WATCH_MAX ||
+		    hw->mcast_watch(group, true) != OMCI_OK)
+			return OMCI_ERR_NOMEM;
+		w = &m->watches[m->n_watches++];
+		memset(w, 0, sizeof(*w));
+		memcpy(w->group, group, ADDR);
+		w->since = m->now;
+		m->test.counted = true;
+	}
+	(void)!hw->mcast_seen(group, &m->test.base);
+	m->test.on = true;
+	if (test_message(m, true))
+		return OMCI_OK;
+	omci_mcast_test_stop(m);
+	return OMCI_ERR_HW;
+}
+
+enum omci_status omci_mcast_test_read(struct omci_mcast *m, uint64_t *bytes,
+				      bool *running)
+{
+	uint64_t now = 0;
+
+	*bytes = 0;
+	*running = false;
+	if (m == NULL || (!m->test.on && m->test.end == 0u))
+		return OMCI_DECLINED;
+	*running = m->test.on;
+	if (!m->test.on) {
+		*bytes = m->test.bytes;
+		return OMCI_OK;
+	}
+	if (omci_hw()->mcast_seen(m->test.group, &now) != OMCI_OK)
+		return OMCI_ERR_HW;
+	*bytes = now >= m->test.base ? now - m->test.base : 0u;
+	return OMCI_OK;
+}
+
+void omci_mcast_test_stop(struct omci_mcast *m)
+{
+	bool running;
+
+	if (m == NULL || !m->test.on)
+		return;
+	(void)!omci_mcast_test_read(m, &m->test.bytes, &running);
+	(void)test_message(m, false);
+	m->test.on = false;
+	for (size_t i = 0; i < m->n_watches && m->test.counted; i++)
+		if (memcmp(m->watches[i].group, m->test.group, ADDR) == 0 &&
+		    !wanted(m, m->test.group) &&
+		    omci_hw()->mcast_watch(m->test.group, false) == OMCI_OK)
+			m->watches[i] = m->watches[--m->n_watches];
 }
 
 /*
@@ -1873,8 +2292,14 @@ void omci_mcast_service(struct omci_mcast *m, struct omci_mib *mib,
 					     &r))
 			continue;
 		if (f.from_pon) {
-			if (r.kind == OMCI_MCAST_KIND_QUERY &&
-			    pr.function != OMCI_MCAST_FUNCTION_SNOOPING)
+			if (r.kind != OMCI_MCAST_KIND_QUERY)
+				continue;
+			m->tally.queries++;
+			m->queried = true;
+			m->query_at = m->now;
+			m->query_version = r.version;
+			note(m, EV_QUERY, r.query_group, r.tagged ? r.vid : 0u);
+			if (pr.function != OMCI_MCAST_FUNCTION_SNOOPING)
 				omci_mcast_proxy_query(&m->proxy, &r, m->now);
 			continue;
 		}
@@ -1934,6 +2359,8 @@ void omci_mcast_tick(struct omci_mcast *m, struct omci_mib *mib,
 			recheck(m);
 	}
 	omci_mcast_service(m, mib, now_sec);
+	if (m->test.on && now_sec >= m->test.end)
+		omci_mcast_test_stop(m);
 	watch(m);
 }
 
@@ -1946,6 +2373,7 @@ enum omci_status omci_mcast_init(struct omci_mcast **out)
 	memset(&g_mcast, 0, sizeof(g_mcast));
 	omci_mcast_proxy_reset(&g_mcast.proxy);
 	g_mcast.upto = SIZE_MAX;
+	g_mcast.pcp_given = -1;
 	g_mcast_taken = true;
 	*out = &g_mcast;
 	return OMCI_OK;
@@ -2135,4 +2563,289 @@ size_t omci_mcast_lost_profiles(const struct omci_mcast *m, uint16_t *out,
 			out[n++] = p;
 	}
 	return n;
+}
+
+/* ---- What the stick's panel shows ----------------------------------- */
+
+static uint32_t clamp32(uint64_t v)
+{
+	return v > UINT32_MAX ? UINT32_MAX : (uint32_t)v;
+}
+
+/* An address as text, or none for one all zero. */
+static void put_addr_text(const struct omci_publish_ops *ops, void *ctx,
+			  const char *name, const uint8_t *a)
+{
+	static const uint8_t zero[ADDR];
+	char text[40];
+
+	if (memcmp(a, zero, ADDR) == 0) {
+		ops->none(ctx, name);
+		return;
+	}
+	addr_text(a, text);
+	ops->str(ctx, name, text);
+}
+
+/* A number, or none when it is not @known. */
+static void put_known(const struct omci_publish_ops *ops, void *ctx,
+		      const char *name, uint32_t v, bool known)
+{
+	if (known)
+		ops->num(ctx, name, v);
+	else
+		ops->none(ctx, name);
+}
+
+/* A VLAN of a row: 1 to 4094, or none. */
+static void put_vlan(const struct omci_publish_ops *ops, void *ctx,
+		     const char *name, uint32_t vid)
+{
+	put_known(ops, ctx, name, vid, vid >= 1u && vid <= 4094u);
+}
+
+/*
+ * The rows of the dynamic access control lists of the subscriber's
+ * packages, each profile once, as the groups the policy allows.
+ */
+static void put_allowed(const struct omci_mcast *m, uint16_t sub,
+			const struct omci_publish_ops *ops, void *ctx)
+{
+	const struct asker any = { .known = false };
+	struct omci_mcast_acl_row rows[OMCI_MCAST_ACL_ROWS];
+	struct candidates c;
+
+	candidates_of(m->mib, sub, &any, &c);
+	ops->open(ctx, "allowed", true);
+	for (size_t k = 0; k < c.n; k++) {
+		bool seen = false;
+		size_t n;
+
+		for (size_t j = 0; j < k; j++)
+			seen = seen || c.pkg[j].profile == c.pkg[k].profile;
+		if (seen)
+			continue;
+		n = omci_mcast_acl_read(m->mib, c.pkg[k].profile,
+					OMCI_MCAST_PROFILE_DYNAMIC_ACL, rows,
+					ARRAY_SIZE(rows));
+		for (size_t r = 0; r < n; r++) {
+			ops->open(ctx, NULL, false);
+			put_addr_text(ops, ctx, "from", rows[r].first);
+			put_addr_text(ops, ctx, "to", rows[r].last);
+			put_vlan(ops, ctx, "vlan", rows[r].vlan);
+			put_known(ops, ctx, "bandwidth_bps",
+				  clamp32((uint64_t)rows[r].bandwidth * 8u),
+				  rows[r].bandwidth != 0u);
+			ops->flag(ctx, "preview", rows[r].preview_length != 0u);
+			ops->close(ctx, false);
+		}
+	}
+	ops->close(ctx, true);
+}
+
+/*
+ * What the OLT set in the multicast operations profile and the subscriber's
+ * config info: the timers 0 leaves to the defaults of IGMP (RFC 3376), as
+ * the bridge and the proxy take them; the VLAN of the groups towards the
+ * host, of a profile that tags them downstream.
+ */
+static void put_policy(const struct omci_mcast *m,
+		       const struct omci_publish_ops *ops, void *ctx)
+{
+	static const char *const mode[] = { "snoop", "snoop_proxy", "proxy" };
+	struct omci_hw_mcast_ds d = { .vid = 0 };
+	uint8_t tci[3] = { 0 };
+	uint32_t fn, groups, bw, v;
+	size_t len = 0;
+	uint16_t p, sub;
+
+	if (m->mib == NULL || !port_profile(m->mib, &p) ||
+	    !subscriber(m->mib, &sub)) {
+		ops->none(ctx, "policy");
+		return;
+	}
+	ops->open(ctx, "policy", false);
+	ops->num(ctx, "igmp_version",
+		 attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+			 OMCI_MCAST_PROFILE_IGMP_VERSION, 1));
+	fn = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+		     OMCI_MCAST_PROFILE_IGMP_FUNCTION, 1);
+	ops->str(ctx, "mode", mode[fn < ARRAY_SIZE(mode) ? fn : 2u]);
+	ops->flag(ctx, "fast_leave",
+		  attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+			  OMCI_MCAST_PROFILE_IMMEDIATE_LEAVE, 1) != 0u);
+	groups = attr_be(m->mib, OMCI_MCAST_SUBSCRIBER, sub,
+			 OMCI_MCAST_SUBSCRIBER_MAX_GROUPS, 2);
+	bw = attr_be(m->mib, OMCI_MCAST_SUBSCRIBER, sub,
+		     OMCI_MCAST_SUBSCRIBER_MAX_BANDWIDTH, 4);
+	put_known(ops, ctx, "max_groups", groups, groups != 0u);
+	put_known(ops, ctx, "max_bandwidth_bps", clamp32((uint64_t)bw * 8u),
+		  bw != 0u);
+	v = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+		    OMCI_MCAST_PROFILE_ROBUSTNESS, 1);
+	ops->num(ctx, "robustness", v != 0u ? v : 2u);
+	v = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+		    OMCI_MCAST_PROFILE_QUERY_INTERVAL, 4);
+	ops->num(ctx, "query_interval_s", v != 0u ? v : 125u);
+	v = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+		    OMCI_MCAST_PROFILE_QUERY_RESPONSE, 4);
+	ops->num(ctx, "query_response_ms",
+		 clamp32((uint64_t)(v != 0u ? v : 100u) * 100u));
+	v = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+		    OMCI_MCAST_PROFILE_LAST_MEMBER, 4);
+	ops->num(ctx, "last_member_ms",
+		 clamp32((uint64_t)(v != 0u ? v : 10u) * 100u));
+	(void)!omci_mib_attr_get(m->mib, OMCI_MCAST_PROFILE, p,
+				 OMCI_MCAST_PROFILE_DS_TCI, tci, sizeof(tci),
+				 &len);
+	put_vlan(ops, ctx, "host_vlan",
+		 ds_tag(tci, OMCI_MCAST_VID_ANY, &d) &&
+				 d.action != OMCI_HW_MCAST_DS_STRIP ?
+			 d.tci & 0x0fffu :
+			 0u);
+	put_allowed(m, sub, ops, ctx);
+	ops->open(ctx, "static", true);
+	for (size_t k = 0; k < m->n_statics; k++) {
+		ops->open(ctx, NULL, false);
+		put_addr_text(ops, ctx, "group", m->statics[k].group);
+		put_vlan(ops, ctx, "vlan", m->statics[k].vid);
+		ops->close(ctx, false);
+	}
+	ops->close(ctx, true);
+	ops->close(ctx, false);
+}
+
+/* The groups the bridge forwards for the subscriber side, an entry each. */
+static void put_groups(const struct omci_mcast *m,
+		       const struct omci_publish_ops *ops, void *ctx)
+{
+	ops->open(ctx, "groups", true);
+	for (size_t i = 0; i < m->n_active; i++) {
+		const struct active *x = &m->active[i];
+		const struct watch *w = watch_of(m, x->group);
+
+		if (!x->held)
+			continue;
+		ops->open(ctx, NULL, false);
+		put_addr_text(ops, ctx, "group", x->group);
+		put_addr_text(ops, ctx, "source", x->source);
+		put_vlan(ops, ctx, "vlan", vlan_of(&x->asker));
+		put_addr_text(ops, ctx, "client", x->client);
+		ops->num(ctx, "since_s", clamp32(x->since));
+		put_known(ops, ctx, "rate_bps",
+			  w != NULL ? clamp32(w->rate) : 0u,
+			  w != NULL && w->rated);
+		ops->close(ctx, false);
+	}
+	ops->close(ctx, true);
+}
+
+/* The refused joins and the events, the latest first. */
+static void put_rings(const struct omci_mcast *m,
+		      const struct omci_publish_ops *ops, void *ctx)
+{
+	ops->open(ctx, "rejected", true);
+	for (size_t k = 1; k <= m->n_refused; k++) {
+		const struct refusal *r =
+			&m->refused[(m->refused_next + MAX_REFUSED - k) %
+				    MAX_REFUSED];
+
+		ops->open(ctx, NULL, false);
+		ops->num(ctx, "at_s", clamp32(r->at));
+		put_addr_text(ops, ctx, "group", r->group);
+		put_vlan(ops, ctx, "vlan", r->vlan);
+		put_addr_text(ops, ctx, "client", r->client);
+		ops->str(ctx, "reason", g_reason[r->verdict]);
+		ops->close(ctx, false);
+	}
+	ops->close(ctx, true);
+	ops->open(ctx, "log", true);
+	for (size_t k = 1; k <= m->n_events; k++) {
+		const struct event *e =
+			&m->events[(m->event_next + MAX_EVENTS - k) %
+				   MAX_EVENTS];
+
+		ops->open(ctx, NULL, false);
+		ops->num(ctx, "at_s", clamp32(e->at));
+		ops->str(ctx, "event", g_event[e->kind]);
+		put_addr_text(ops, ctx, "group", e->group);
+		put_vlan(ops, ctx, "vlan", e->vlan);
+		ops->close(ctx, false);
+	}
+	ops->close(ctx, true);
+}
+
+/*
+ * Who gives the subscriber's IGMP its priority upstream (upstream_frame()):
+ * the profile's tag at control 1 and 2; at 0 and 3 the agent, with the
+ * priority it last gave, or the subscriber, when a person chose that.
+ */
+static void put_priority(const struct omci_mcast *m,
+			 const struct omci_publish_ops *ops, void *ctx)
+{
+	const struct omci_hw_ops *hw = omci_hw();
+	const bool host = hw->igmp_host_priority != NULL &&
+			  hw->igmp_host_priority();
+	unsigned int control, tci;
+	uint16_t p;
+
+	if (m->mib == NULL || !port_profile(m->mib, &p)) {
+		ops->none(ctx, "priority");
+		return;
+	}
+	control = us_control(m, &tci);
+	if (control > 3u)
+		control = 0;
+	ops->open(ctx, "priority", false);
+	ops->num(ctx, "control", control);
+	if (control == 1u || control == 2u) {
+		ops->str(ctx, "by", "olt");
+		ops->num(ctx, "pcp", tci >> 13);
+	} else {
+		ops->str(ctx, "by", host ? "host" : "stick");
+		put_known(ops, ctx, "pcp", (uint32_t)m->pcp_given,
+			  !host && m->pcp_given >= 0);
+	}
+	ops->flag(ctx, "auto", !host);
+	ops->num(ctx, "dropped", m->pcp_dropped);
+	ops->close(ctx, false);
+}
+
+void omci_mcast_publish(const struct omci_mcast *m,
+			const struct omci_publish_ops *ops, void *ctx)
+{
+	static const struct omci_mcast idle;
+
+	if (m == NULL)
+		m = &idle;
+	ops->num(ctx, "now_s", clamp32(m->now));
+	put_policy(m, ops, ctx);
+	put_groups(m, ops, ctx);
+	put_rings(m, ops, ctx);
+	ops->open(ctx, "lost", true);
+	for (size_t i = 0; i < m->n_watches; i++) {
+		if (!m->watches[i].lost)
+			continue;
+		ops->open(ctx, NULL, false);
+		put_addr_text(ops, ctx, "group", m->watches[i].group);
+		ops->num(ctx, "since_s", clamp32(m->watches[i].since));
+		ops->close(ctx, false);
+	}
+	ops->close(ctx, true);
+	ops->open(ctx, "counters", false);
+	ops->num(ctx, "joins", m->tally.joins);
+	ops->num(ctx, "leaves", m->tally.leaves);
+	ops->num(ctx, "rejected", m->tally.rejected);
+	ops->num(ctx, "queries", m->tally.queries);
+	ops->num(ctx, "reports", m->tally.reports);
+	ops->close(ctx, false);
+	if (m->queried) {
+		ops->open(ctx, "querier", false);
+		ops->num(ctx, "last_s", clamp32(m->query_at));
+		ops->num(ctx, "version", m->query_version);
+		ops->close(ctx, false);
+	} else {
+		ops->none(ctx, "querier");
+	}
+	put_priority(m, ops, ctx);
 }

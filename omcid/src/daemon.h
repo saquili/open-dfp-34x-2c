@@ -41,13 +41,15 @@ bool omcid_keep(const char *path);
 struct omci_mib;
 struct omci_ctl_counters;
 struct omci_history;
+struct omci_mcast;
 
 /**
  * struct omcid_bus - Where the daemon publishes what it holds (ADR 0011):
  *	ubus on the board (target/bus_ubus.c).
- * @open: connect, and publish from then on @mib, @counters and the
- *	conversation with the OLT, @history; a bus that is not there yet is
- *	connected to later by @fd
+ * @open: connect, and publish from then on @mib, @counters, the
+ *	conversation with the OLT, @history, and what the multicast agent,
+ *	@mcast, holds of television, which the bus may also have test a
+ *	group; a bus that is not there yet is connected to later by @fd
  * @fd: the descriptor to wait on, or -1 while there is no connection
  * @handle: answer what waits on @fd
  * @close: go away
@@ -55,7 +57,8 @@ struct omci_history;
 struct omcid_bus {
 	void (*open)(const struct omci_mib *mib,
 		     const struct omci_ctl_counters *counters,
-		     const struct omci_history *history);
+		     const struct omci_history *history,
+		     struct omci_mcast *mcast);
 	int (*fd)(void);
 	void (*handle)(void);
 	void (*close)(void);

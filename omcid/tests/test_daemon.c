@@ -1050,16 +1050,19 @@ static void test_a_kept_file_it_cannot_go_on_from(void)
 static unsigned int g_bus_opens, g_bus_handles, g_bus_closes;
 static const struct omci_mib *g_bus_mib;
 static const struct omci_history *g_bus_history;
+static struct omci_mcast *g_bus_mcast;
 static int g_bus_pipe[2] = { -1, -1 };
 
 static void fake_open(const struct omci_mib *mib,
 		      const struct omci_ctl_counters *counters,
-		      const struct omci_history *history)
+		      const struct omci_history *history,
+		      struct omci_mcast *mcast)
 {
 	(void)counters;
 	g_bus_opens++;
 	g_bus_mib = mib;
 	g_bus_history = history;
+	g_bus_mcast = mcast;
 }
 
 static int fake_fd(void)
@@ -1106,6 +1109,7 @@ static void test_the_bus_is_served_in_the_loop(void)
 	CHECK_EQ(run(&g, g.in_r, g_sock, 4, g_argv_held), EXIT_SUCCESS);
 	CHECK_EQ(g_bus_opens, 1u);
 	CHECK(g_bus_mib != NULL);
+	CHECK(g_bus_mcast != NULL);
 	CHECK_EQ(g_bus_handles, 1u);
 
 	/*

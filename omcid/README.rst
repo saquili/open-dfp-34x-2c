@@ -217,6 +217,50 @@ only the GEM ports it knows and the stick had none of those in the
 provisioning; and the MLD proxy, the recorded policy having no IPv6 group.
 The proxy's messages are tested on the host for both.
 
+Television on the stick's panel
+===============================
+
+**The priority of IGMP.** At the profile's upstream IGMP tag control 1 and 2
+the OLT's tag gives the subscriber's messages their priority. At 0 (the VLAN
+rules) and 3 (the VID replaced) the subscriber's own goes up, and where the
+operator's rules take the VLAN at one priority alone, or the GEM ports of the
+VLAN carry some priorities alone, a message of another one is lost on the
+way. The agent gives such a message, one with a C-tag, its own priority when
+the rules and a GEM port take that, and otherwise the first they take of the
+priorities a rule names for its VID and then 0 to 7 (``upstream_frame()``):
+the router behind the stick needs no setting for it. A person can have the
+subscriber's own priority kept, IGMP_PRIORITY=host of onu-config, which
+onu-apply writes into ``/run/omcid/igmp-priority`` and the agent reads at each
+message (the backend's ``igmp_host_priority``); a message the rules would have
+taken at another priority is then counted as dropped.
+
+**What the panel shows.** The ubus method ``iptv`` (``omci_mcast_publish()``)
+gives the OLT's policy, the groups the bridge forwards with who joined them
+and the stream's bits a second, the last 16 joins the policy refused with
+why, the last 32 events (a join, a leave, a refusal, a query of the OLT, a
+stream lost and back), the counts since the start, the OLT's latest query,
+and who gives IGMP its priority; pond serves it as the value ``iptv``. The
+rate is that of the bytes the switch counts for each group: the counting
+rule of a group passes its frames, and the switch's driver gives such a rule
+a counter of bytes, where a rule that drops or traps frames counts frames.
+A group whose bytes do not grow for 10 s is lost, as before.
+
+**A test of a group.** The ubus method ``tv_test`` (``omci_mcast_test_start()``)
+joins a group from the stick, as a set-top box's join would go up, in its
+VLAN and judged by the policy, from the stick's Ethernet address and the
+profile's querier address, and counts the group's bytes. The bridge holds no
+entry of the group for it, so the switch does not forward the stream to the
+host. Its arguments are numbers, as pond's calls carry them: ``group``, the
+IPv4 address, ``vlan``, 0 for untagged, and ``seconds``, 1 to 30; a call with
+none reads the count, and one with ``stop`` ends the test with a leave. The
+agent ends a test itself 5 s after its time when nobody did. pond's
+``/api/iptv/test`` reads the count every 50 ms for the time to the first
+bytes.
+
+Not measured on the board yet: the priority given to a real operator's
+messages, the bytes the switch counts, and a test of a group of the lab's
+OLT; all of it is tested on the host backend.
+
 Building and testing
 ====================
 

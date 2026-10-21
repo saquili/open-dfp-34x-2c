@@ -25,6 +25,7 @@
 #include "omci/engine.h"
 #include "omci/frame.h"
 #include "omcid/array_size.h"
+#include "sys/publish.h"
 
 #include "harness.h"
 
@@ -2016,7 +2017,9 @@ static void test_the_vlan_rules_discard_messages_they_do_not_take(void)
 
 /*
  * A rule that discards the frames of a VID discards the messages in it but
- * those of a priority an earlier rule takes, as the switch drops them.
+ * those of a priority an earlier rule takes, as the switch drops them: the
+ * agent gives a message of another priority the one the rule takes, unless
+ * a person chose the subscriber's own, when it goes nowhere.
  */
 static void test_a_vlan_rule_discards_the_messages_of_its_vid(void)
 {
@@ -2043,6 +2046,11 @@ static void test_a_vlan_rule_discards_the_messages_of_its_vid(void)
 	tag_at(out, 12, &tpid, &tci);
 	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 1410u));
 	g_pcp = 3;
+	CHECK_EQ(join_up(410, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 1410u));
+
+	omci_hw_igmp_host_priority_set(true);
 	const size_t before = sent_count();
 
 	hear(f, igmp(f, 410, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
@@ -2393,23 +2401,23 @@ static void test_the_downstream_tag_of_multicast(void)
 	down();
 }
 
-/* The downstream frames of a group so far, as the backend counts them. */
-static void flow(uint32_t group, uint64_t frames)
+/* The downstream bytes of a group so far, as the backend counts them. */
+static void flow(uint32_t group, uint64_t bytes)
 {
 	uint8_t g[16];
 
 	a4(g, group);
-	omci_hw_mcast_flow(g, frames);
+	omci_hw_mcast_flow(g, bytes);
 }
 
-/* Whether the backend counts the frames of a group. */
+/* Whether the backend counts the bytes of a group. */
 static bool counted(uint32_t group)
 {
-	uint64_t frames = 0;
+	uint64_t bytes = 0;
 	uint8_t g[16];
 
 	a4(g, group);
-	return omci_hw_mcast_seen(g, &frames) == OMCI_OK;
+	return omci_hw_mcast_seen(g, &bytes) == OMCI_OK;
 }
 
 /* Let @sec seconds go by, a tick each. */
@@ -2440,7 +2448,7 @@ static void test_lost_groups(void)
 	pass(1);
 	CHECK(counted(IP4(239, 1, 1, 5)));
 
-	/* A read that fails changes nothing; frames came, then stop for ten seconds. */
+	/* A read that fails changes nothing; bytes came, then stop for ten seconds. */
 	omci_hw_mcast_watch_fail_next(false, true);
 	flow(IP4(239, 1, 1, 5), 100);
 	pass(1);
@@ -2466,7 +2474,7 @@ static void test_lost_groups(void)
 	CHECK_EQ(lost(PROFILE), 2u);
 	CHECK_EQ(omci_mcast_lost_profiles(g_m, prof, ARRAY_SIZE(prof)), 1u);
 
-	/* Frames again: the group flows. */
+	/* Bytes again: the group flows. */
 	flow(IP4(239, 1, 1, 5), 150);
 	pass(1);
 	CHECK_EQ(lost(PROFILE), 1u);
@@ -2623,6 +2631,570 @@ static void test_one_agent_at_a_time(void)
 	CHECK_EQ(listed(PORT, false), 0u);
 }
 
+/* ---- What the stick's panel shows ------------------------------------ */
+
+/* A writer of JSON text, as test_publish.c has it. */
+struct text {
+	char *p;
+	size_t len;
+	size_t cap;
+	bool first[8];
+	unsigned int depth;
+};
+
+static void t_put(struct text *t, const char *s)
+{
+	const size_t n = strlen(s);
+
+	if (t->len + n >= t->cap)
+		return;
+	memcpy(t->p + t->len, s, n + 1);
+	t->len += n;
+}
+
+static void t_name(struct text *t, const char *name)
+{
+	if (!t->first[t->depth])
+		t_put(t, ",");
+	t->first[t->depth] = false;
+	if (name == NULL)
+		return;
+	t_put(t, "\"");
+	t_put(t, name);
+	t_put(t, "\":");
+}
+
+static void t_open(void *ctx, const char *name, bool array)
+{
+	struct text *t = ctx;
+
+	t_name(t, name);
+	t_put(t, array ? "[" : "{");
+	t->first[++t->depth] = true;
+}
+
+static void t_close(void *ctx, bool array)
+{
+	struct text *t = ctx;
+
+	t->depth--;
+	t_put(t, array ? "]" : "}");
+}
+
+static void t_str(void *ctx, const char *name, const char *value)
+{
+	struct text *t = ctx;
+
+	t_name(t, name);
+	t_put(t, "\"");
+	t_put(t, value);
+	t_put(t, "\"");
+}
+
+static void t_num(void *ctx, const char *name, uint32_t value)
+{
+	struct text *t = ctx;
+	char v[16];
+
+	t_name(t, name);
+	snprintf(v, sizeof(v), "%u", value);
+	t_put(t, v);
+}
+
+static void t_flag(void *ctx, const char *name, bool value)
+{
+	struct text *t = ctx;
+
+	t_name(t, name);
+	t_put(t, value ? "true" : "false");
+}
+
+static void t_none(void *ctx, const char *name)
+{
+	struct text *t = ctx;
+
+	t_name(t, name);
+	t_put(t, "null");
+}
+
+static const struct omci_publish_ops g_text_ops = {
+	.open = t_open,
+	.close = t_close,
+	.str = t_str,
+	.num = t_num,
+	.flag = t_flag,
+	.none = t_none,
+};
+
+static char g_out[16384];
+
+/* What the agent shows the panel, as JSON text in g_out. */
+static const char *shown(const struct omci_mcast *m)
+{
+	struct text t = { .p = g_out, .cap = sizeof(g_out) };
+
+	t.first[0] = true;
+	g_out[0] = '\0';
+	t_put(&t, "{");
+	omci_mcast_publish(m, &g_text_ops, &t);
+	t_put(&t, "}");
+	return g_out;
+}
+
+/* Whether the agent shows @what; the text when it does not. */
+static bool shows(const char *what)
+{
+	const bool found = strstr(shown(g_m), what) != NULL;
+
+	if (!found)
+		fprintf(stderr, "  wanted %s\n  in %s\n", what, g_out);
+	return found;
+}
+
+/* The @n strings of @parts one after another, in @out. */
+static const char *joined(char *out, const char *const *parts, size_t n)
+{
+	out[0] = '\0';
+	for (size_t i = 0; i < n; i++)
+		strcat(out, parts[i]);
+	return out;
+}
+
+/* Whether the agent shows the strings given, one after another. */
+static bool shows_parts(const char *const *parts, size_t n)
+{
+	char want[2048];
+
+	return shows(joined(want, parts, n));
+}
+
+#define SHOWS(...)                                        \
+	shows_parts((const char *const[]){ __VA_ARGS__ }, \
+		    ARRAY_SIZE(((const char *const[]){ __VA_ARGS__ })))
+
+static size_t times(const char *text, const char *what)
+{
+	size_t n = 0;
+
+	for (const char *p = strstr(text, what); p != NULL;
+	     p = strstr(p + 1, what))
+		n++;
+	return n;
+}
+
+static void test_the_panel_without_an_agent(void)
+{
+	static const char *const idle[] = {
+		"{\"now_s\":0,\"policy\":null,\"groups\":[],\"rejected\":[],",
+		"\"log\":[],\"lost\":[],\"counters\":{\"joins\":0,\"leaves\":0,",
+		"\"rejected\":0,\"queries\":0,\"reports\":0},\"querier\":null,",
+		"\"priority\":null}",
+	};
+	char want[512];
+
+	CHECK(strcmp(shown(NULL), joined(want, idle, ARRAY_SIZE(idle))) == 0);
+	up();
+	CHECK(strcmp(shown(g_m), want) == 0);
+	down();
+}
+
+/* A row of the multicast service package table: @key, the VID it takes, its profile. */
+static void package(unsigned int key, unsigned int vid, uint16_t profile)
+{
+	uint8_t row[20] = { 0 };
+
+	row[0] = 0x40u;
+	row[1] = (uint8_t)key;
+	put16(&row[2], vid);
+	put16(&row[10], profile);
+	table_row(310, PORT, 6, row, sizeof(row));
+}
+
+static void test_the_panel_shows_the_policy(void)
+{
+	up();
+	side(false);
+	omci_mcast_program(g_m, g_mib, g_now);
+	CHECK(shows("\"policy\":null"));
+	CHECK(shows("\"priority\":null"));
+
+	me(310, PORT);
+	set_n(310, PORT, 2, PROFILE, 2);
+	set_n(309, PROFILE, 2, 1, 1);
+	set_n(309, PROFILE, 3, 1, 1);
+	set_n(310, PORT, 3, 4, 2);
+	set_n(310, PORT, 4, 5000000, 4);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 1000,
+	    420);
+	acl(PROFILE, 7, 2, 0, IP4(239, 2, 2, 0), IP4(239, 2, 2, 255), 0, 0);
+	preview_of(PROFILE, 2, 30, 100, 2, 0);
+	acl(PROFILE, 8, 1, 0, IP4(239, 9, 9, 1), IP4(239, 9, 9, 1), 0, 421);
+	ds_control(PROFILE, 3, 430);
+	CHECK(SHOWS(
+		"\"policy\":{\"igmp_version\":3,\"mode\":\"snoop_proxy\",",
+		"\"fast_leave\":true,\"max_groups\":4,",
+		"\"max_bandwidth_bps\":40000000,\"robustness\":2,",
+		"\"query_interval_s\":125,\"query_response_ms\":10000,",
+		"\"last_member_ms\":1000,\"host_vlan\":430,\"allowed\":[",
+		"{\"from\":\"239.1.1.0\",\"to\":\"239.1.1.255\",\"vlan\":420,",
+		"\"bandwidth_bps\":8000,\"preview\":false},",
+		"{\"from\":\"239.2.2.0\",\"to\":\"239.2.2.255\",\"vlan\":null,",
+		"\"bandwidth_bps\":null,\"preview\":true}],",
+		"\"static\":[{\"group\":\"239.9.9.1\",\"vlan\":421}]}"));
+
+	/* The OLT's own timers; no limits; a function past the proxy; the tag stripped. */
+	set_n(309, PROFILE, 2, 9, 1);
+	set_n(309, PROFILE, 10, 3, 1);
+	set_n(309, PROFILE, 12, 60, 4);
+	set_n(309, PROFILE, 13, 50, 4);
+	set_n(309, PROFILE, 14, 20, 4);
+	set_n(310, PORT, 3, 0, 2);
+	set_n(310, PORT, 4, 0, 4);
+	ds_control(PROFILE, 1, 0);
+	CHECK(SHOWS("\"mode\":\"proxy\",\"fast_leave\":true,",
+		    "\"max_groups\":null,\"max_bandwidth_bps\":null,",
+		    "\"robustness\":3,\"query_interval_s\":60,",
+		    "\"query_response_ms\":5000,\"last_member_ms\":2000,",
+		    "\"host_vlan\":null"));
+	ds_control(PROFILE, 0, 0);
+	CHECK(shows("\"host_vlan\":null"));
+
+	/* Two packages of one profile list its groups once. */
+	package(1, 100, PROFILE);
+	package(2, 200, PROFILE);
+	omci_mcast_program(g_m, g_mib, g_now);
+	CHECK_EQ(times(shown(g_m), "\"from\":\"239.1.1.0\""), 1u);
+	down();
+}
+
+static void test_the_panel_follows_the_groups(void)
+{
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	set_n(310, PORT, 3, 1, 2);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* A join, its answer to a query, a second client, a join over the most groups. */
+	join(IP4(192, 0, 2, 2), IP4(239, 1, 1, 5), 410);
+	join(IP4(192, 0, 2, 2), IP4(239, 1, 1, 5), 410);
+	join(IP4(192, 0, 2, 3), IP4(239, 1, 1, 5), 410);
+	join(IP4(192, 0, 2, 2), IP4(239, 1, 1, 6), 410);
+	olt_asks(0);
+	CHECK(SHOWS("\"groups\":[{\"group\":\"239.1.1.5\",\"source\":null,",
+		    "\"vlan\":410,\"client\":\"192.0.2.2\",\"since_s\":1000,",
+		    "\"rate_bps\":null},{\"group\":\"239.1.1.5\",",
+		    "\"source\":null,\"vlan\":410,\"client\":\"192.0.2.3\",",
+		    "\"since_s\":1000,\"rate_bps\":null}]"));
+	CHECK(SHOWS("\"rejected\":[{\"at_s\":1000,\"group\":\"239.1.1.6\",",
+		    "\"vlan\":410,\"client\":\"192.0.2.2\",",
+		    "\"reason\":\"max_groups\"}]"));
+	CHECK(SHOWS(
+		"\"log\":[{\"at_s\":1000,\"event\":\"query\",",
+		"\"group\":null,\"vlan\":null},{\"at_s\":1000,",
+		"\"event\":\"reject\",\"group\":\"239.1.1.6\",",
+		"\"vlan\":410},{\"at_s\":1000,\"event\":\"join\",",
+		"\"group\":\"239.1.1.5\",\"vlan\":410},{\"at_s\":1000,",
+		"\"event\":\"join\",\"group\":\"239.1.1.5\",\"vlan\":410}]"));
+	CHECK(SHOWS("\"counters\":{\"joins\":2,\"leaves\":0,\"rejected\":1,",
+		    "\"queries\":1,\"reports\":1},\"querier\":{\"last_s\":1000,",
+		    "\"version\":1}"));
+
+	/* The stream's bits a second, from two reads of its bytes. */
+	pass(1);
+	flow(IP4(239, 1, 1, 5), 1250000);
+	pass(1);
+	CHECK(shows("\"rate_bps\":10000000"));
+	flow(IP4(239, 1, 1, 5), 100);
+	pass(1);
+	CHECK(shows("\"rate_bps\":10000000"));
+
+	/* A leave; the stream stops, and comes back. */
+	leaves(IP4(192, 0, 2, 3), IP4(239, 1, 1, 5), false);
+	CHECK(SHOWS("{\"at_s\":1003,\"event\":\"leave\",",
+		    "\"group\":\"239.1.1.5\",\"vlan\":null}"));
+	pass(10);
+	CHECK(shows("\"lost\":[{\"group\":\"239.1.1.5\",\"since_s\":1003}]"));
+	CHECK(SHOWS("{\"at_s\":1013,\"event\":\"lost\",",
+		    "\"group\":\"239.1.1.5\",\"vlan\":410}"));
+	flow(IP4(239, 1, 1, 5), 5000);
+	pass(1);
+	CHECK(shows("\"lost\":[]"));
+	CHECK(SHOWS("{\"at_s\":1014,\"event\":\"back\",",
+		    "\"group\":\"239.1.1.5\",\"vlan\":410}"));
+
+	/* A report from the OLT's side is no query; it is not counted. */
+	{
+		uint8_t f[160];
+
+		omci_hw_mcast_receive_pon(f,
+					  igmp(f, -1, 0x16u, IP4(10, 0, 0, 1),
+					       IP4(239, 1, 1, 5)));
+		omci_mcast_service(g_m, g_mib, g_now);
+		CHECK(shows("\"queries\":1,"));
+	}
+
+	/* An entry the bridge's list did not confirm yet is not shown. */
+	set_n(310, PORT, 3, 0, 2);
+	omci_mcast_program(g_m, g_mib, g_now);
+	omci_hw_mcast_fail_next(true, false, false);
+	join(IP4(192, 0, 2, 2), IP4(239, 1, 1, 9), 410);
+	CHECK_EQ(times(shown(g_m), "\"group\":\"239.1.1.9\",\"source\""), 0u);
+	down();
+}
+
+static void test_the_panel_keeps_the_latest(void)
+{
+	up();
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	for (unsigned int i = 1; i <= 20u; i++)
+		join(IP4(10, 0, 0, 2), IP4(239, 5, 5, i), -1);
+	for (unsigned int i = 1; i <= 15u; i++)
+		join(IP4(10, 0, 0, 2), IP4(239, 1, 1, i), -1);
+	shown(g_m);
+	CHECK_EQ(times(g_out, "\"reason\":"), 16u);
+	CHECK_EQ(times(g_out, "\"event\":"), 32u);
+	CHECK(SHOWS("\"rejected\":[{\"at_s\":1000,",
+		    "\"group\":\"239.5.5.20\""));
+	CHECK(SHOWS("\"log\":[{\"at_s\":1000,\"event\":\"join\",",
+		    "\"group\":\"239.1.1.15\""));
+	CHECK(shows("\"rejected\":20"));
+	down();
+}
+
+static void test_the_panel_shows_who_gives_the_priority(void)
+{
+	uint8_t out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	CHECK(SHOWS("\"priority\":{\"control\":0,\"by\":\"stick\",",
+		    "\"pcp\":null,\"auto\":true,\"dropped\":0}"));
+	CHECK_EQ(join_up(410, out), 50u);
+	CHECK(shows("\"by\":\"stick\",\"pcp\":5"));
+	omci_hw_igmp_host_priority_set(true);
+	CHECK(SHOWS("\"priority\":{\"control\":0,\"by\":\"host\",",
+		    "\"pcp\":null,\"auto\":false,\"dropped\":0}"));
+	set_n(309, PROFILE, 4, (3u << 13) | 420u, 2);
+	set_n(309, PROFILE, 5, 1, 1);
+	CHECK(shows("\"priority\":{\"control\":1,\"by\":\"olt\",\"pcp\":3,"));
+	set_n(309, PROFILE, 5, 7, 1);
+	CHECK(shows("\"priority\":{\"control\":0,"));
+	down();
+}
+
+/*
+ * Where the profile leaves the priority to the subscriber, a message of a
+ * priority the rules discard goes with one a rule names for its VID, and
+ * one no GEM port takes with the first that one does; a person's choice of
+ * the subscriber's own drops it, counted.
+ */
+static void test_the_agent_gives_the_priority_the_rules_take(void)
+{
+	static const uint32_t strict[][4] = {
+		/* C-VID 100 at priority 6 to 200 */
+		{ 0xf8000000u, (6u << 28) | (100u << 15), 0x400f0000u,
+		  (6u << 16) | (200u << 3) },
+		/* again, as a second rule of the same priority */
+		{ 0xf8000000u, (6u << 28) | (100u << 15) | 1u, 0x400f0000u,
+		  (6u << 16) | (200u << 3) },
+		/* the default of the single-tagged frames: discard */
+		{ 0xf8000000u, 0xe8000000u, 0xc00f0000u, 0x000f8000u },
+	};
+	unsigned int tpid, tci;
+	uint8_t f[256], out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	rules(strict, ARRAY_SIZE(strict));
+
+	CHECK_EQ(join_up(100, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((6u << 13) | 200u));
+	CHECK(shows("\"by\":\"stick\",\"pcp\":6"));
+
+	omci_hw_igmp_host_priority_set(true);
+	const size_t before = sent_count();
+
+	hear(f, igmp(f, 100, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	CHECK_EQ(sent_count(), before);
+	CHECK(shows("\"dropped\":1"));
+	omci_hw_igmp_host_priority_set(false);
+	rules(strict, 0);
+
+	/* VID replaced, priority kept: a GEM port behind a mapper for 4 to 7 alone. */
+	CHECK_EQ(omci_mib_delete(g_mib, 47, 0x0201), OMCI_OK);
+	ctp(0x0011, 300, 0x8001, 3);
+	me(130, 0x0301);
+	for (unsigned int b = 0; b < 8u; b++)
+		set_n(130, 0x0301, (uint8_t)(2u + b),
+		      b < 4u ? 0xffffu : 0x0011u, 2);
+	net_port(0x0203, 3, 0x0301, 0);
+	(void)!omci_gem_program(g_mib, NULL);
+	(void)!omci_bridge_program(g_mib, NULL);
+	set_n(309, PROFILE, 4, 420u, 2);
+	set_n(309, PROFILE, 5, 3, 1);
+	g_pcp = 1;
+	CHECK_EQ(join_up(410, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((4u << 13) | 420u));
+	g_pcp = 5;
+	down();
+}
+
+/* The stick's address cannot be told. */
+static enum omci_status no_mac(uint8_t mac[static 6])
+{
+	(void)mac;
+	return OMCI_ERR_HW;
+}
+
+/* Start a test of @group in @vid for @sec seconds. */
+static enum omci_status test_of(uint32_t group, uint16_t vid, unsigned int sec,
+				const char **why)
+{
+	uint8_t g[16];
+
+	a4(g, group);
+	return omci_mcast_test_start(g_m, g, vid, sec, why);
+}
+
+static void test_a_group_is_tested_from_the_stick(void)
+{
+	static const uint8_t v6[16] = { 0xff, 0x3e, [15] = 1 };
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	struct omci_mcast_report r;
+	uint64_t bytes = 1;
+	const char *why;
+	bool running;
+	uint8_t g[16];
+	uint16_t gem;
+
+	up();
+	a4(g, IP4(239, 1, 1, 9));
+	CHECK_EQ(omci_mcast_test_start(g_m, g, 410, 10, &why), OMCI_ERR_INVAL);
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	set_n(309, PROFILE, 11, IP4(10, 0, 0, 1), 4);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* Nothing to read before a test; what is no test of a group is refused. */
+	CHECK_EQ(omci_mcast_test_read(g_m, &bytes, &running), OMCI_DECLINED);
+	CHECK(bytes == 0u && !running);
+	CHECK_EQ(omci_mcast_test_read(NULL, &bytes, &running), OMCI_DECLINED);
+	CHECK_EQ(omci_mcast_test_start(NULL, g, 410, 10, &why), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mcast_test_start(g_m, v6, 410, 10, &why), OMCI_ERR_INVAL);
+	CHECK_EQ(test_of(IP4(10, 0, 0, 9), 410, 10, &why), OMCI_ERR_INVAL);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 9), 4095, 10, &why), OMCI_ERR_INVAL);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 9), 410, 0, &why), OMCI_ERR_INVAL);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 9), 410, 31, &why), OMCI_ERR_INVAL);
+	CHECK_EQ(test_of(IP4(239, 5, 5, 5), 410, 10, &why), OMCI_DECLINED);
+	CHECK(strcmp(why, "not_allowed") == 0);
+
+	/* A join goes up, from the profile's address; the group is counted. */
+	CHECK_EQ(test_of(IP4(239, 1, 1, 9), 410, 10, &why), OMCI_OK);
+	CHECK(strcmp(why, "") == 0);
+	r = sent_report(0, &gem);
+	CHECK(r.kind == OMCI_MCAST_KIND_REPORT && r.version == 3u);
+	CHECK(r.tagged && r.vid == 410u && r.rec[0].join);
+	CHECK_MEM(r.rec[0].group, g, 16);
+	a4(g, IP4(10, 0, 0, 1));
+	CHECK_MEM(r.client, g, 16);
+	CHECK(counted(IP4(239, 1, 1, 9)));
+	CHECK_EQ(test_of(IP4(239, 1, 1, 9), 410, 10, &why), OMCI_ERR_BUSY);
+
+	/* Its bytes are read; it is no lost group, though nothing came for a while. */
+	flow(IP4(239, 1, 1, 9), 5000);
+	CHECK_EQ(omci_mcast_test_read(g_m, &bytes, &running), OMCI_OK);
+	CHECK(bytes == 5000u && running);
+	pass(12);
+	CHECK(shows("\"lost\":[]"));
+	omci_hw_mcast_watch_fail_next(false, true);
+	CHECK_EQ(omci_mcast_test_read(g_m, &bytes, &running), OMCI_ERR_HW);
+
+	/* The end: a leave goes up, the count is kept, the group no longer counted. */
+	omci_mcast_test_stop(g_m);
+	r = sent_report(0, &gem);
+	CHECK(r.kind == OMCI_MCAST_KIND_REPORT && !r.rec[0].join);
+	CHECK(!counted(IP4(239, 1, 1, 9)));
+	CHECK_EQ(omci_mcast_test_read(g_m, &bytes, &running), OMCI_OK);
+	CHECK(bytes == 5000u && !running);
+	omci_mcast_test_stop(g_m);
+	omci_mcast_test_stop(NULL);
+
+	/* A group a subscriber holds, untagged: the agent ends the test itself, the group still counted. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	pass(1);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 5), 0, 1, &why), OMCI_OK);
+	r = sent_report(0, &gem);
+	CHECK(!r.tagged);
+	pass(6);
+	CHECK_EQ(omci_mcast_test_read(g_m, &bytes, &running), OMCI_OK);
+	CHECK(!running);
+	CHECK(counted(IP4(239, 1, 1, 5)));
+
+	/* A join that cannot be sent ends the test at once. */
+	omci_hw_mcast_send_fail_next();
+	CHECK_EQ(test_of(IP4(239, 1, 1, 10), 410, 10, &why), OMCI_ERR_HW);
+	CHECK(!counted(IP4(239, 1, 1, 10)));
+	ops.mcast_mac = no_mac;
+	omci_hw_ops_set(&ops);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 10), 410, 10, &why), OMCI_ERR_HW);
+	ops.mcast_mac = omci_hw_host_ops.mcast_mac;
+	ops.mcast_send = NULL;
+	omci_hw_ops_set(&ops);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 10), 410, 10, &why), OMCI_ERR_IO);
+	omci_hw_ops_set(NULL);
+
+	/* No counter for it. */
+	omci_hw_mcast_watch_fail_next(true, false);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 10), 410, 10, &why), OMCI_ERR_NOMEM);
+	for (unsigned int i = 20; i < 40u; i++)
+		join(IP4(10, 0, 0, 2), IP4(239, 1, 1, i), -1);
+	pass(1);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 10), 410, 10, &why), OMCI_ERR_NOMEM);
+	for (unsigned int i = 20; i < 40u; i++)
+		snoop(IP4(239, 1, 1, i), 0, false);
+	pass(1);
+
+	/* IGMPv1 has no leave; MLD profiles have the test in IGMPv2. */
+	set_n(309, PROFILE, 1, 1, 1);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 11), 410, 10, &why), OMCI_OK);
+	const size_t before = sent_count();
+
+	omci_mcast_test_stop(g_m);
+	CHECK_EQ(sent_count(), before);
+	set_n(309, PROFILE, 1, 16, 1);
+	CHECK_EQ(test_of(IP4(239, 1, 1, 11), 410, 10, &why), OMCI_OK);
+	r = sent_report(0, &gem);
+	CHECK_EQ(r.version, 2u);
+	omci_mcast_test_stop(g_m);
+
+	/* Without a policy every group may be tested, from 0.0.0.0. */
+	CHECK_EQ(omci_mib_delete(g_mib, 310, PORT), OMCI_OK);
+	omci_mcast_program(g_m, g_mib, g_now);
+	CHECK_EQ(test_of(IP4(239, 7, 7, 7), 410, 10, &why), OMCI_OK);
+	r = sent_report(0, &gem);
+	a4(g, 0);
+	CHECK_MEM(r.client, g, 16);
+	omci_mcast_test_stop(g_m);
+	down();
+}
+
 int main(void)
 {
 	RUN(test_messages_are_taken_apart);
@@ -2665,5 +3237,12 @@ int main(void)
 	RUN(test_what_is_counted_for_lost_groups);
 	RUN(test_the_lost_group_alarm);
 	RUN(test_one_agent_at_a_time);
+	RUN(test_the_panel_without_an_agent);
+	RUN(test_the_panel_shows_the_policy);
+	RUN(test_the_panel_follows_the_groups);
+	RUN(test_the_panel_keeps_the_latest);
+	RUN(test_the_panel_shows_who_gives_the_priority);
+	RUN(test_the_agent_gives_the_priority_the_rules_take);
+	RUN(test_a_group_is_tested_from_the_stick);
 	return OMCI_T_REPORT("test_mcast_agent");
 }

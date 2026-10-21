@@ -5,7 +5,9 @@
  * omcid on ubus (ADR 0011): the object "omcid", whose method "status" gives
  * the number of instances and the counts of the frames, "rules" the rules
  * of the services in force (me/svcrule.h), "login" the PPPoE login the OLT
- * sent (class 148), "mib" the MIB
+ * sent (class 148), "iptv" what the multicast agent holds of television
+ * (omci_mcast_publish()), "tv_test" a test of a group from the stick
+ * (omci_mcast_test_start()), "mib" the MIB
  * (src/sys/publish.h), of the classes of its argument "classes", an array of
  * numbers, or of every class, in at most "max" bytes of JSON text, when
  * given, and "frames" the conversation with the OLT (src/sys/history.h),
@@ -23,6 +25,7 @@
 
 #include "bus_ubus.h"
 #include "daemon.h"
+#include "mcast/agent.h"
 #include "omcid/array_size.h"
 #include "sys/history.h"
 #include "sys/log.h"
@@ -38,6 +41,7 @@ static struct ubus_context *g_ctx;
 static const struct omci_mib *g_mib;
 static const struct omci_ctl_counters *g_counters;
 static const struct omci_history *g_history;
+static struct omci_mcast *g_mcast;
 static uint64_t g_next_try;
 static bool g_told;
 static struct blob_buf g_buf;
@@ -86,12 +90,20 @@ static void w_flag(void *ctx, const char *name, bool value)
 	blobmsg_add_u8(((struct writer *)ctx)->b, name, value);
 }
 
+/* No value: an attribute of no type, which blobmsg_format_json() writes as null. */
+static void w_none(void *ctx, const char *name)
+{
+	blobmsg_add_field(((struct writer *)ctx)->b, BLOBMSG_TYPE_UNSPEC, name,
+			  NULL, 0);
+}
+
 static const struct omci_publish_ops g_ops = {
 	.open = w_open,
 	.close = w_close,
 	.str = w_str,
 	.num = w_num,
 	.flag = w_flag,
+	.none = w_none,
 };
 
 static int status(struct ubus_context *ctx, struct ubus_object *obj,
@@ -137,6 +149,113 @@ static int login(struct ubus_context *ctx, struct ubus_object *obj,
 	(void)msg;
 	blob_buf_init(&g_buf, 0);
 	omci_publish_login(g_mib, &g_ops, &w);
+	ubus_send_reply(ctx, req, g_buf.head);
+	return 0;
+}
+
+/* What the multicast agent holds of television (omci_mcast_publish()). */
+static int iptv(struct ubus_context *ctx, struct ubus_object *obj,
+		struct ubus_request_data *req, const char *method,
+		struct blob_attr *msg)
+{
+	struct writer w = { .b = &g_buf };
+
+	(void)obj;
+	(void)method;
+	(void)msg;
+	blob_buf_init(&g_buf, 0);
+	omci_mcast_publish(g_mcast, &g_ops, &w);
+	ubus_send_reply(ctx, req, g_buf.head);
+	return 0;
+}
+
+enum { TEST_GROUP, TEST_VLAN, TEST_SECONDS, TEST_STOP, __TEST_MAX };
+
+static const struct blobmsg_policy g_test_policy[] = {
+	[TEST_GROUP] = { .name = "group", .type = BLOBMSG_TYPE_INT32 },
+	[TEST_VLAN] = { .name = "vlan", .type = BLOBMSG_TYPE_INT32 },
+	[TEST_SECONDS] = { .name = "seconds", .type = BLOBMSG_TYPE_INT32 },
+	[TEST_STOP] = { .name = "stop", .type = BLOBMSG_TYPE_INT32 },
+};
+
+/* The word of a test that did not start, for pond (omci_mcast_test_start()). */
+static const char *test_error(enum omci_status rc)
+{
+	switch (rc) {
+	case OMCI_ERR_INVAL:
+		return "invalid";
+	case OMCI_ERR_BUSY:
+		return "busy";
+	case OMCI_DECLINED:
+		return "refused";
+	case OMCI_ERR_IO:
+		return "unable";
+	case OMCI_ERR_NOMEM:
+		return "no_counter";
+	default:
+		return "not_sent";
+	}
+}
+
+/*
+ * A test of a group: with "group", an IPv4 address as a number, "vlan" (0
+ * untagged) and "seconds" it starts, answering {"ok":true}, or
+ * {"error":E,"reason":R}, R the policy's refusal; with "stop" not 0 it ends;
+ * and every call but a start answers {"running":B,"bytes":N}, or
+ * {"error":"none"} before any test. The arguments are numbers, as pond's
+ * calls carry them (its bus.h).
+ */
+static int tv_test(struct ubus_context *ctx, struct ubus_object *obj,
+		   struct ubus_request_data *req, const char *method,
+		   struct blob_attr *msg)
+{
+	struct blob_attr *tb[__TEST_MAX];
+	uint64_t bytes = 0;
+	bool running = false;
+	enum omci_status rc;
+
+	(void)obj;
+	(void)method;
+	blobmsg_parse(g_test_policy, __TEST_MAX, tb, blob_data(msg),
+		      blob_len(msg));
+	blob_buf_init(&g_buf, 0);
+	if (tb[TEST_GROUP] != NULL) {
+		const uint32_t a = blobmsg_get_u32(tb[TEST_GROUP]);
+		const uint8_t v4[4] = { (uint8_t)(a >> 24), (uint8_t)(a >> 16),
+					(uint8_t)(a >> 8), (uint8_t)a };
+		uint8_t group[OMCI_MCAST_ADDR_LEN] = { 0 };
+		const char *why = "";
+
+		omci_mcast_addr_set_v4(group, v4);
+		rc = omci_mcast_test_start(
+			g_mcast, group,
+			tb[TEST_VLAN] != NULL ?
+				(uint16_t)blobmsg_get_u32(tb[TEST_VLAN]) :
+				0u,
+			tb[TEST_SECONDS] != NULL ?
+				blobmsg_get_u32(tb[TEST_SECONDS]) :
+				0u,
+			&why);
+		if (rc == OMCI_OK) {
+			blobmsg_add_u8(&g_buf, "ok", true);
+		} else {
+			blobmsg_add_string(&g_buf, "error", test_error(rc));
+			blobmsg_add_string(&g_buf, "reason", why);
+		}
+		ubus_send_reply(ctx, req, g_buf.head);
+		return 0;
+	}
+	if (tb[TEST_STOP] != NULL && blobmsg_get_u32(tb[TEST_STOP]) != 0u)
+		omci_mcast_test_stop(g_mcast);
+	rc = omci_mcast_test_read(g_mcast, &bytes, &running);
+	if (rc == OMCI_DECLINED) {
+		blobmsg_add_string(&g_buf, "error", "none");
+	} else {
+		blobmsg_add_u8(&g_buf, "running", running);
+		blobmsg_add_u64(&g_buf, "bytes", bytes);
+		if (rc != OMCI_OK)
+			blobmsg_add_string(&g_buf, "error", "read");
+	}
 	ubus_send_reply(ctx, req, g_buf.head);
 	return 0;
 }
@@ -211,6 +330,8 @@ static const struct ubus_method g_methods[] = {
 	UBUS_METHOD_NOARG("status", status),
 	UBUS_METHOD_NOARG("rules", rules),
 	UBUS_METHOD_NOARG("login", login),
+	UBUS_METHOD_NOARG("iptv", iptv),
+	UBUS_METHOD("tv_test", tv_test, g_test_policy),
 	UBUS_METHOD("mib", mib, g_mib_policy),
 	UBUS_METHOD("frames", frames, g_frames_policy),
 };
@@ -279,11 +400,13 @@ static void connect_now(void)
 
 static void bus_open(const struct omci_mib *m,
 		     const struct omci_ctl_counters *counters,
-		     const struct omci_history *history)
+		     const struct omci_history *history,
+		     struct omci_mcast *mcast)
 {
 	g_mib = m;
 	g_counters = counters;
 	g_history = history;
+	g_mcast = mcast;
 	g_next_try = 0;
 	connect_now();
 }
