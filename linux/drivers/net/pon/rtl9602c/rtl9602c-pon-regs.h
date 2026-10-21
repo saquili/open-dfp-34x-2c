@@ -37,11 +37,17 @@ static inline unsigned int rtl9602c_gem_tcont(unsigned int n)
 #define RTL9602C_CHIP_RESET_PON_SERDES		BIT(0)
 
 /*
- * The PON SerDes's reset register, and the burst-enable signal to the optics:
- * BURST_OE drives it, BURST_DLY delays it against the data and D2A_SEL picks
- * the transmitter's data source. None of it is verified to be needed.
+ * A spare word of the PON SerDes, with no field of its own and no reset in
+ * it. Its bits are taken to force parts of the SerDes, so that 0 forces
+ * nothing; not verified, nor that the word needs writing.
  */
-#define RTL9602C_SERDES_PON_RESET		0x022034
+#define RTL9602C_SERDES_PON_SPARE		0x022034
+
+/*
+ * The burst-enable signal to the optics: BURST_OE drives it, BURST_DLY delays
+ * it against the data and D2A_SEL picks the transmitter's data source. None of
+ * it is verified to be needed.
+ */
 #define RTL9602C_SERDES_PON_TX_CFG		0x02203c
 #define RTL9602C_SERDES_PON_TX_CFG_BURST_DLY	GENMASK(6, 4)
 #define RTL9602C_SERDES_PON_TX_CFG_D2A_SEL	GENMASK(3, 0)

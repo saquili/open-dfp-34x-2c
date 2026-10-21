@@ -884,11 +884,17 @@ removed on its own to see whether it is needed, and the rows say so.
      - Checked by
    * - Park the PON SerDes: ``RTL9602C_SERDES_PON_CTRL_MODE`` (bits 4:0 of
        ``RTL9602C_SERDES_PON_CTRL``, ``0x0001d0``) is set to
-       ``RTL9602C_SERDES_PON_CTRL_MODE_OFF`` (``0x1f``), then
-       ``RTL9602C_SERDES_PON_RESET`` (``0x022034``) is written 0, so that the
-       analog side is configured while it is stopped.
+       ``RTL9602C_SERDES_PON_CTRL_MODE_OFF`` (``0x1f``), so that the analog
+       side is configured while it is stopped.
      - I
      - Required: unverified; the ONU reaches O5 on an OLT.
+   * - Then ``RTL9602C_SERDES_PON_SPARE`` (``0x022034``) is written 0. It is a
+       spare word of the SerDes with no field of its own, not a reset: its
+       bits are taken to force parts of the SerDes, so that 0 forces nothing.
+     - I
+     - Required: unverified. The word read before and after the bring-up, and
+       a bring-up without the write that still reaches O5 on an OLT, would
+       settle it.
    * - Set ``RTL9602C_CHIP_RESET_PON_SERDES`` (bit 0 of ``RTL9602C_CHIP_RESET``,
        ``0x000104``) and wait 10 to 11 ms; the driver never clears the bit. It
        resets the PON SerDes; that it resets the GPON MAC as well is not
@@ -3710,9 +3716,11 @@ Assumptions the driver depends on
    * - That the PON MAC has to be built before the SerDes is put in GPON mode
        ("Bring-up and take-down").
      - Reversing the two and checking that OMCI messages pass both ways.
-   * - That parking the SerDes and clearing its reset register is needed ("PON
-       SerDes and analog front end").
-     - Removing the writes and checking that the ONU reaches O5 on an OLT.
+   * - That parking the SerDes and clearing its spare word are needed, and
+       that 0 in the spare word forces nothing ("PON SerDes and analog front
+       end").
+     - Removing each write and checking that the ONU reaches O5 on an OLT;
+       reading the spare word before and after the bring-up.
    * - That the reset of the PON SerDes is needed, and whether it resets the
        GPON MAC as well ("PON SerDes and analog front end").
      - Writing a MAC register before the step and reading it after it.

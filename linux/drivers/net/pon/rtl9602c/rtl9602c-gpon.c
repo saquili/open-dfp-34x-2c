@@ -210,13 +210,14 @@ static void rtl9602c_pon_analog_init(struct rtl9602c_pon *p)
 static void rtl9602c_pon_serdes_gpon(struct rtl9602c_pon *p)
 {
 	/*
-	 * Park the SerDes and clear its reset register, so that it is stopped
-	 * while it is set up; not verified.
+	 * Park the SerDes, so that it is stopped while it is set up, and clear
+	 * its spare word, taken to force nothing at 0; neither is verified to
+	 * be needed.
 	 */
 	rtl9602c_pon_rmw(p, RTL9602C_SERDES_PON_CTRL, RTL9602C_SERDES_PON_CTRL_MODE,
 			 FIELD_PREP(RTL9602C_SERDES_PON_CTRL_MODE,
 				    RTL9602C_SERDES_PON_CTRL_MODE_OFF));
-	rtl9602c_pon_w(p, RTL9602C_SERDES_PON_RESET, 0);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_PON_SPARE, 0);
 
 	/*
 	 * Reset the PON SerDes and give it 10 ms; the bit is never cleared.
