@@ -73,4 +73,14 @@ void omci_publish_status(const struct omci_mib *mib,
 			 const struct omci_ctl_counters *counters,
 			 const struct omci_publish_ops *ops, void *ctx);
 
+/**
+ * omci_publish_services() - Write the rules of the services in force at the
+ *	last programming of the VLAN rules (me/svcrule.h): {"rules":[{"fibre":
+ *	F,"action":"move","host":H,"auto":B},...]}, a person's first, then the
+ *	moves the programming made for clashes; "host" of a move alone.
+ * @ops: the writer
+ * @ctx: passed to @ops
+ */
+void omci_publish_services(const struct omci_publish_ops *ops, void *ctx);
+
 #endif

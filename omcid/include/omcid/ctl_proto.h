@@ -85,6 +85,7 @@ enum omci_ctl_op {
 #define OMCI_CTL_VLAN_FATE_INERT 5u
 
 #define OMCI_CTL_VLAN_FATE_REFUSED 6u
+#define OMCI_CTL_VLAN_FATE_LOCAL 7u
 
 /*
  * A page of fates: the total and the records that did not fit, then

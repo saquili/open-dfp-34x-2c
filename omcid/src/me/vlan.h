@@ -185,6 +185,19 @@ enum omci_status omci_vlan_program(const struct omci_mib *mib,
 				   uint16_t class_id, uint8_t attr_no,
 				   unsigned int *refused);
 
+struct omci_svc_rule;
+
+/**
+ * omci_vlan_services() - The rules of the services at the last programming.
+ * @person: set to a person's rules, as the backend gave them
+ * @made: set to the moves the programming made for clashes of two outputs
+ * @made_n: set to their number
+ *
+ * Return: the number of a person's rules.
+ */
+size_t omci_vlan_services(const struct omci_svc_rule **person,
+			  const struct omci_svc_rule **made, size_t *made_n);
+
 /**
  * omci_vlan_row_refused() - Whether the hardware refused a rule at the last
  *	programming, or the programming left it out as one that the hardware
@@ -221,6 +234,8 @@ __must_check bool omci_vlan_has_room(const struct omci_mib *mib,
  * @OMCI_VLAN_FATE_UNSUPPORTED: the hardware cannot express it
  * @OMCI_VLAN_FATE_INERT: it needs nothing from the hardware
  * @OMCI_VLAN_FATE_REFUSED: the hardware would not take it
+ * @OMCI_VLAN_FATE_LOCAL: a person's rule of the stick keeps its service off
+ *	the host, or off this output (me/svcrule.h)
  *
  * The values are the ones of the control protocol.
  */
@@ -232,6 +247,7 @@ enum omci_vlan_fate {
 	OMCI_VLAN_FATE_UNSUPPORTED = 4,
 	OMCI_VLAN_FATE_INERT = 5,
 	OMCI_VLAN_FATE_REFUSED = 6,
+	OMCI_VLAN_FATE_LOCAL = 7,
 };
 
 static_assert((int)OMCI_VLAN_FATE_PROGRAMMED ==
@@ -251,6 +267,8 @@ static_assert((int)OMCI_VLAN_FATE_UNSUPPORTED ==
 static_assert((int)OMCI_VLAN_FATE_INERT == (int)OMCI_CTL_VLAN_FATE_INERT,
 	      "wire");
 static_assert((int)OMCI_VLAN_FATE_REFUSED == (int)OMCI_CTL_VLAN_FATE_REFUSED,
+	      "wire");
+static_assert((int)OMCI_VLAN_FATE_LOCAL == (int)OMCI_CTL_VLAN_FATE_LOCAL,
 	      "wire");
 
 /**

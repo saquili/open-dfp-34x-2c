@@ -47,10 +47,12 @@
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "hw/hw.h"
 #include "hw_kernel.h"
+#include "me/svcrule.h"
 #include "omcid/array_size.h"
 #include "omcid/attrs.h"
 #include "omcid/ctl_proto.h"
@@ -3621,10 +3623,50 @@ static void bridge_remove(void)
 	g_bridge_filtering = -1;
 }
 
+/*
+ * The rules of the services that a person set (me/svcrule.h), which
+ * onu-apply writes from the settings, a new file in place of the old: a
+ * change of it programs the data path again, as the file is read at each
+ * programming of the VLAN rules. Its identity as last seen: device, inode,
+ * size and time, all 0 while there is none.
+ */
+#define RULES_PATH OMCI_RUN_DIR "/rules"
+
+static struct stat g_rules_seen;
+
+static bool rules_changed(void)
+{
+	struct stat st;
+
+	if (stat(RULES_PATH, &st))
+		memset(&st, 0, sizeof(st));
+	if (st.st_dev == g_rules_seen.st_dev &&
+	    st.st_ino == g_rules_seen.st_ino &&
+	    st.st_size == g_rules_seen.st_size &&
+	    st.st_mtime == g_rules_seen.st_mtime)
+		return false;
+	g_rules_seen = st;
+	return true;
+}
+
+static size_t kernel_service_rules(struct omci_svc_rule *out, size_t cap)
+{
+	char text[OMCI_SVC_MAX * 24 + 1] = "";
+	FILE *f = fopen(RULES_PATH, "re");
+
+	if (f) {
+		text[fread(text, 1, sizeof(text) - 1, f)] = '\0';
+		fclose(f);
+	}
+	return omci_svc_parse(text, out, cap);
+}
+
 static bool kernel_reprogram_due(void)
 {
-	const bool due = g_reprogram_due;
+	const bool due = g_reprogram_due || rules_changed();
 
+	if (due && !g_reprogram_due)
+		OMCI_INFO("vlan: the rules of the services changed");
 	g_reprogram_due = false;
 	return due;
 }
@@ -4930,6 +4972,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.set_router = omci_hw_kernel_router,
 	.routing = kernel_routing,
 	.reprogram_due = kernel_reprogram_due,
+	.service_rules = kernel_service_rules,
 	.fdb = kernel_fdb,
 	.mcast_port = kernel_mcast_port,
 	.mcast_groups = kernel_mcast_groups,

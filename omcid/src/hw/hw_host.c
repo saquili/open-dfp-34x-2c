@@ -11,8 +11,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "hw/hw.h"
+#include "me/svcrule.h"
 #include "sys/log.h"
 #include "sys/wire.h"
 
@@ -293,6 +295,24 @@ size_t omci_hw_vlan_recorded(const struct omci_hw_vlan_xlate **out)
 	if (out != NULL)
 		*out = g_vlan;
 	return g_vlan_n;
+}
+
+/* The rules of the services that a test sets, as a person's. */
+static struct omci_svc_rule g_svc[OMCI_SVC_MAX];
+static size_t g_svc_n;
+
+void omci_hw_service_rules_set(const struct omci_svc_rule *rules, size_t n)
+{
+	g_svc_n = n < OMCI_SVC_MAX ? n : OMCI_SVC_MAX;
+	memcpy(g_svc, rules, g_svc_n * sizeof(g_svc[0]));
+}
+
+static size_t omci_hw_service_rules(struct omci_svc_rule *out, size_t cap)
+{
+	const size_t n = g_svc_n < cap ? g_svc_n : cap;
+
+	memcpy(out, g_svc, n * sizeof(g_svc[0]));
+	return n;
 }
 
 const char *omci_hw_source(void)
@@ -1037,6 +1057,7 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.gem_counts = omci_hw_gem_counts,
 	.encrypted = omci_hw_encrypted,
 	.routing = omci_hw_routing,
+	.service_rules = omci_hw_service_rules,
 	.fdb = omci_hw_fdb,
 	.optics = omci_hw_optics,
 	.optics_limits = omci_hw_optics_limits,

@@ -3,7 +3,8 @@
 
 /*
  * omcid on ubus (ADR 0011): the object "omcid", whose method "status" gives
- * the number of instances and the counts of the frames, "mib" the MIB
+ * the number of instances and the counts of the frames, "rules" the rules
+ * of the services in force (me/svcrule.h), "mib" the MIB
  * (src/sys/publish.h), of the classes of its argument "classes", an array of
  * numbers, or of every class, in at most "max" bytes of JSON text, when
  * given, and "frames" the conversation with the OLT (src/sys/history.h),
@@ -107,6 +108,22 @@ static int status(struct ubus_context *ctx, struct ubus_object *obj,
 	return 0;
 }
 
+/* The rules of the services in force (sys/publish.h, omci_publish_services()). */
+static int rules(struct ubus_context *ctx, struct ubus_object *obj,
+		 struct ubus_request_data *req, const char *method,
+		 struct blob_attr *msg)
+{
+	struct writer w = { .b = &g_buf };
+
+	(void)obj;
+	(void)method;
+	(void)msg;
+	blob_buf_init(&g_buf, 0);
+	omci_publish_services(&g_ops, &w);
+	ubus_send_reply(ctx, req, g_buf.head);
+	return 0;
+}
+
 enum { MIB_CLASSES, MIB_MAX, __MIB_MAX };
 
 static const struct blobmsg_policy g_mib_policy[] = {
@@ -175,6 +192,7 @@ static int frames(struct ubus_context *ctx, struct ubus_object *obj,
 
 static const struct ubus_method g_methods[] = {
 	UBUS_METHOD_NOARG("status", status),
+	UBUS_METHOD_NOARG("rules", rules),
 	UBUS_METHOD("mib", mib, g_mib_policy),
 	UBUS_METHOD("frames", frames, g_frames_policy),
 };

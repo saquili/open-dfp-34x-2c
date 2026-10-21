@@ -15,6 +15,7 @@
 #include "hw/hw.h"
 #include "me/bridge.h"
 #include "me/gem.h"
+#include "me/svcrule.h"
 #include "mib/store.h"
 #include "omcid/array_size.h"
 #include "omcid/byteorder.h"
@@ -612,6 +613,90 @@ static unsigned int g_fate_over;
 static uint8_t g_pass_refused[OMCI_VLAN_FATE_MAX][8];
 static size_t g_pass_refused_n;
 
+/*
+ * The rules of the services (me/svcrule.h): a person's, as the backend gave
+ * them for the programming under way; the ones the last recorded gathering
+ * made for clashes, and those of the gathering under way.
+ */
+static struct omci_svc_rule g_svc[OMCI_SVC_MAX];
+static size_t g_svc_n;
+static struct omci_svc_rule g_made[OMCI_SVC_MAX];
+static size_t g_made_n;
+static struct omci_svc_rule g_making[OMCI_SVC_MAX];
+static size_t g_making_n;
+
+/* The class 171 instance each gathered rule came of, by its place. */
+static uint16_t g_rule_inst[OMCI_HW_VLAN_MAX_RULES];
+
+/* The host VIDs that the MIB's rules match and the person's moves give, a bit each. */
+static uint8_t g_host_used[4096u / 8u];
+
+/* Where the rules of an instance of class 171 lead: an Ethernet UNI, the VEIP, or else. */
+enum out_kind { OUT_OTHER, OUT_UNI, OUT_VEIP };
+
+/* The association type of class 171 (G.988 9.3.13), attribute 1, and its pointer, 7. */
+enum {
+	ME171_ASSOC_TYPE = 1,
+	ME171_ASSOC_PTR = 7,
+	ME171_ASSOC_BRIDGE_PORT = 0,
+	ME171_ASSOC_PPTP_ETH = 2,
+	ME171_ASSOC_VEIP = 10,
+};
+
+static enum out_kind out_of(const struct omci_mib *mib, uint16_t class_id,
+			    uint16_t instance)
+{
+	uint8_t type = 0xffu, ptr[2] = { 0, 0 }, tp = 0;
+
+	(void)!omci_mib_attr_get(mib, class_id, instance, ME171_ASSOC_TYPE,
+				 &type, 1u, NULL);
+	if (type == ME171_ASSOC_PPTP_ETH)
+		return OUT_UNI;
+	if (type == ME171_ASSOC_VEIP)
+		return OUT_VEIP;
+	if (type != ME171_ASSOC_BRIDGE_PORT ||
+	    omci_mib_attr_get(mib, class_id, instance, ME171_ASSOC_PTR, ptr,
+			      sizeof(ptr), NULL) != OMCI_OK ||
+	    omci_mib_attr_get(mib, OMCI_BRIDGE_PORT_CLASS_ID,
+			      (uint16_t)(ptr[0] << 8 | ptr[1]),
+			      OMCI_BRIDGE_PORT_ATTR_TPTYPE, &tp, 1u,
+			      NULL) != OMCI_OK)
+		return OUT_OTHER;
+	return tp == OMCI_BRIDGE_TP_PPTP_ETH ? OUT_UNI :
+	       tp == OMCI_BRIDGE_TP_VEIP     ? OUT_VEIP :
+					       OUT_OTHER;
+}
+
+/*
+ * Whether host VID @vid is taken: by a rule of the MIB, a person's move, or
+ * a rule gathered so far, a move this gathering made among them.
+ */
+static bool host_taken(uint16_t vid, const struct omci_hw_vlan_xlate *rules,
+		       size_t n)
+{
+	if (g_host_used[vid / 8u] & (1u << (vid % 8u)))
+		return true;
+	for (size_t k = 0; k < n; k++)
+		if (rules[k].match_cvid == vid)
+			return true;
+	return false;
+}
+
+/*
+ * A free host VID for the service of fibre VID @fibre that clashes: its own
+ * when free, else the first free from 2 up; 0 when none is.
+ */
+static uint16_t free_host(uint16_t fibre,
+			  const struct omci_hw_vlan_xlate *rules, size_t n)
+{
+	uint16_t v = fibre;
+
+	if (host_taken(v, rules, n))
+		for (v = 2; v < 4095u && host_taken(v, rules, n); v++)
+			;
+	return v < 4095u ? v : 0u;
+}
+
 const char *omci_vlan_fate_name(enum omci_vlan_fate f)
 {
 	switch (f) {
@@ -629,6 +714,8 @@ const char *omci_vlan_fate_name(enum omci_vlan_fate f)
 		return "inert";
 	case OMCI_VLAN_FATE_REFUSED:
 		return "refused";
+	case OMCI_VLAN_FATE_LOCAL:
+		return "local";
 	default:
 		return "?";
 	}
@@ -822,6 +909,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 		g_fate_over = 0;
 		g_pass_refused_n = 0;
 	}
+	g_making_n = 0;
 
 	bool warned_full = false;
 
@@ -862,6 +950,16 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 				}
 
 				struct omci_hw_vlan_xlate cand = hw_rule_of(&d);
+				const uint16_t fibre = net_vid_of(&cand);
+				const struct omci_svc_rule *sr =
+					fibre != 0u ?
+						omci_svc_find(g_svc, g_svc_n,
+							      fibre) :
+						NULL;
+
+				if (sr != NULL && sr->action == OMCI_SVC_MOVE &&
+				    cand.kind == OMCI_HW_VLAN_CVID_XLATE)
+					cand.match_cvid = sr->host;
 
 				if (prefer_in_force) {
 					if (!programmable(d.op)) {
@@ -869,6 +967,23 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 							continue;
 					} else if ((pass == 0u) !=
 						   was_in_force(&cand)) {
+						continue;
+					}
+				}
+
+				if (sr != NULL && sr->action != OMCI_SVC_MOVE) {
+					const enum out_kind k = out_of(
+						mib, class_id, cur.instance);
+
+					if (sr->action == OMCI_SVC_OFF ||
+					    (sr->action == OMCI_SVC_ONLY_UNI &&
+					     k == OUT_VEIP) ||
+					    (sr->action == OMCI_SVC_ONLY_VEIP &&
+					     k == OUT_UNI)) {
+						fate_put(record, cur.instance,
+							 i,
+							 OMCI_VLAN_FATE_LOCAL,
+							 &cand, fibre, NULL);
 						continue;
 					}
 				}
@@ -897,8 +1012,51 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 				const uint16_t net_vid = net_vid_of(&cand);
 
 				size_t rival = 0;
-				const enum slot_verdict v =
+				enum slot_verdict v =
 					slot_for(rules, n, &cand, &rival);
+
+				if (v == SLOT_CONFLICT &&
+				    (sr == NULL ||
+				     sr->action != OMCI_SVC_MOVE) &&
+				    cand.kind == OMCI_HW_VLAN_CVID_XLATE &&
+				    rules[rival].match_cvid ==
+					    cand.match_cvid &&
+				    g_rule_inst[rival] != cur.instance &&
+				    g_making_n < ARRAY_SIZE(g_making) &&
+				    out_of(mib, class_id, cur.instance) !=
+					    OUT_OTHER &&
+				    out_of(mib, class_id, g_rule_inst[rival]) !=
+					    OUT_OTHER) {
+					struct omci_hw_vlan_xlate moved = cand;
+					size_t other = 0;
+
+					moved.match_cvid =
+						free_host(fibre, rules, n);
+					if (moved.match_cvid != 0u &&
+					    slot_for(rules, n, &moved,
+						     &other) == SLOT_NEW) {
+						if (warn)
+							OMCI_INFO(
+								"me171: C-VID %u<->%u clashes with %u<->%u of another output: it goes to the host as C-VID %u",
+								cand.match_cvid,
+								fibre,
+								rules[rival]
+									.match_cvid,
+								net_vid_of(
+									&rules[rival]),
+								moved.match_cvid);
+						g_making[g_making_n++] =
+							(struct omci_svc_rule){
+								.fibre = fibre,
+								.host = moved.match_cvid,
+								.action =
+									OMCI_SVC_MOVE,
+								.made = true,
+							};
+						cand = moved;
+						v = SLOT_NEW;
+					}
+				}
 
 				if (v == SLOT_DUP || v == SLOT_CONFLICT) {
 					if (v == SLOT_CONFLICT && warn)
@@ -970,6 +1128,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 						d.match_cvid, net_vid, net_vid);
 
 				rules[n] = cand;
+				g_rule_inst[n] = cur.instance;
 				fate_put(record, cur.instance, i,
 					 OMCI_VLAN_FATE_PROGRAMMED, &cand,
 					 net_vid, NULL);
@@ -978,11 +1137,63 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 		}
 	}
 
+	if (record) {
+		memcpy(g_made, g_making, g_making_n * sizeof(g_making[0]));
+		g_made_n = g_making_n;
+	}
 	if (bad_out != NULL)
 		*bad_out = bad;
 	if (over_out != NULL)
 		*over_out = over;
 	return n;
+}
+
+/*
+ * Ready the rules of the services for a programming: a person's, from the
+ * backend, and the host VIDs taken, those the MIB's rules match and those
+ * the person's moves give.
+ */
+static void svc_ready(const struct omci_mib *mib, uint16_t class_id,
+		      uint8_t attr_no)
+{
+	struct omci_mib_cursor cur;
+
+	g_svc_n = omci_hw()->service_rules != NULL ?
+			  omci_hw()->service_rules(g_svc, ARRAY_SIZE(g_svc)) :
+			  0u;
+	memset(g_host_used, 0, sizeof(g_host_used));
+	for (size_t k = 0; k < g_svc_n; k++)
+		if (g_svc[k].action == OMCI_SVC_MOVE)
+			g_host_used[g_svc[k].host / 8u] |=
+				(uint8_t)(1u << (g_svc[k].host % 8u));
+	for (enum omci_status w = omci_mib_walk_first(mib, &cur); w == OMCI_OK;
+	     w = omci_mib_walk_next(mib, &cur)) {
+		if (cur.class_id != class_id)
+			continue;
+		const size_t count = omci_mib_table_count(
+			mib, class_id, cur.instance, attr_no);
+
+		for (size_t j = 0; j < count; j++) {
+			uint8_t row[16] = { 0 };
+			struct omci_vlan_rule d;
+
+			(void)!omci_mib_table_get(mib, class_id, cur.instance,
+						  attr_no, j, row, sizeof(row));
+			(void)omci_vlan_decode(row, sizeof(row), &d);
+			if (d.op == OMCI_VLAN_OP_CVID_XLATE)
+				g_host_used[d.match_cvid / 8u] |=
+					(uint8_t)(1u << (d.match_cvid % 8u));
+		}
+	}
+}
+
+size_t omci_vlan_services(const struct omci_svc_rule **person,
+			  const struct omci_svc_rule **made, size_t *made_n)
+{
+	*person = g_svc;
+	*made = g_made;
+	*made_n = g_made_n;
+	return g_svc_n;
 }
 
 enum omci_status omci_vlan_program(const struct omci_mib *mib,
@@ -1000,6 +1211,9 @@ enum omci_status omci_vlan_program(const struct omci_mib *mib,
 		saved[i] = g_fate[i];
 
 	unsigned int over_plain = 0;
+
+	svc_ready(mib, class_id, attr_no);
+
 	const size_t plain = gather(mib, class_id, attr_no, rules, cap, NULL,
 				    false, false, false, &over_plain);
 

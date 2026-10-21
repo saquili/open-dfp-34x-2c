@@ -28,6 +28,8 @@ static const char *fate_name(uint8_t f)
 		return "inert";
 	case OMCI_CTL_VLAN_FATE_REFUSED:
 		return "refused";
+	case OMCI_CTL_VLAN_FATE_LOCAL:
+		return "local";
 	default:
 		return "?";
 	}
@@ -55,6 +57,9 @@ static void note(const struct omcid_vlan_fate_entry *e, char *out, size_t cap)
 		break;
 	case OMCI_CTL_VLAN_FATE_REFUSED:
 		(void)snprintf(out, cap, "the hardware would not take it");
+		break;
+	case OMCI_CTL_VLAN_FATE_LOCAL:
+		(void)snprintf(out, cap, "the stick's rule keeps it out");
 		break;
 	default:
 		out[0] = '\0';

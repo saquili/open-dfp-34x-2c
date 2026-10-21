@@ -21,6 +21,8 @@
 #include "omcid/attrs.h"
 #include "omcid/status.h"
 
+struct omci_svc_rule;
+
 /**
  * struct omci_hw_port - One slot of the device.
  * @pptp_instance: the instance of its Ethernet UNI; 0 for the PON side
@@ -316,6 +318,8 @@ size_t omci_hw_vlan_recorded(const struct omci_hw_vlan_xlate **out);
 void omci_hw_vlan_fail_next(void);
 
 void omci_hw_vlan_reject_next(uint16_t key);
+
+void omci_hw_service_rules_set(const struct omci_svc_rule *rules, size_t n);
 #endif
 
 /* The GEM ports the PON MAC can carry. */
@@ -1165,6 +1169,9 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  * @reprogram_due: whether the backend has changed what of the MIB it applies,
  *	so that the data path is to be programmed again from the MIB; a read
  *	clears it. NULL in a backend that never changes it
+ * @service_rules: the stick's rules for the services that a person set
+ *	(me/svcrule.h), into @out of @cap places, as the number written; read
+ *	at each programming of the VLAN rules. NULL in a backend without them
  * @fdb: read the addresses the switch forwards by; NULL in a backend that
  *	cannot
  * @mcast_port: set how the bridge snoops the subscriber side; NULL in a
@@ -1235,6 +1242,7 @@ struct omci_hw_ops {
 	void (*set_router)(bool on);
 	bool (*routing)(void);
 	bool (*reprogram_due)(void);
+	size_t (*service_rules)(struct omci_svc_rule *out, size_t cap);
 	enum omci_status (*fdb)(struct omci_hw_fdb *out, size_t cap, size_t *n);
 	enum omci_status (*mcast_port)(const struct omci_hw_mcast_port *cfg);
 	enum omci_status (*mcast_groups)(struct omci_hw_mcast_group *out,

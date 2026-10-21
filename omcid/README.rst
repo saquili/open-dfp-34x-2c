@@ -60,7 +60,8 @@ Layout
 ``src/me/``
    the managed entity classes: the class table, the instances the ONU makes
    itself, MIB upload, table attributes, the values an attribute takes, and
-   the data path (GEM ports, bridges, VLAN rules, performance monitoring)
+   the data path (GEM ports, bridges, VLAN rules and the rules of the
+   services, performance monitoring)
 ``src/mcast/``
    multicast: the tables of the multicast operations profile and of the
    multicast subscriber config info, read into whole rows; the IGMP and MLD
@@ -82,6 +83,25 @@ Layout
    the tests
 ``data/g988-me-min.tsv``
    the managed entity classes, from which ``src/me/table.[ch]`` are made
+
+The rules of the services
+=========================
+
+The SFP lane is the one way to the host of every service the OLT sets up, on
+any Ethernet UNI or on the VEIP. A person's rules (``src/me/svcrule.h``),
+which onu-apply writes from the settings (onu-config's ``SVCn``) into
+``/run/omcid/rules``, change what the hardware is given of the VLAN rules,
+never the MIB: a service, known by its VLAN on the fibre, goes to the host in
+another VLAN, stays off the host, or keeps the rules of the Ethernet UNIs or
+of the VEIP alone. When the rules of two different outputs would take one
+host VLAN for two services, the programming moves the later service to its
+own VLAN on the fibre, or to the first free one, where it left the later rule
+out before; without rules and without such a clash the hardware is given
+what it was before. A new file of rules programs the data path again (the
+backend's ``reprogram_due``). ``omcivlan`` names a rule that a person's rule
+keeps out ``local``, and the ubus method ``rules`` gives the rules in force, a
+person's and the moves made, which pond serves as the value
+``service_rules``.
 
 The multicast proxy
 ===================

@@ -138,6 +138,7 @@ CORE_SRC := \
 	src/me/tables.c \
 	src/me/upload.c \
 	src/me/values.c \
+	src/me/svcrule.c \
 	src/me/vlan.c \
 	src/mib/store.c \
 	src/omci/alarm.c \
@@ -181,7 +182,7 @@ tools_src_omci_ctl_probe  := tools/deploy/omci_ctl_probe.c
 # daemon itself.
 TESTS := actions alarm attr_sweep avc_origin ber bridge cases cases_mib checks client clock ctl ctl_mode daemon defaults edges engine_edges exec filter frame gem getnext history \
          hw_host hw_ops keep log mcast mcast_agent mcast_message mcast_proxy me171 me_edges mib_data_sync mib_store mibreset_reply model msgtype_matrix msgtypes multibit optical pm pipe priority publish \
-         roundtrip std_classes swdl synctime_stamp tables tap test_instance testresult uni_rate upload vlan vlan_pri
+         roundtrip std_classes svcrule swdl synctime_stamp tables tap test_instance testresult uni_rate upload vlan vlan_pri
 CLIENT_TESTS := client ctl
 SCRIPT_TESTS := coverage_gate style_gate
 TSV_TESTS    := actions attr_sweep defaults model roundtrip tables upload

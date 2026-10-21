@@ -5,7 +5,9 @@
 
 #include <stdio.h>
 
+#include "me/svcrule.h"
 #include "me/table.h"
+#include "me/vlan.h"
 #include "mib/store.h"
 #include "sys/ctl.h"
 #include "sys/publish.h"
@@ -228,4 +230,31 @@ void omci_publish_status(const struct omci_mib *mib,
 {
 	ops->num(ctx, "instances", (uint32_t)omci_mib_count(mib));
 	write_frames(counters, ops, ctx);
+}
+
+/* One rule of the services, as an element of "rules". */
+static void write_rule(const struct omci_svc_rule *r,
+		       const struct omci_publish_ops *ops, void *ctx)
+{
+	ops->open(ctx, NULL, false);
+	ops->num(ctx, "fibre", r->fibre);
+	ops->str(ctx, "action", omci_svc_action_name(r->action));
+	if (r->action == OMCI_SVC_MOVE)
+		ops->num(ctx, "host", r->host);
+	ops->flag(ctx, "auto", r->made);
+	ops->close(ctx, false);
+}
+
+void omci_publish_services(const struct omci_publish_ops *ops, void *ctx)
+{
+	const struct omci_svc_rule *person = NULL, *made = NULL;
+	size_t made_n = 0;
+	const size_t n = omci_vlan_services(&person, &made, &made_n);
+
+	ops->open(ctx, "rules", true);
+	for (size_t i = 0; i < n; i++)
+		write_rule(&person[i], ops, ctx);
+	for (size_t i = 0; i < made_n; i++)
+		write_rule(&made[i], ops, ctx);
+	ops->close(ctx, true);
 }

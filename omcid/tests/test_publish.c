@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hw/hw.h"
+#include "me/svcrule.h"
+#include "me/vlan.h"
 #include "mib/store.h"
 #include "sys/ctl.h"
 #include "sys/publish.h"
@@ -31,6 +34,13 @@ static const char g_status[] =
 	"{\"instances\":3,\"frames\":{\"handled\":7,\"rejected\":1,\"answered\":9}}";
 
 static const struct omci_ctl_counters g_counters = { 7, 1, 9 };
+
+/* The rules of the services as test_the_services() has them written. */
+static const char *const g_rules[] = {
+	"{\"fibre\":300,\"action\":\"move\",\"host\":301,\"auto\":false}",
+	"{\"fibre\":200,\"action\":\"off\",\"auto\":false}",
+	"{\"fibre\":500,\"action\":\"move\",\"host\":500,\"auto\":true}",
+};
 
 /* An ONU-G with a logical password, an ANI-G, and a VLAN rule table of two rows. */
 static void fill(struct omci_mib *mib)
@@ -243,11 +253,60 @@ static void test_the_status(struct omci_mib *mib)
 	CHECK_EQ(strcmp(g_out, g_status), 0);
 }
 
+/*
+ * The rules of the services: a person's, and a move the programming made
+ * for the VEIP's VLAN 410, which the UNI's takes.
+ */
+static void test_the_services(struct omci_mib *mib)
+{
+	static const uint8_t uni = 2u, veip = 10u;
+	static const uint8_t to100[16] = { 0xf8, 0,    0,    0,	   0x80, 0xcd,
+					   0,	 0,    0x40, 0x0f, 0,	 0,
+					   0,	 0x08, 0x03, 0x20 };
+	static const uint8_t to500[16] = { 0xf8, 0,    0,    0,	   0x80, 0xcd,
+					   0,	 0,    0x40, 0x0f, 0,	 0,
+					   0,	 0x08, 0x0f, 0xa0 };
+	const struct omci_svc_rule person[2] = {
+		{ .fibre = 300u, .host = 301u, .action = OMCI_SVC_MOVE },
+		{ .fibre = 200u, .action = OMCI_SVC_OFF },
+	};
+	struct text t = { .p = g_out, .cap = sizeof(g_out) };
+
+	CHECK_EQ(omci_mib_create(mib, 171u, 0x101u), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, 171u, 0x601u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 171u, 0x101u, 1u, &uni, 1u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 171u, 0x601u, 1u, &veip, 1u), OMCI_OK);
+	CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, to100, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	CHECK_EQ(omci_mib_table_put(mib, 171u, 0x601u, 6u, to500, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	omci_hw_service_rules_set(person, 2u);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	t.first[0] = true;
+	t_put(&t, "{");
+	omci_publish_services(&g_text_ops, &t);
+	t_put(&t, "}");
+	/* The rules in their order, a person's first, and nothing more. */
+	const char *at = g_out;
+
+	CHECK_EQ(strncmp(at, "{\"rules\":[", 10), 0);
+	for (size_t i = 0; i < 3u && at != NULL; i++) {
+		at = strstr(at, g_rules[i]);
+		CHECK(at != NULL);
+		at = at != NULL ? at + strlen(g_rules[i]) + (i < 2u) : NULL;
+	}
+	CHECK(at != NULL && strcmp(at, "]}") == 0);
+	omci_hw_service_rules_set(person, 0u);
+}
+
 int main(void)
 {
 	RUN_MIB(test_the_classes_asked_for_in_their_order);
 	RUN_MIB(test_every_instance_without_classes);
 	RUN_MIB(test_what_does_not_fit_is_left_out_whole);
 	RUN_MIB(test_the_status);
+	RUN_MIB(test_the_services);
 	return OMCI_T_REPORT("test_publish");
 }
