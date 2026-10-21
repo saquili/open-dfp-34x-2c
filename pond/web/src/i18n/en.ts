@@ -1241,7 +1241,7 @@ export const en = {
     test: "Test a channel",
     testRun: "Test for {s} s",
     testing: "Testing…",
-    testGot: "The stream came after {ms} ms: {rate}, {packets} packets.",
+    testGot: "The stream came after {ms} ms: {rate}.",
     testNothing:
       "Nothing came in {s} s: the channel may be off the operator's list, or the OLT does not send it.",
     testHint:

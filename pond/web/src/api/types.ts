@@ -740,8 +740,9 @@ export interface Iptv {
     max_bandwidth_bps: number | null;
     robustness: number;
     query_interval_s: number;
-    query_response_s: number;
-    last_member_s: number;
+    /** The most time to answer a query, and to answer one about a group after a leave. */
+    query_response_ms: number;
+    last_member_ms: number;
     /** The VLAN the groups reach the host in; null when the OLT keeps the stream's tag. */
     host_vlan: number | null;
     /** The groups the OLT allows, as ranges, in full or for preview. */
@@ -762,6 +763,7 @@ export interface Iptv {
     /** The host address that joined it. */
     client: string | null;
     since_s: number;
+    /** The stream's bits a second, from the bytes the switch counted; null before two counts. */
     rate_bps: number | null;
   }[];
   /** The joins the policy refused, the latest first. */
@@ -809,12 +811,11 @@ export interface Iptv {
   }[];
 }
 
-/** What a test of a group measured: the stick joins it, counts its stream, and leaves. */
+/** What a test of a group measured: the stick joins it, counts its stream's bytes, and leaves. */
 export interface IptvTest {
   group: string;
   vlan: number | null;
   seconds: number;
-  packets: number;
   bytes: number;
   rate_bps: number;
   /** The milliseconds until the first frame; null when none came. */

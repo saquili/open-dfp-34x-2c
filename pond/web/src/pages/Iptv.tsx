@@ -199,7 +199,7 @@ function Policy({ tv }: { tv: Iptv }) {
             t("tv.timers"),
             t("tv.timersValue", {
               q: p.query_interval_s,
-              r: p.query_response_s,
+              r: (p.query_response_ms / 1000).toLocaleString(lang),
               rob: p.robustness,
             }),
           ],
@@ -320,7 +320,6 @@ function Test({ tv }: { tv: Iptv }) {
               : t("tv.testGot", {
                   ms: result.first_ms,
                   rate: bitrate(result.rate_bps, lang),
-                  packets: integer(result.packets, lang),
                 })}
           </p>
         )}

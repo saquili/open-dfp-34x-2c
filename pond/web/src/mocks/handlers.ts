@@ -530,8 +530,8 @@ const iptv: Omit<Iptv, "now_s"> = {
     max_bandwidth_bps: 40_000_000,
     robustness: 2,
     query_interval_s: 125,
-    query_response_s: 10,
-    last_member_s: 1,
+    query_response_ms: 10000,
+    last_member_ms: 1000,
     host_vlan: 421,
     allowed: [
       { from: "224.0.0.0", to: "239.255.255.255", vlan: 300, bandwidth_bps: null, preview: false },
@@ -1804,7 +1804,6 @@ const stick = [
       group,
       vlan: b.VLAN ? Number(b.VLAN) : null,
       seconds,
-      packets: Math.round((rate * seconds) / 8 / 1316),
       bytes: Math.round((rate * seconds) / 8),
       rate_bps: rate,
       first_ms: known ? 180 + Math.round(Math.random() * 120) : null,

@@ -1232,7 +1232,7 @@ export const pl: Dictionary = {
     test: "Test kanału",
     testRun: "Testuj {s} s",
     testing: "Testuję…",
-    testGot: "Strumień przyszedł po {ms} ms: {rate}, {packets} pakietów.",
+    testGot: "Strumień przyszedł po {ms} ms: {rate}.",
     testNothing:
       "Przez {s} s nic nie przyszło: kanał może być spoza listy operatora albo OLT go nie podaje.",
     testHint: "Wkładka sama dołącza do grupy, mierzy strumień i wychodzi, bez dekodera.",
