@@ -101,7 +101,9 @@ little as it can:
 * At each bring-up it writes registers of the part, not its EEPROM: it puts
   back the configuration the module loads at power-up, its automatic
   extinction-ratio loop on, which a kernel before it may have changed in the
-  registers (``gn25l95.rst``, "The factory configuration"). It reads the
+  registers (M: the loop found off after a warm restart from a kernel that
+  had turned it off, and turned on, and found on at ten bring-ups in a row,
+  2026-10-21; ``gn25l95.rst``, "The factory configuration"). It reads the
   persistence control first and, if register changes would reach the EEPROM,
   logs ``EEPROM updates are enabled`` and writes no table byte (M: the same
   section). It does not reset the part, which would load that configuration
@@ -163,9 +165,15 @@ What it cannot do
   again (M: a disable to O7 from either lower level, and TO1 after the ONU's
   own step, each put the normal level back, 2026-10-20; I: the same on a
   take-down or a loss of the downstream; ``gn25l95.rst``, "Known
-  limitations").
-* **Dying_Gasp** is sent before an orderly restart; whether the loss of supply
-  makes the MAC send it is not known.
+  limitations"). An orderly restart puts the normal level back before it
+  (M: a ``reboot`` at the lowest level logged ``transmit power back at level
+  mode 0 before the restart``, and the next kernel found the normal set
+  point, 2026-10-21); a reset that shuts nothing down, taken at a lower
+  level with the loop on, has not been run.
+* **Dying_Gasp** is sent before an orderly restart (M: a ``reboot`` in O5
+  logged ``Dying_Gasp sent 3 of 3 times before the restart``, 2026-10-21;
+  ``rtl9602c-gpon.rst``, "PLOAM transmit"); whether the loss of supply makes
+  the MAC send it is not known.
 
 What a person does
 ==================
