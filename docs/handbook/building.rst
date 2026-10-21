@@ -273,7 +273,8 @@ BusyBox 1.37.0
     ``cryptpw``, the DHCP server ``udhcpd`` and ``dumpleases`` came after,
     and on 2026-10-18 the DHCP client ``udhcpc`` again, for the IPoE
     connections whose address comes from the operator's DHCP server (it had
-    served the bench's router of before, and left with it):
+    served the bench's router of before, and left with it); on 2026-10-22
+    ``nslookup`` left, as the stick has no resolver:
 
     shell and init
         ash sh halt poweroff reboot
@@ -288,7 +289,7 @@ BusyBox 1.37.0
         sleep date uname hostname id whoami env which tty stty watch time
         syslogd klogd logger
     network
-        ip ping netstat nc traceroute traceroute6 arping nslookup
+        ip ping netstat nc traceroute traceroute6 arping
     archives
         tar gzip gunzip zcat
 
