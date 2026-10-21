@@ -2548,17 +2548,50 @@ static int rtl9602c_acl_place(struct rtl9602c_priv *p, u16 prio)
 }
 
 /*
- * A free log counter for a new rule, its count starting from what it reads now,
- * or -1 when all 32 are taken, and the rule then goes uncounted.
+ * What an ACL rule's log counter counts: nothing, as the rule has no counter,
+ * the frames the rule matches, or their bytes.
  */
-static int rtl9602c_acl_log_get(struct rtl9602c_priv *p)
+enum rtl9602c_acl_count {
+	RTL9602C_ACL_COUNT_NONE,
+	RTL9602C_ACL_COUNT_FRAMES,
+	RTL9602C_ACL_COUNT_BYTES,
+};
+
+/*
+ * A free log counter for a new rule that counts what @count says, its count
+ * starting from what it reads now, or -1 when none is free, and the rule then
+ * goes uncounted. The two counters of a pair count the same, as LOG_TYPE has
+ * one bit for both: a counter whose partner counts the same is taken first,
+ * and a pair whose counters are both free is set to count what is asked.
+ */
+static int rtl9602c_acl_log_get(struct rtl9602c_priv *p,
+				enum rtl9602c_acl_count count)
 {
-	unsigned int i;
+	const bool bytes = count == RTL9602C_ACL_COUNT_BYTES;
+	unsigned int i, pair, free_pair = RTL9602C_LOG_COUNTERS;
 
 	lockdep_assert_held(&p->acl_lock);
-	i = find_first_zero_bit(p->acl_log_used, RTL9602C_LOG_COUNTERS);
+	for (i = 0; i < RTL9602C_LOG_COUNTERS; i++) {
+		if (test_bit(i, p->acl_log_used))
+			continue;
+		if (!test_bit(i ^ 1, p->acl_log_used)) {
+			if (free_pair == RTL9602C_LOG_COUNTERS)
+				free_pair = i;
+			continue;
+		}
+		if (!!(p->acl_log_bytes & RTL9602C_LOG_TYPE_BYTES(i / 2)) ==
+		    bytes)
+			break;
+	}
+	if (i >= RTL9602C_LOG_COUNTERS)
+		i = free_pair;
 	if (i >= RTL9602C_LOG_COUNTERS)
 		return -1;
+	pair = RTL9602C_LOG_TYPE_BYTES(i / 2);
+	if (!!(p->acl_log_bytes & pair) != bytes) {
+		p->acl_log_bytes ^= pair;
+		rtl9602c_w(p, RTL9602C_LOG_TYPE, p->acl_log_bytes);
+	}
 	set_bit(i, p->acl_log_used);
 	p->acl_log[i].last = rtl9602c_r(p, RTL9602C_LOG_CNT(i));
 	p->acl_log[i].total = 0;
@@ -2581,7 +2614,8 @@ static void rtl9602c_acl_log_read(struct rtl9602c_priv *p, unsigned int i)
  * @p: the switch
  *
  * A log counter has 32 bits. Folded every minute, as the counter fold does, it
- * cannot wrap twice between two reads below 71 million frames a second.
+ * cannot wrap twice between two reads below 71 million frames a second, or 572
+ * Mbit/s for a counter of bytes, unless tc reads it more often.
  *
  * Context: process context; takes acl_lock.
  */
@@ -2597,15 +2631,16 @@ void rtl9602c_acl_log_fold(struct rtl9602c_priv *p)
 
 /*
  * Write the rule of @m on @port into a new entry, kept in priority order
- * (rtl9602c_acl_place()), and turn on the port's lookup. With @count, the rule
- * takes a log counter while one is free; with a @meter, not -1, it hands the
- * frames it matches to that meter instead. @extack, if not NULL, gets the
- * reason of a failure.
+ * (rtl9602c_acl_place()), and turn on the port's lookup. The rule takes a log
+ * counter for what @count says while one is free; with a @meter, not -1, it
+ * hands the frames it matches to that meter instead. @extack, if not NULL,
+ * gets the reason of a failure.
  */
 static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 			       const struct rtl9602c_acl_match *m, u16 prio,
 			       unsigned long cookie, unsigned int fwdact,
-			       unsigned int fwd_pmsk, bool count, int meter,
+			       unsigned int fwd_pmsk,
+			       enum rtl9602c_acl_count count, int meter,
 			       struct netlink_ext_ack *extack)
 {
 	u8 slot_of[RTL9602C_ACL_TMPL_SLOTS];
@@ -2632,7 +2667,8 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 	}
 	idx = err;
 
-	log = count ? rtl9602c_acl_log_get(p) : -1;
+	log = count != RTL9602C_ACL_COUNT_NONE ? rtl9602c_acl_log_get(p, count) :
+						 -1;
 	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
 	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, m,
 			     fwdact, fwd_pmsk, log, meter);
@@ -2737,7 +2773,9 @@ static void rtl9602c_acl_pppoe_addr(struct rtl9602c_acl_match *m, u8 hi,
  * A flower rule whose one action is drop, trap or pass, as one ACL rule; a rule
  * that passes mirrors its frames to no port, so that they go on as the switch
  * forwards them and no rule of lower priority decides for them, as a pass ends
- * the classification in software. Each field
+ * the classification in software. A rule that passes the frames is there to
+ * count them, and counts their bytes, which make a rate; one that drops or
+ * traps them counts the frames it decided for. Each field
  * it matches is cut into 16-bit slots, and a slot with a zero mask is left out.
  * L4 ports, and an ICMP or ICMPv6 type and code, are compared through the
  * field selectors setup points at the start of the IP payload, which are taken
@@ -2984,7 +3022,10 @@ no_addrs:
 	}
 
 	err = rtl9602c_acl_insert(p, port, &m, cls->common.prio, cls->cookie,
-				  fwdact, fwd_pmsk, true, -1, extack);
+				  fwdact, fwd_pmsk,
+				  fwdact == RTL9602C_ACL_ACT_FWD_MIRROR && !fwd_pmsk ?
+				  RTL9602C_ACL_COUNT_BYTES : RTL9602C_ACL_COUNT_FRAMES,
+				  -1, extack);
 out:
 	mutex_unlock(&p->acl_lock);
 	return err;
@@ -3096,12 +3137,14 @@ void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p)
 					RTL9602C_ACL_SNOOP_PRIO,
 					RTL9602C_ACL_SNOOP_COOKIE(n++),
 					RTL9602C_ACL_ACT_FWD_MIRROR,
-					BIT(RTL9602C_PORT_CPU), false, -1, NULL) ||
+					BIT(RTL9602C_PORT_CPU),
+					RTL9602C_ACL_COUNT_NONE, -1, NULL) ||
 		    rtl9602c_acl_insert(p, ports[i], &mld,
 					RTL9602C_ACL_SNOOP_PRIO,
 					RTL9602C_ACL_SNOOP_COOKIE(n++),
 					RTL9602C_ACL_ACT_FWD_MIRROR,
-					BIT(RTL9602C_PORT_CPU), false, -1, NULL))
+					BIT(RTL9602C_PORT_CPU),
+					RTL9602C_ACL_COUNT_NONE, -1, NULL))
 			pr_err("port %d: no ACL rule for IGMP and MLD; the bridge misses reports to groups in the table\n",
 			       ports[i]);
 	}
@@ -3234,8 +3277,8 @@ int rtl9602c_gem_ds_limit(struct rtl9602c_priv *p, unsigned int flow, u64 rate,
 	mutex_lock(&p->acl_lock);
 	err = rtl9602c_acl_insert(p, RTL9602C_PORT_PON, &m, 0,
 				  RTL9602C_ACL_GEM_DS_COOKIE(flow),
-				  RTL9602C_ACL_ACT_FWD_NONE, 0, false, meter,
-				  extack);
+				  RTL9602C_ACL_ACT_FWD_NONE, 0,
+				  RTL9602C_ACL_COUNT_NONE, meter, extack);
 	mutex_unlock(&p->acl_lock);
 	if (err) {
 		mutex_lock(&p->meter_lock);
@@ -3956,15 +3999,16 @@ int rtl9602c_cls_flower_add(struct dsa_switch *ds, int port,
 }
 
 /**
- * rtl9602c_cls_flower_stats() - the frames an offloaded flower rule matched
+ * rtl9602c_cls_flower_stats() - what an offloaded flower rule matched
  * @ds: the switch
  * @port: unused; the cookie names the rule
  * @cls: the rule, whose statistics are updated
  * @ingress: unused
  *
- * An ACL rule with a log counter reports the frames it matched since the last
- * report. The counter counts no bytes, and a rule of storm control or of the
- * classifier, or one left without a counter, reports nothing.
+ * An ACL rule with a log counter reports what it matched since the last
+ * report: a rule that passes the frames their bytes, and no frames; another
+ * the frames, and no bytes (rtl9602c_acl_replace()). A rule of storm control
+ * or of the classifier, or one left without a counter, reports nothing.
  *
  * Return: 0.
  */
@@ -3972,8 +4016,8 @@ int rtl9602c_cls_flower_stats(struct dsa_switch *ds, int port,
 			      struct flow_cls_offload *cls, bool ingress)
 {
 	struct rtl9602c_priv *p = ds->priv;
+	u64 pkts = 0, bytes = 0, n;
 	unsigned int idx;
-	u64 pkts = 0;
 	int log;
 
 	mutex_lock(&p->acl_lock);
@@ -3982,13 +4026,17 @@ int rtl9602c_cls_flower_stats(struct dsa_switch *ds, int port,
 		if (p->acl[idx].cookie != cls->cookie || log < 0)
 			continue;
 		rtl9602c_acl_log_read(p, log);
-		pkts = p->acl_log[log].total - p->acl_log[log].reported;
+		n = p->acl_log[log].total - p->acl_log[log].reported;
 		p->acl_log[log].reported = p->acl_log[log].total;
+		if (p->acl_log_bytes & RTL9602C_LOG_TYPE_BYTES(log / 2))
+			bytes = n;
+		else
+			pkts = n;
 		break;
 	}
 	mutex_unlock(&p->acl_lock);
 
-	flow_stats_update(&cls->stats, 0, pkts, 0, 0,
+	flow_stats_update(&cls->stats, bytes, pkts, 0, 0,
 			  FLOW_ACTION_HW_STATS_IMMEDIATE);
 	return 0;
 }

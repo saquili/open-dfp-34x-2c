@@ -1123,13 +1123,15 @@ enum rtl9602c_ptp_tc {
 /*
  * The log counters: 32 counters of 32 bits, each counting what an ACL rule's
  * log class sends it. Bit k of LOG_WIDE joins counters 2k and 2k + 1 into one
- * of 64 bits, and bit k of LOG_TYPE chooses what they count.
+ * of 64 bits, and bit k of LOG_TYPE chooses what they count: the frames (0)
+ * or their bytes (1).
  */
 #define RTL9602C_LOG_COUNTERS		32
 #define RTL9602C_LOG_CNT(i)		(0x032600 + 4 * (i))
 #define RTL9602C_LOG_WIDE		0x034004
 #define RTL9602C_LOG_TYPE		0x034008
 #define RTL9602C_LOG_TYPE_PACKETS	0
+#define RTL9602C_LOG_TYPE_BYTES(k)	BIT(k)
 
 /*
  * The classifier, whose rules are two entries as in the ACL; the lowest
@@ -2306,15 +2308,21 @@ struct rtl9602c_priv {
 	/** @acl_log_used: the log counters given to ACL rules */
 	DECLARE_BITMAP(acl_log_used, RTL9602C_LOG_COUNTERS);
 	/**
+	 * @acl_log_bytes: the pairs of log counters that count bytes, as
+	 * LOG_TYPE has them, under @acl_lock
+	 */
+	u16 acl_log_bytes;
+	/**
 	 * @acl_log: each log counter, under @acl_lock: its value at the last
-	 * read, and the frames counted and reported since it was given out
+	 * read, and the frames or bytes counted and reported since it was given
+	 * out
 	 */
 	struct {
 		/** @acl_log.last: the counter at the last read */
 		u32		last;
-		/** @acl_log.total: the frames counted */
+		/** @acl_log.total: the frames or bytes counted */
 		u64		total;
-		/** @acl_log.reported: the frames reported to tc */
+		/** @acl_log.reported: the frames or bytes reported to tc */
 		u64		reported;
 	} acl_log[RTL9602C_LOG_COUNTERS];
 	/** @acl_tmpl: the field code of each template slot, as written */
