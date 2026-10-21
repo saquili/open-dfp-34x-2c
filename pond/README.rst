@@ -105,9 +105,10 @@ The token of scripts
 --------------------
 
 A script that cannot sign in as a person does may present a bearer token
-instead of a session. The stick has none until root makes one, through
-``/api/token/new`` with root's password, which shows it once, or on the
-stick itself (ssh, the console)::
+instead of a session. The stick has none until root makes one, in the panel
+(System, Access, "Token for scripts", with root's password, through
+``/api/token/new``, which shows it once) or on the stick itself (ssh, the
+console)::
 
     onu-config token new      # makes a token, keeps it, prints it
     onu-config token          # prints it again
@@ -123,14 +124,15 @@ request that comes without a session, so a new token holds at once and one
 taken away stops holding, with no restart that would end the sessions.
 
 A script sends ``Authorization: Bearer TOKEN`` to an ``https://`` address; the
-panel's certificate is the stick's own, which the fingerprint under System or
-on the console tells apart. Over ``http://`` the request is sent on to HTTPS
-before its body is read, but its headers have crossed the link in the clear:
-the token is for HTTPS only. A request with the token needs no ``X-Pond``
-header, as it has no session for a page of another site to use, and it is not
-held back by the default password, since someone with root's shell made it.
-It may call every route that a session may, and no more: a new update written
-and a bank started need root's password in ``X-Pond-Password`` too.
+panel's certificate is the stick's own, which the fingerprint under System,
+Access, "HTTPS of the panel", or on the console tells apart. Over ``http://``
+the request is sent on to HTTPS before its body is read, but its headers have
+crossed the link in the clear: the token is for HTTPS only. A request with the
+token needs no ``X-Pond`` header, as it has no session for a page of another
+site to use, and it is not held back by the default password, since only
+someone who knows root's password makes one. It may call every route that a
+session may, and no more: a new update written and a bank started need root's
+password in ``X-Pond-Password`` too.
 
 HTTPS
 =====
