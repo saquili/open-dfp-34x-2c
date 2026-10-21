@@ -351,16 +351,17 @@ Before you install
   its ``SHA256SUMS`` before you install them.
 * **The sticks tested here do not carry the host's identity page as
   shipped.** As shipped, the page that the host reads over the cage's
-  two-wire bus declares RX_LOS. A Linux host then keeps the link down while
-  that line is high, which left it down after warm restarts of the host, and
-  drops the link, the stick's only way in, whenever the fibre is dark. On the
-  sticks tested two bytes of that page were written from the host, at the
-  owner's risk: the claim of RX_LOS taken away, and the page's check byte
-  with it. That is what lets a Linux host bring the 2.5 Gb/s link up every
-  time and keep it while the fibre is dark; RX_LOS stays a line the host may
-  read on its own. This system cannot change that page. The page also makes
-  Linux 6.4 to 6.7 find no mode for the lane; only 6.12 and 6.18 were tried
-  (`install-guide.rst
+  two-wire bus declares RX_LOS, and 1000BASE-LX at 1300 MBd. A Linux host
+  then keeps the link down while that line is high, which left it down after
+  warm restarts of the host, and drops the link, the stick's only way in,
+  whenever the fibre is dark; and it runs the lane at 1 Gb/s. On the sticks
+  tested the page was written from the host, at the owner's risk: the claim
+  of RX_LOS taken away, 2500 MBd declared with no compliance code, and the
+  page's check bytes with them. That is what lets a Linux host bring the
+  2.5 Gb/s link up every time and keep it while the fibre is dark; RX_LOS
+  stays a line the host may read on its own. This system cannot change that
+  page. A page changed so makes Linux 6.4 to 6.7 find no mode for the lane;
+  only 6.12 and 6.18 were tried (`install-guide.rst
   <docs/handbook/install-guide.rst>`__, "The host's view of the stick").
 * **Two ways in.** Through the shipped firmware's web page, with the package
   ``web-install.tar`` of a release, which needs no console

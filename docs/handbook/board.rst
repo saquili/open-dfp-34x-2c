@@ -220,25 +220,35 @@ The identity page the host reads over the cage's two-wire bus (A0h at
 ``0x50``) declares an SFP (identifier ``0x03``) with a single-mode laser of
 1310 nm and 20 km on an SC connector, the name ``ODI`` (bytes 20 to 35) and
 the part number ``DFP-34X-2C3`` (bytes 40 to 55), and no digital
-diagnostics. It declares no Ethernet compliance code (byte 6 is 0) and a
-nominal bit rate of 2500 MBd (byte 12, ``0x19``), so a Linux host picks the
-lane's mode from the bit rate alone (``install-guide.rst``, "The host's view
-of the stick").
+diagnostics. As shipped it declares 1000BASE-LX (byte 6, ``0x02``) and a
+nominal bit rate of 1300 MBd (byte 12, ``0x0d``), so a Linux host runs the
+lane as 1000BASE-X (``install-guide.rst``, "The host's view of the stick").
 
 The page is a memory of its own, apart from the laser driver's private EEPROM,
 which the host never sees, on a bus the SoC does not reach: the SoC's SFP
 slave is disabled and empty, and the stick cannot change what the host reads
 (M: ``gn25l95.rst``, 2026-10-17).
 
-**The sticks this system was tested on do not carry the page as shipped.** As
-shipped, byte 65 (``0x41``), the low byte of the option word of bytes 64 and
-65, read ``0x1a``: bit 4 (``SFP_OPTIONS_TX_DISABLE``), bit 3
-(``SFP_OPTIONS_TX_FAULT``) and bit 1 (``SFP_OPTIONS_LOS_NORMAL``) of
-``linux/include/linux/sfp.h``, RX_LOS declared. It was written to ``0x18``
-from the Linux host of the cage, and the check byte CC_EXT, byte 95
-(``0x5f``), the low byte of the sum of bytes 64 to 94, from ``0x3d`` to
-``0x3b``. The option word now reads ``0x0018``, TX_DISABLE and TX_FAULT
-alone. With RX_LOS declared, a Linux host keeps the link down while RX_LOS is
+**The sticks this system was tested on do not carry the page as shipped.**
+Seven of its bytes were written from the Linux host of the cage, the same on
+both sticks (M: a read of one of them as shipped, 2026-08-27, and of both,
+2026-10-20):
+
+* For 2.5 Gb/s, a change of the kind described in discussion 250 of the
+  repository Anime4000/RTL960x: byte 6 from ``0x02`` to ``0x00``, no Ethernet
+  compliance code; byte 12 from ``0x0d`` to ``0x19``, 2500 MBd; bytes 66 and
+  67 (``0x42``, ``0x43``), the margins of the bit rate, from 0 to ``0x1c``
+  and ``0x34``; and the check byte CC_BASE, byte 63 (``0x3f``), the low byte
+  of the sum of bytes 0 to 62, with them. A Linux host then picks the lane's
+  mode from the bit rate alone.
+* For RX_LOS: byte 65 (``0x41``), the low byte of the option word of bytes 64
+  and 65, from ``0x1a``, bit 4 (``SFP_OPTIONS_TX_DISABLE``), bit 3
+  (``SFP_OPTIONS_TX_FAULT``) and bit 1 (``SFP_OPTIONS_LOS_NORMAL``) of
+  ``linux/include/linux/sfp.h``, RX_LOS declared, to ``0x18``, TX_DISABLE and
+  TX_FAULT alone; and the check byte CC_EXT, byte 95 (``0x5f``), the low byte
+  of the sum of bytes 64 to 94, with it and with bytes 66 and 67.
+
+With RX_LOS declared, a Linux host keeps the link down while RX_LOS is
 high: after a warm restart of the host its SFP driver stayed in the state
 ``wait_los``, while a cold power cycle sometimes brought the link up anyway;
 with the change the link came up after every warm restart (M: the host's SFP

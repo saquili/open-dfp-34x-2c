@@ -55,8 +55,8 @@ reads ``0x1a``: it declares RX_LOS implemented (bit 1,
 ``SFP_OPTIONS_LOS_NORMAL`` of ``linux/include/linux/sfp.h``) besides TX_FAULT
 and TX_DISABLE. On the sticks tested it was written to ``0x18``, which
 declares TX_FAULT and TX_DISABLE alone, and the check byte CC_EXT, byte 95
-(``0x5f``), the low byte of the sum of bytes 64 to 94, went from ``0x3d`` to
-``0x3b`` with it. Measured on a Linux host:
+(``0x5f``), the low byte of the sum of bytes 64 to 94, was written with it.
+Measured on a Linux host:
 
 * With RX_LOS declared, the host's SFP driver keeps the link down while RX_LOS
   is high. After a warm restart of the host it stayed in the state
@@ -75,15 +75,20 @@ reading the part number in bytes 40 to 55 (``DFP-34X-2C3`` on the sticks
 tested) so as not to write another module: a wrong write to another module on
 the same bus can damage that module. The two bytes are byte 65, from ``0x1a``
 to ``0x18``, and byte 95, the low byte of the sum of bytes 64 to 94 after that
-change.
+change. The bytes of the change for 2.5 Gb/s are in ``board.rst``, "The SFP
+connector".
 
-The page also gives the lane's speed. It declares no Ethernet compliance code
-(byte 6 is 0) and a nominal bit rate of 2500 MBd (byte 12, ``0x19``), so a
-Linux host picks the mode from the bit rate. By the kernel's SFP code
-(``sfp_parse_support()`` in ``drivers/net/phy/sfp-bus.c``) that is
-2500BASE-X on Linux 5.12 to 6.3 and from 6.8 on, 1000BASE-X before 5.12, and
-no mode it can use on 6.4 to 6.7. Only hosts with Linux 6.12 and 6.18 were
-tried; the rest is read from the kernel's source. Of the lane's modes, this
+The page also gives the lane's speed. As shipped it declares 1000BASE-LX
+(byte 6, ``0x02``) and a nominal bit rate of 1300 MBd (byte 12, ``0x0d``),
+and a Linux host runs the lane as 1000BASE-X. On the sticks tested it was
+changed for 2.5 Gb/s as well (``board.rst``, "The SFP connector"): it declares
+no Ethernet compliance code (byte 6 is 0) and a nominal bit rate of 2500 MBd
+(byte 12, ``0x19``), so a Linux host picks the mode from the bit rate. By the
+kernel's SFP code (``sfp_parse_support()`` in ``drivers/net/phy/sfp-bus.c``)
+that is 2500BASE-X on Linux 5.12 to 6.3 and from 6.8 on, 1000BASE-X before
+5.12, and no mode it can use on 6.4 to 6.7. Only hosts with Linux 6.12 and
+6.18 were tried, with the page changed; the rest is read from the kernel's
+source. Of the lane's modes, this
 system finds 2500BASE-X by itself, and 1000BASE-X with auto-negotiation;
 1000BASE-X without auto-negotiation, and 2500BASE-X with it, it runs when the
 panel's SFP page sets them, and each of the four linked with a host in the
@@ -92,10 +97,11 @@ same mode (2026-10-20). A fix that came after the first release finds
 step 2).
 
 In short: on the sticks this system was tested on, the change of byte 65 is
-what lets a Linux host bring the 2.5 Gb/s link up every time, and keep it up
-while the fibre is dark, with RX_LOS left to the host to read as a line of its
-own. The 2.5 Gb/s itself is the bit rate of the page as shipped, which was not
-changed (both pages read back so, 2026-10-20).
+what lets a Linux host bring the link up every time, and keep it up while the
+fibre is dark, with RX_LOS left to the host to read as a line of its own; the
+change of bytes 6, 12, 66 and 67 is what makes the host run it at 2.5 Gb/s.
+A stick with the page as shipped was not tried with this system: by its page,
+a Linux host runs it as 1000BASE-X, a mode this system finds by itself.
 
 Step 1: Check the files
 =======================
@@ -570,7 +576,8 @@ When something fails
        whenever the fibre is dark
      - The stick's page declares RX_LOS, as shipped, and the host's SFP
        driver waits for it ("The host's view of the stick"). On a Linux host
-       of 6.4 to 6.7 the page gives no mode the host can use.
+       of 6.4 to 6.7 a page changed for 2.5 Gb/s gives no mode the host can
+       use.
    * - The shipped firmware's page answers, then not for about a minute, then
        again
      - The shipped firmware tries the lane's modes. Set the router's port to
