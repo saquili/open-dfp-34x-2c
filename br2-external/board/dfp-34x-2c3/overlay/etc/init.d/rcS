@@ -77,7 +77,9 @@ erases_in_sectors ||
 # login and the ssh server. The key of the panel's HTTPS and the ssh server's
 # host key come from the store too, or are made now and kept there, the first
 # time, once the kernel's random number generator is seeded (onu-config tls,
-# onu-config ssh).
+# onu-config ssh); so do an own certificate of the panel's and the public keys
+# root logs in to ssh with, which a person gives through the panel (onu-config
+# tls own, onu-config ssh-keys).
 # pppoed, an account of its own, opens the PPP unit of each session through
 # /dev/ppp, which belongs to its group.
 [ ! -e /dev/ppp ] || { chown :pppoed /dev/ppp && chmod 660 /dev/ppp; } ||
@@ -242,9 +244,10 @@ fi
 # VLAN's (and the host link's to its own address there, a bench's): nothing
 # on the PON side, nor a local network, is to reach them, in any mode.
 # They start now that the addresses are there (onu-run): the ssh server, which
-# takes the keys of /root/.ssh/authorized_keys, which an image built with a
-# bench's keys carries and this one does not, and root's password once it is
-# not the default, and the status daemon with its panel, where people
+# takes the public keys of /run/dropbear/authorized_keys, those an image built
+# with a bench's keys carries and those the store keeps (onu-config load),
+# and root's password once it is not the default, unless its owner had it
+# take keys alone, and the status daemon with its panel, where people
 # sign in as root, with root's password, and scripts may present the token
 # that a person made with onu-config token new, which the store keeps. One that
 # procd starts again listens on the pair in use then (onu-mgmt).
@@ -270,14 +273,13 @@ onu-svc start trials -- /usr/lib/onu/onu-change watch ||
 onu-svc start act -- /usr/lib/onu/onu-act || warn "the panel can change nothing"
 mkdir -p /run/pond && chown pond:pond /run/pond && chmod 700 /run/pond
 onu-config token install || warn "the token of scripts is not the status daemon's"
-# The panel's key, for the status daemon alone to read. The daemon starts as
-# root, binds its ports, 80 and 443, and runs as the account pond, keeping
-# only the power to listen on a port below 1024 (pond -u).
-if [ -r /run/onu-tls-key ]; then
-	cp /run/onu-tls-key /run/pond/tls.key &&
-		chown pond:pond /run/pond/tls.key && chmod 400 /run/pond/tls.key ||
-		warn "the key of HTTPS is not the status daemon's: the panel answers over HTTP"
-fi
+# The panel's key, and the own certificate when the store keeps one, for the
+# status daemon alone to read (onu-config tls install, which a change through
+# the panel does again). The daemon starts as root, binds its ports, 80 and
+# 443, and runs as the account pond, keeping only the power to listen on a
+# port below 1024 (pond -u).
+onu-config tls install ||
+	warn "the key of HTTPS is not the status daemon's: the panel answers over HTTP"
 envs=$(sed -n 's,^\(mtd[0-9]*\):.* "env2*"$,/dev/\1,p' /proc/mtd)
 [ -n "$envs" ] && chown :pond $envs && chmod 640 $envs ||
 	warn "the status daemon does not read the boot loader's environment"
@@ -316,12 +318,13 @@ fi
 
 # The bench waits for the last line on the console. Before it, the panel's
 # address and the fingerprint of the certificate a browser is shown there,
-# which no authority signed, for a person to compare with the browser's.
+# which no authority signed, or the own one, for a person to compare with the
+# browser's.
 {
 	echo
 	echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
 	echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN)${data:+ and $DATA_ADDRESS (sfp)}"
-	[ -r /run/pond/tls.key ] && pond -k /run/pond/tls.key -F "$mgmt" |
+	[ -r /run/pond/tls.key ] && pond -k /run/pond/tls.key -c /run/pond/tls.own -F "$mgmt" |
 		sed 's/^\([^ ]*\) SHA-256 \([^ ]*\) until \([^T]*\).*$/open-dfp-34x-2c: the panel on https:\/\/\1\/, certificate SHA-256 \2, valid until \3/'
 	echo "open-dfp-34x-2c: ready"
 } >/dev/console
