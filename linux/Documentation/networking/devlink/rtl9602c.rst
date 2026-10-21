@@ -767,7 +767,8 @@ The SerDes lane to the host runs in 2500BaseX or in 1000BaseX, each with or
 without in-band negotiation (IEEE 802.3 clause 37), and nothing on the lane
 says which the host takes. While the lane's receiver has not synchronised, the
 driver tries 2500BaseX without negotiation and 1000BaseX with and without it
-in turn, once a second, and keeps the first that synchronises
+in turn, checking once a second and giving 1000BaseX without negotiation
+twelve checks, and keeps the first that synchronises
 (Documentation/networking/dsa/rtl9602c.rst); 2500BaseX with negotiation, which
 hosts at 2500BaseX commonly do not take, it runs only when it is named.
 ``sfp_lane`` narrows the settings it may try: to one, which brings the lane up
@@ -838,7 +839,21 @@ To keep the lane in 1000BaseX with negotiation, and to let it look again::
      - With the lane set to ``1000basex-an`` and synchronised, ``auto``
        changed nothing on either side for 30 s; with ``2500basex``,
        ``sfp_lane_now`` read ``2500basex`` and the carrier 1 at each of the
-       10 s after the set.
+       10 s after the set. With ``auto`` and the lane found in
+       ``1000basex-an``, the host turning its negotiation off: the host's
+       link never dropped, 200 of 200 pings from it were answered, and the
+       lane stayed in ``1000basex-an`` (2026-10-21).
+   * - ``auto`` finds a host in each of its three settings: the host had
+       carrier 10.4 and 11.3 s after its change to 1000BaseX without
+       negotiation, 1.4 s after its change to 1000BaseX with negotiation, and
+       12.7 to 14.1 s after its change back to 2500BaseX, which the twelve
+       checks of 1000BaseX without negotiation delay (*dsa* page, "phylink
+       and the lane").
+     - M
+     - On the bench, the host's port changed by hand and held off its
+       network manager, its carrier sampled every 0.2 s, the stick's kernel
+       log and 200 pings from the host 0.2 s apart at each change
+       (2026-10-21).
    * - ``sfp_lane_now`` reads ``searching`` from the set that changes the
        setting until the lane synchronises in the new one.
      - M
