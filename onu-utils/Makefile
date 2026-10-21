@@ -63,7 +63,7 @@ $(BUILD)/test_dlparam: $(BUILD)/tests/test_dlparam.o $(BUILD)/src/dlparam.o \
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/onu-config: $(BUILD)/src/onu-config.o $(BUILD)/src/cfgstore.o $(BUILD)/src/settings.o \
-		    $(BUILD)/src/password.o $(BUILD)/src/sha256.o
+		    $(BUILD)/src/password.o $(BUILD)/src/sha256.o $(BUILD)/src/sshkey.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz -lcrypt
 
 $(BUILD)/test_password: $(BUILD)/tests/test_password.o $(BUILD)/src/password.o \
@@ -120,6 +120,9 @@ $(BUILD)/test_cfgstore: $(BUILD)/tests/test_cfgstore.o $(BUILD)/src/cfgstore.o
 $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+$(BUILD)/test_sshkey: $(BUILD)/tests/test_sshkey.o $(BUILD)/src/sshkey.o $(BUILD)/src/sha256.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 # test_genl asks the kernel it runs on, through a generic netlink socket;
 # test_onu_nl.sh sets filters on it, and test_onu_fw.sh puts a table of
 # nf_tables in place; both skip without the right to.
@@ -128,7 +131,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
 	$(BUILD)/onu-update \
 	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password \
-	$(BUILD)/test_fwmsg $(BUILD)/test_fwacl $(BUILD)/onu-fw
+	$(BUILD)/test_fwmsg $(BUILD)/test_fwacl $(BUILD)/onu-fw $(BUILD)/test_sshkey
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
@@ -141,6 +144,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	$(BUILD)/test_settings
 	$(BUILD)/test_act
 	$(BUILD)/test_password
+	$(BUILD)/test_sshkey
 	$(BUILD)/test_fwmsg
 	$(BUILD)/test_fwacl
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_settings.sh
@@ -155,6 +159,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	sh tests/test_onu_run.sh
 	sh tests/test_onu_apply.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_keys.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_nl.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_fw.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_fw_acl.sh

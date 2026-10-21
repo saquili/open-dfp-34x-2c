@@ -64,7 +64,7 @@ echo '$5$rounds=20000$salt$hash' >"$ONU_ROOT/run/onu-auth"
 run ssh
 check '[ $rc -eq 0 ]'
 check '[ "$(head -n 1 "$LOG")" = "dropbearkey -t ed25519 -f $ONU_ROOT/run/dropbear/host_key" ]'
-check 'logged "dropbear -F -r $ONU_ROOT/run/dropbear/host_key -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
+check 'logged "dropbear -F -r $ONU_ROOT/run/dropbear/host_key -D $ONU_ROOT/run/dropbear -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
 # Root's password as well as keys (ADR 0009).
 check '! grep -q "^dropbear .*-[sB]\\b" "$LOG"'
 : >"$LOG"
@@ -74,12 +74,26 @@ check '! grep -q "^dropbearkey" "$LOG"'
 rm -f "$ONU_ROOT/run/onu-auth"
 : >"$LOG"
 run ssh
-check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
+check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -D $ONU_ROOT/run/dropbear -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
 # Root's password not known, without a store: keys only.
 echo '!' >"$ONU_ROOT/run/onu-auth"
 : >"$LOG"
 run ssh
-check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
+check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -D $ONU_ROOT/run/dropbear -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
+teardown
+
+echo "the ssh server takes keys alone, and no password, when its owner says so"
+setup
+echo '$5$rounds=20000$salt$hash' >"$ONU_ROOT/run/onu-auth"
+mkdir -p "$ONU_ROOT/run/dropbear"
+echo 1 >"$ONU_ROOT/run/dropbear/keys-only"
+run ssh
+check '[ $rc -eq 0 ]'
+check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -D $ONU_ROOT/run/dropbear -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
+rm "$ONU_ROOT/run/dropbear/keys-only"
+: >"$LOG"
+run ssh
+check '! grep -q "^dropbear .*-s\\b" "$LOG"'
 teardown
 
 echo "the status daemon on the same addresses, without a key over HTTP"
@@ -111,7 +125,7 @@ echo "without an address on the host link, the management address alone"
 setup
 sed -i.bak 's/^DATA_ADDRESS=.*/DATA_ADDRESS=/' "$ONU_ROOT/run/onu-mgmt"
 run ssh
-check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22"'
+check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -D $ONU_ROOT/run/dropbear -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22"'
 run pond
 check 'logged "pond -u pond -l http://198.51.100.2:80 -t $ONU_ROOT/run/pond/token"'
 teardown

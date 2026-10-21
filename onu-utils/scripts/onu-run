@@ -7,7 +7,8 @@
 # a service that the boot script starts (onu-svc), the console's login from
 # /etc/inittab once the boot script is done.
 #
-#   onu-run ssh     the ssh server: root's password and keys, on the
+#   onu-run ssh     the ssh server: root's password and the keys of
+#                   /run/dropbear/authorized_keys (onu-config ssh-keys), on the
 #                   management address and on the host link's, if any
 #   onu-run pond    the status daemon and its panel, on the same, over HTTPS
 #                   on port 443 with the key of /run/pond/tls.key, the boot
@@ -197,11 +198,18 @@ ssh)
 	# (onu-config load), and until one is set it is the default, which is
 	# printed in this repository: keys only then. onu-config ends this
 	# server when a password is set, and procd starts it again with them.
+	# So it does when its owner has it take keys alone, and no password
+	# (onu-config ssh-keys only), which it says in $RUN/dropbear/keys-only.
 	nopw=
 	case $(cat "$RUN/onu-auth" 2>/dev/null) in
 	'' | '!') nopw=-s ;;
 	esac
-	exec dropbear -F $nopw -r "$KEY" -P "$RUN/dropbear.pid" -p "$mgmt:22" ${data:+-p "$data:22"}
+	[ -e "$RUN/dropbear/keys-only" ] && nopw=-s
+	# The public keys root logs in with are those of
+	# $RUN/dropbear/authorized_keys (-D), which onu-config ssh-keys writes
+	# from the store, after the image's own: /root is read-only.
+	exec dropbear -F $nopw -r "$KEY" -D "$RUN/dropbear" -P "$RUN/dropbear.pid" \
+		-p "$mgmt:22" ${data:+-p "$data:22"}
 	;;
 pond)
 	log=$RUN/pond/log

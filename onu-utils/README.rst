@@ -156,6 +156,29 @@ by its whole path where procd starts it.
    cannot (ubusd's access list has no method for it), so that a daemon taken
    over cannot make itself a token. Without a store the new token lasts until
    the next start.
+   ``onu-config ssh-keys`` keeps the public keys root may log in to the ssh
+   server with, ``src/sshkey.h``: ed25519, ECDSA of nistp256, nistp384 and
+   nistp521, and RSA of 2048 to 4096 bits, one a line as ``ssh-keygen`` writes
+   it, with a comment of at most 100 bytes, eight at most::
+
+      onu-config ssh-keys                      # ONLY=0|1, KEY=TYPE BITS FINGERPRINT COMMENT
+      onu-config ssh-keys add <key.pub         # prints the KEY= line of the key
+      onu-config ssh-keys remove SHA256:...    # or the fingerprint on the input
+      onu-config ssh-keys only on|off          # no password, keys alone
+      onu-config ssh-keys install              # the server's files, at boot
+
+   It refuses, saying why, a key of another type, an RSA key too short or too
+   long, a key with options in front of it or a second line, one kept
+   already, a ninth, one the store has no room for, the last key while the
+   server takes keys alone, and keys alone while no key is kept. The server
+   reads ``/run/dropbear/authorized_keys`` (``onu-run``), which a change and
+   ``install`` write: the keys of the image's ``/root/.ssh/authorized_keys``
+   first, which an image built with a bench's keys carries, then the store's.
+   While the store says keys alone and holds a key, ``/run/dropbear/keys-only``
+   is there, and the server takes no password; when that changes,
+   ``onu-config`` ends the server, and procd starts it again. Sessions open
+   go on, as each is a process of its own.
+
    ``onu-config identity-current`` prints the identity of
    ``/run/onu-identity``, which root alone reads, without its PLOAM and
    logical passwords, with ``ploam_set`` and ``loid_password_set`` and where it
@@ -231,6 +254,11 @@ by its whole path where procd starts it.
         - ``onu-config ssh``
         - ``/run/onu-ssh-key``: the ssh server's host key in its own format, in
           hexadecimal digits, made once on the stick.
+      * - ``SSH_KEYn``, n from 1 to 8; ``SSH_KEYS_ONLY``
+        - ``onu-config ssh-keys``
+        - ``/run/dropbear/authorized_keys``: the public keys root logs in with,
+          after the image's; ``/run/dropbear/keys-only`` while
+          ``SSH_KEYS_ONLY`` is ``1`` and a key is kept.
       * - ``POND_TOKEN``
         - ``onu-config token``
         - ``/run/onu-pond-token``: the token of scripts.
@@ -811,7 +839,10 @@ by its whole path where procd starts it.
    the state the scripts keep: the ssh server and ``pond``, on the
    management pair in use and the host link's address, from
    ``/run/onu-mgmt``, so that one started again after a change of the pair
-   listens on the new one; omcid, in the mode ``onu-apply`` last gave it
+   listens on the new one, the ssh server with the public keys of
+   ``/run/dropbear/authorized_keys`` (its ``-D``) and without passwords
+   (``-s``) while the default password is in force, none is known, or
+   ``/run/dropbear/keys-only`` is there (``onu-config ssh-keys``); omcid, in the mode ``onu-apply`` last gave it
    (``/run/omcid.mode``), so that one started again after a crash comes up in
    the mode the stick is in; ``timed``, which sets the clock and keeps it, by
    NTP from ``NTP_SERVER`` of ``/run/onu-system`` or, without one, from the

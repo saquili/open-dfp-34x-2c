@@ -265,6 +265,8 @@ load() {
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k == "TLS_KEY" { if (v != "") print v > tls; next }
 		k == "SSH_HOST_KEY" { if (v != "") print v > ssh; next }
+		# The keys root logs in with: onu-config ssh-keys install.
+		k ~ /^SSH_/ { next }
 		k == "POND_TOKEN" { if (v != "") print v > tok; next }
 		k ~ /^SYS_/ { if (v != "") print substr(k, 5) "=" v > sys; next }
 		k ~ /^PD[1-9]_HOST$/ {
@@ -333,6 +335,10 @@ load() {
 		rm -f "$SYSTEM"
 	fi
 	rm -f "$IDENTITY.new"
+	# The keys root logs in to the ssh server with, and whether it takes
+	# them alone: the server's files, with the image's keys first.
+	onu-config ${known:+--store "$known"} ssh-keys install ||
+		log "the ssh server takes the image's keys alone"
 	[ -n "$known" ] || state none
 	put_identity "$list"
 }

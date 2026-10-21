@@ -35,6 +35,20 @@
  *                                            that could be read
  *   onu-config identity-current              the identity in force, without
  *                                            its passwords
+ *   onu-config [--store PATH] ssh-keys       the public keys root may log in
+ *                                            to the ssh server with, and
+ *                                            whether it takes them alone
+ *   onu-config [--store PATH] ssh-keys add   the key of the standard input's
+ *                                            line, kept
+ *   onu-config [--store PATH] ssh-keys remove [FINGERPRINT]
+ *                                            the key of that SHA-256, or of
+ *                                            the standard input's line, away
+ *   onu-config [--store PATH] ssh-keys only on|off
+ *                                            whether the ssh server takes the
+ *                                            keys alone, and no password
+ *   onu-config [--store PATH] ssh-keys install
+ *                                            the ssh server's files of them,
+ *                                            from the store (onu-config load)
  *   onu-config slots DEVICE                  print the lines of the store of
  *                                            before, the two slots of the
  *                                            partition (cfgstore.h); exit 3
@@ -98,6 +112,23 @@
  * onu-config load found no store it could read and wrote "!" there, and 1
  * for any other.
  *
+ * ssh-keys keeps the public keys root may log in to the ssh server with
+ * (sshkey.h): at most SSHKEY_MAX, SSH_KEY1 to SSH_KEY8 of the store, each
+ * the key's line written anew, and SSH_KEYS_ONLY=1 while the server takes
+ * them alone, and no password. With no verb it prints ONLY=0 or ONLY=1 and a
+ * line KEY=TYPE BITS FINGERPRINT COMMENT for each key, in the order of their
+ * places; add prints that line of the key it kept. It refuses, saying why, a
+ * key it does not take, one it keeps already, a ninth, one the store has no
+ * room for, the last key while the server takes keys alone, and keys alone
+ * while there is no key. A change, and install, write the files the ssh
+ * server reads (onu-run ssh): /run/dropbear/authorized_keys, which its -D
+ * names, with the lines of the image's /root/.ssh/authorized_keys first, as a
+ * bench's image carries them, and /run/dropbear/keys-only, which turns its
+ * passwords off, while the store says so and holds a key. The server reads
+ * the keys at each login; when the passwords go or come back, ssh-keys ends
+ * it (/run/dropbear.pid), and procd starts it again with them or without
+ * them. Its sessions go on.
+ *
  * identity-current prints the identity the unit introduces itself with,
  * the name=value lines of /run/onu-identity, which root alone may read,
  * without the PLOAM and the logical passwords: ploam_set and
@@ -109,6 +140,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -129,6 +161,7 @@
 #include "cfgstore.h"
 #include "password.h"
 #include "settings.h"
+#include "sshkey.h"
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -368,6 +401,7 @@ static int import_lines(FILE *in, char *payload, size_t cap)
 		err = cfg_set(payload, cap, line, eq + 1);
 		if (err) {
 			fprintf(stderr, "onu-config: import %s: %s\n", line,
+				err == -EFBIG ? "the store has no room for it, of its 64 KiB" :
 				strerror(-err));
 			break;
 		}
@@ -902,6 +936,266 @@ static int identity_current_cmd(void)
 	return fflush(stdout) ? 2 : 0;
 }
 
+/*
+ * The ssh server's files of the keys (ssh-keys): the directory its -D names,
+ * root's alone, as the server asks of every directory up to /.
+ */
+#define SSH_DIR "/run/dropbear"
+#define SSH_KEYS_FILE SSH_DIR "/authorized_keys"
+#define SSH_ONLY_FILE SSH_DIR "/keys-only"
+#define SSH_PID_PATH "/run/dropbear.pid"
+#define SSH_IMAGE_KEYS "/root/.ssh/authorized_keys"
+
+/*
+ * The keys of the store @payload into @keys, by place, @held for a place that
+ * holds one: their number. A value that is no key is said, and left out.
+ */
+static int stored_keys(const char *payload, struct sshkey *keys, bool *held)
+{
+	char name[16], val[CFG_VALUE_MAX + 1], err[160];
+	int count = 0;
+
+	for (int i = 0; i < SSHKEY_MAX; i++) {
+		snprintf(name, sizeof(name), "SSH_KEY%d", i + 1);
+		held[i] = false;
+		if (cfg_get(payload, name, val, sizeof(val)))
+			continue;
+		held[i] = !sshkey_parse(val, &keys[i], err, sizeof(err));
+		if (!held[i])
+			fprintf(stderr, "onu-config: %s is no key, left out: %s\n", name, err);
+		count += held[i];
+	}
+	return count;
+}
+
+static bool keys_alone(const char *payload)
+{
+	char val[8];
+
+	return !cfg_get(payload, "SSH_KEYS_ONLY", val, sizeof(val)) && !strcmp(val, "1");
+}
+
+/*
+ * The ssh server's files of the keys of @payload: 1 when its passwords went
+ * or came back, 0 when not, or -errno.
+ */
+static int ssh_install(const char *payload)
+{
+	static char text[STORE_MAX + SSHKEY_MAX * (SSHKEY_LINE_MAX + 1) + 2];
+	struct sshkey keys[SSHKEY_MAX];
+	bool held[SSHKEY_MAX], was, alone;
+	char path[PATH_MAX];
+	size_t len = 0;
+	int count, err;
+	FILE *f;
+
+	root_path(SSH_IMAGE_KEYS, 0, path, sizeof(path));
+	f = fopen(path, "r");
+	if (f) {
+		len = fread(text, 1, STORE_MAX, f);
+		fclose(f);
+	}
+	if (len && text[len - 1] != '\n')
+		text[len++] = '\n';
+	count = stored_keys(payload, keys, held);
+	for (int i = 0; i < SSHKEY_MAX; i++)
+		if (held[i])
+			len += (size_t)snprintf(text + len, sizeof(text) - len, "%s\n",
+						keys[i].line);
+	text[len] = '\0';
+	root_path(SSH_DIR, 0, path, sizeof(path));
+	if (mkdir(path, 0700) && errno != EEXIST)
+		return -errno;
+	root_path(SSH_KEYS_FILE, 0, path, sizeof(path));
+	err = write_file(path, text, 0600);
+	if (err)
+		return err;
+	root_path(SSH_ONLY_FILE, 0, path, sizeof(path));
+	was = access(path, F_OK) == 0;
+	alone = count && keys_alone(payload);
+	if (alone && !was)
+		err = write_file(path, "1\n", 0600);
+	else if (!alone && was && unlink(path))
+		err = -errno;
+	return err ? err : was != alone;
+}
+
+/* End the ssh server, which procd starts again: its sessions go on. */
+static void ssh_restart(void)
+{
+	char path[PATH_MAX], line[32];
+	long pid = 0;
+	FILE *f;
+
+	root_path(SSH_PID_PATH, 0, path, sizeof(path));
+	f = fopen(path, "r");
+	if (f) {
+		if (fgets(line, sizeof(line), f))
+			pid = strtol(line, NULL, 10);
+		fclose(f);
+	}
+	if (pid > 1)
+		kill((pid_t)pid, SIGTERM);
+}
+
+static void print_key(const struct sshkey *k)
+{
+	printf("KEY=%s %u %s%s%s\n", k->type, k->bits, k->fingerprint, *k->comment ? " " : "",
+	       k->comment);
+}
+
+/*
+ * The key of the standard input, kept in the first free place of @payload,
+ * of @cap bytes, and in @keys and @held: its place, or -1 when refused, and
+ * why said.
+ */
+static int ssh_key_add(char *payload, size_t cap, struct sshkey *keys, bool *held)
+{
+	static char line[4 * SSHKEY_LINE_MAX];
+	char err[160], name[16];
+	struct sshkey k;
+	size_t len = fread(line, 1, sizeof(line) - 1, stdin);
+	int slot = -1;
+
+	line[len] = '\0';
+	if (len == sizeof(line) - 1 || strlen(line) != len) {
+		fprintf(stderr, "onu-config: not a key: a line TYPE BASE64 [COMMENT]\n");
+		return -1;
+	}
+	if (sshkey_parse(line, &k, err, sizeof(err))) {
+		fprintf(stderr, "onu-config: %s\n", err);
+		return -1;
+	}
+	for (int i = SSHKEY_MAX - 1; i >= 0; i--) {
+		if (held[i] && !strcmp(keys[i].fingerprint, k.fingerprint)) {
+			fprintf(stderr, "onu-config: the key %s is kept already\n", k.fingerprint);
+			return -1;
+		}
+		if (!held[i])
+			slot = i;
+	}
+	if (slot < 0) {
+		fprintf(stderr, "onu-config: %d keys at most: remove one first\n", SSHKEY_MAX);
+		return -1;
+	}
+	snprintf(name, sizeof(name), "SSH_KEY%d", slot + 1);
+	if (cfg_set(payload, cap, name, k.line)) {
+		fprintf(stderr, "onu-config: the configuration store has no room for the key\n");
+		return -1;
+	}
+	keys[slot] = k;
+	held[slot] = true;
+	return slot;
+}
+
+static int ssh_keys_cmd(const char *store, int argc, char **argv)
+{
+	static struct sshkey keys[SSHKEY_MAX];
+	static char payload[STORE_MAX + 1], before[STORE_MAX + 1];
+	const char *sub = argc ? argv[0] : "";
+	bool add = !strcmp(sub, "add"), remove = !strcmp(sub, "remove");
+	bool only = !strcmp(sub, "only"), install = !strcmp(sub, "install");
+	bool on = only && argc == 2 && !strcmp(argv[1], "on");
+	bool writing = add || remove || only;
+	bool held[SSHKEY_MAX];
+	size_t cap = sizeof(payload);
+	char dir[PATH_MAX];
+	int count, lock = -1, err, rc = 1, added = -1;
+
+	if (argc && !(add && argc == 1) && !(remove && argc <= 2) && !(install && argc == 1) &&
+	    !(only && argc == 2 && (on || !strcmp(argv[1], "off")))) {
+		fputs("usage: onu-config [--store PATH] ssh-keys [add | remove [FINGERPRINT] |\n"
+		      "                  only on|off | install]\n", stderr);
+		return 2;
+	}
+	if (writing) {
+		store_dir(store, dir, sizeof(dir));
+		lock = store_lock(dir);
+		if (lock < 0) {
+			fprintf(stderr, "onu-config: %s: no lock: %s\n", dir, strerror(-lock));
+			goto out;
+		}
+	}
+	if (read_store(store, payload, cap)) {
+		fprintf(stderr, "onu-config: %s: the store cannot be read\n", store);
+		/* At boot the image's keys go to the server all the same. */
+		payload[0] = '\0';
+		if (install)
+			ssh_install(payload);
+		goto out;
+	}
+	memcpy(before, payload, sizeof(before));
+	count = stored_keys(payload, keys, held);
+	if (add) {
+		added = ssh_key_add(payload, cap, keys, held);
+		if (added < 0)
+			goto out;
+	} else if (remove) {
+		char fp[SSHKEY_FP_LEN + 2] = "";
+		int i;
+
+		/* The fingerprint, or the standard input's line, as onu-act gives it. */
+		if (argc == 2)
+			snprintf(fp, sizeof(fp), "%s", argv[1]);
+		else if (fgets(fp, sizeof(fp), stdin))
+			fp[strcspn(fp, "\r\n")] = '\0';
+		for (i = 0; i < SSHKEY_MAX; i++)
+			if (held[i] && !strcmp(keys[i].fingerprint, fp))
+				break;
+		if (i == SSHKEY_MAX) {
+			fprintf(stderr, "onu-config: no key %s is kept\n", fp);
+			goto out;
+		}
+		if (count == 1 && keys_alone(payload)) {
+			fprintf(stderr,
+				"onu-config: the last key stays while ssh takes keys alone: turn that off first\n");
+			goto out;
+		}
+		snprintf(dir, sizeof(dir), "SSH_KEY%d", i + 1);
+		cfg_unset(payload, dir);
+	} else if (only) {
+		if (on && !count) {
+			fprintf(stderr, "onu-config: no key is kept: add one first\n");
+			goto out;
+		}
+		if (!on) {
+			cfg_unset(payload, "SSH_KEYS_ONLY");
+		} else if (cfg_set(payload, cap, "SSH_KEYS_ONLY", "1")) {
+			fprintf(stderr, "onu-config: the configuration store has no room for it\n");
+			goto out;
+		}
+	} else if (!install) {
+		printf("ONLY=%d\n", count && keys_alone(payload));
+		for (int i = 0; i < SSHKEY_MAX; i++)
+			if (held[i])
+				print_key(&keys[i]);
+	}
+	if (writing && strcmp(before, payload)) {
+		err = change_store(store, payload);
+		if (err) {
+			fprintf(stderr, "onu-config: %s: %s\n", store, strerror(-err));
+			goto out;
+		}
+	}
+	if (writing || install) {
+		err = ssh_install(payload);
+		if (err < 0) {
+			fprintf(stderr, "onu-config: the ssh server's files in %s: %s\n", SSH_DIR,
+				strerror(-err));
+			goto out;
+		}
+		if (err > 0)
+			ssh_restart();
+	}
+	if (added >= 0)
+		print_key(&keys[added]);
+	rc = fflush(stdout) ? 1 : 0;
+out:
+	if (lock >= 0)
+		close(lock);
+	return rc;
+}
+
 int main(int argc, char **argv)
 {
 	const char *store = getenv("ONU_STORE");
@@ -954,6 +1248,8 @@ int main(int argc, char **argv)
 		return slots_cmd(argv[optind + 1], !strcmp(argv[optind], "erase-slots"));
 	if (!store || !*store)
 		store = STORE_PATH;
+	if (optind < argc && !strcmp(argv[optind], "ssh-keys"))
+		return ssh_keys_cmd(store, argc - optind - 1, argv + optind + 1);
 
 	int nargs = argc - optind;
 	const char *verb = nargs > 0 ? argv[optind] : NULL;
@@ -972,6 +1268,8 @@ int main(int argc, char **argv)
 	     strcmp(verb, "list") && strcmp(verb, "import"))) {
 		fputs("usage: onu-config [--store PATH] get KEY | list |\n"
 		      "                  set KEY VALUE | unset KEY | import\n"
+		      "       onu-config [--store PATH] ssh-keys [add | remove [FINGERPRINT] |\n"
+		      "                  only on|off | install]\n"
 		      "       onu-config check | settings\n"
 		      "       onu-config slots DEVICE | erase-slots DEVICE\n"
 		      "       onu-config load | save | identity | password |\n"
