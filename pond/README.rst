@@ -106,7 +106,7 @@ The token of scripts
 
 A script that cannot sign in as a person does may present a bearer token
 instead of a session. The stick has none until root makes one, in the panel
-(System, Access, "Token for scripts", with root's password, through
+(System, Panel, "Token for scripts", with root's password, through
 ``/api/token/new``, which shows it once) or on the stick itself (ssh, the
 console)::
 
@@ -125,7 +125,7 @@ taken away stops holding, with no restart that would end the sessions.
 
 A script sends ``Authorization: Bearer TOKEN`` to an ``https://`` address; the
 panel's certificate is the stick's own, which the fingerprint under System,
-Access, "HTTPS of the panel", or on the console tells apart. Over ``http://``
+HTTPS, "HTTPS of the panel", or on the console tells apart. Over ``http://``
 the request is sent on to HTTPS before its body is read, but its headers have
 crossed the link in the clear: the token is for HTTPS only. A request with the
 token needs no ``X-Pond`` header, as it has no session for a page of another
