@@ -830,6 +830,8 @@ export interface PhoneSecrets {
 export interface OltLogin {
   user: string;
   secret: string;
+  /** The realm the OLT sent beside them, empty for none. */
+  realm?: string;
 }
 
 /** The modes of the SFP lane, the driver's: its own search, or one of four it keeps to. */
