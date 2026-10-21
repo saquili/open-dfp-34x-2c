@@ -176,6 +176,22 @@ static void upload_fn(struct mg_connection *c, int ev, void *ev_data)
 static void upload_ended(void *ctx, int status, const char *said);
 
 /*
+ * The refusal while wrong passwords stop them, as a sign-in's: how many
+ * seconds are left, in the header Retry-After and as "retry_after".
+ */
+static void too_many(struct mg_connection *c, int retry)
+{
+	char headers[128];
+
+	snprintf(headers, sizeof(headers),
+		 "Content-Type: application/json\r\nCache-Control: no-store\r\n"
+		 "Connection: close\r\nRetry-After: %d\r\n", retry);
+	mg_http_reply(c, 429, headers,
+		      "{\"error\":\"too many attempts\",\"detail\":\"wait half a minute and try again\","
+		      "\"retry_after\":%d}", retry);
+}
+
+/*
  * Root's password, which writing an update and starting the other bank
  * need as well as a session (onu-act wants it too): the header
  * X-Pond-Password, percent-encoded, checked again into @pw. True when it
@@ -197,7 +213,7 @@ static bool confirmed(struct mg_connection *c, struct mg_http_message *hm,
 		return true;
 	explicit_bzero(pw, cap);
 	if (rc == -EAGAIN)
-		reply(c, 429, "too many attempts", "wait half a minute and try again");
+		too_many(c, retry);
 	else if (rc == -ENOKEY)
 		reply(c, 423, "no store", "the settings store cannot be read");
 	else

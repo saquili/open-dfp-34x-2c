@@ -252,7 +252,8 @@ update writes over the shipped firmware; it holds the unit's credentials, and
 is named the same way, ``buchos-gpon-flash-<version>.bin`` by default. The
 upload, the start, the way back and the copy need root's password as well as a
 session, in the header ``X-Pond-Password``, percent-encoded: 403 for a wrong
-one, which counts as a wrong sign-in, 429 while sign-ins are stopped.
+one, which counts as a wrong sign-in, 429 while sign-ins are stopped, with
+the seconds left in ``Retry-After`` and as ``retry_after``.
 
 The servers' keys
 -----------------

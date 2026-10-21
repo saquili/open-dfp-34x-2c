@@ -552,8 +552,9 @@ def servers_keys(pond, workdir, certs):
 
 def sessions_and_token(pond, workdir):
     """The sessions open, listed without their ids, the others ended with
-    root's password; and the token of scripts, whether one is in force, a new
-    one in the answer once, and none."""
+    root's password; the token of scripts, whether one is in force, a new one
+    in the answer once, and none; and wrong passwords, which stop the right
+    one for a while and say how long."""
     print("the sessions and the token of scripts")
     d = os.path.join(workdir, "sessions")
     os.makedirs(d, exist_ok=True)
@@ -649,6 +650,14 @@ def sessions_and_token(pond, workdir):
         check(status == 200 and body == {"ok": True}, "no token")
         status, _, body = ask("GET", "/api/token", first)
         check(status == 200 and body == {"set": False}, "and none is in force")
+
+        print("  wrong passwords")
+        for _ in range(5):
+            ask("POST", "/api/token/off", dict(mine, **{CONFIRM: "wrong"}), "")
+        status, head, body = ask("POST", "/api/token/off", dict(mine, **{CONFIRM: secret}), "")
+        check(status == 429 and 0 < body.get("retry_after", 0) <= 30
+              and head.get("Retry-After") == str(body.get("retry_after")),
+              "five wrong ones stop the right one too, and say for how long")
     finally:
         proc.terminate()
         proc.wait(5)
