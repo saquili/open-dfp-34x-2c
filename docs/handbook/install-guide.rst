@@ -376,8 +376,16 @@ told, under Operator, Identity:
 A change of either registers the stick again. When the operator sends the
 PPPoE login through OMCI, the card "PPPoE login from the OLT" shows it and
 hands it to a new PPPoE connection of the stick's own; otherwise the
-router behind the stick needs it from the operator. The stick has no
-phone socket that takes a wire.
+router behind the stick needs it from the operator.
+
+The stick has no phone socket that takes a wire, but it tells the OLT of as
+many as the ONT had, set in the same card. When the operator sets the phone
+up through OMCI, Operator, Phone shows each line's number and SIP account,
+its password with root's password, the SIP servers, the codecs and the
+voice's VLAN towards the router: a VoIP device of your own, a gateway for an
+analogue phone or a router that does VoIP, registers with them in the
+ONT's place. An operator that sets the phone up through TR-069 sends none of
+it through OMCI, and the page says so.
 
 Television
 ==========
