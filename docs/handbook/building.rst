@@ -718,14 +718,25 @@ The measurements above are against the shipped split of bank 0, whose ``k0``
 took 1359872 bytes. The board's configuration left out netfilter for a while
 (the stick translated no address then: a router behind it did), the initial RAM
 disk and kexec, and smaller parts that the board does not use, which the
-configuration's history names; it keeps IPv6, the symbol table, debugfs and
-dynamic debug, through which a problem on the operator's line is read. The
+configuration's history names; it kept IPv6, the symbol table, debugfs and
+dynamic debug, through which a problem on the operator's line was read. The
 kernel image was 1652846 bytes then, and 1698834 once it took JFFS2 for the
 partition ``config`` (ADR 0016); bank 0 as this system splits it gives the
 kernel room for it (``boot-contract.rst``). Netfilter is back since the stick
 routes for the devices behind it: its connection tracking and NAT feed the
 switch's NAPT engine through the flowtable offload, while the rules of the
 firewall and the port forwards go to the switch's hardware.
+
+With the router's parts the kernel image grew to 1837942 bytes, 62602 short
+of ``k0``'s end. Since 2026-10-22 the flash's kernel leaves the tools of
+diagnosis to a RAM boot (``make ram-image``, below): the symbol table, -175240
+bytes; dynamic debug, -36250; debugfs, -31572; and the pages of a process in
+``/proc``, each measured by a build without it. The image is 1593452 bytes,
+and ``k0`` keeps 307092 bytes, 16.2 %, free. A problem on the operator's line
+is read from a RAM boot now, and a report of the flash's kernel, which gives
+addresses without the names of their functions, by ``k0.System.map``, which
+``make image`` puts beside ``k0.uImage`` and every release carries. SysRq
+stays: the bench restarts a board by it.
 
 Reproducibility
 ===============
@@ -824,8 +835,11 @@ iproute2's ``tc``, ``devlink``, ``bridge``, ``dcb`` and ``ip``, the last as
 what the image's programs use, and ``make ram-image`` lays that directory over
 its root.
 
-A RAM image is the flash's image plus those tools, which is not what the flash
-holds. ``make ram-image RAM_DIAG=no`` leaves them out, and the device tests
+A RAM image is the flash's image plus those tools, and its kernel the flash's
+plus the kernel's own tools of diagnosis, which the flash's kernel leaves out:
+the symbol table, dynamic debug, debugfs and the pages of a process in
+``/proc``. That is not what the flash holds. ``make ram-image RAM_DIAG=no``
+leaves both out, and the device tests
 (``tests/device/README.rst``) put the ones that they need on the stick, in
 memory, for the run (``--tools build/image/diag``): that run tests the
 flash's root filesystem and kernel without a write to the flash.
