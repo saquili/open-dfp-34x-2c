@@ -1089,8 +1089,7 @@ bool omci_vlan_row_refused(const uint8_t *row, size_t len)
 			return true;
 	if (g_rejected.n == 0)
 		return false;
-	if (!omci_vlan_decode(row, len, &d))
-		return false;
+	(void)omci_vlan_decode(row, len, &d);
 
 	const struct omci_hw_vlan_xlate r = hw_rule_of(&d);
 
