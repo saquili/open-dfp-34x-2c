@@ -664,6 +664,99 @@ int main(void)
 	}
 
 	/*
+	 * A rule that leaves the untagged frames of an EtherType as they are
+	 * is judged by each rule after it that tags untagged frames: a push of
+	 * a C-tag on another EtherType takes none of its frames, and it needs
+	 * nothing; a push of a C-tag and an S-tag of any EtherType, here the
+	 * default rule of untagged frames, takes them, and it is left out.
+	 */
+	{
+		static const char pass_out[] =
+			"untagged ethertype left as is ahead of a rule that tags it";
+		uint8_t pass[16], v6[16], two[16];
+		char log[4096];
+
+		clear_rows(mib);
+		/* untagged ARP: left as is */
+		pack(pass, 0xf8000000u, 0xf8000003u, 0x000f0000u, 0x000f0000u);
+		/* untagged IPv6: C-VID 36 */
+		pack(v6, 0xf8000000u, 0xf8000004u, 0x000f0000u,
+		     (0u << 16) | (36u << 3));
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, pass, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, v6, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		OMCI_T_CAPTURE_LOG(log, {
+			CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL),
+				 OMCI_OK);
+		});
+		CHECK(strstr(log, pass_out) == NULL);
+		CHECK(!omci_vlan_row_refused(pass, sizeof(pass)));
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 1u);
+		if (omci_hw_vlan_recorded(&applied) == 1u) {
+			CHECK_EQ(applied[0].kind, OMCI_HW_VLAN_CVID_PUSH);
+			CHECK_EQ(applied[0].ethertype, OMCI_HW_ETHERTYPE_IPV6);
+		}
+
+		/* untagged, the default: C-VID 410 at 5 behind S-VID 200 at 3 */
+		pack(two, 0xf8000000u, 0xf8000000u, (3u << 16) | (200u << 3),
+		     (5u << 16) | (410u << 3));
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, two, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		OMCI_T_CAPTURE_LOG(log, {
+			CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL),
+				 OMCI_OK);
+		});
+		CHECK(strstr(log, pass_out) != NULL);
+		CHECK(omci_vlan_row_refused(pass, sizeof(pass)));
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 2u);
+		if (omci_hw_vlan_recorded(&applied) == 2u) {
+			CHECK_EQ(applied[0].ethertype, OMCI_HW_ETHERTYPE_IPV6);
+			CHECK_EQ(applied[1].kind, OMCI_HW_VLAN_SCVID_PUSH);
+			CHECK_EQ(applied[1].ethertype, OMCI_HW_ETHERTYPE_ANY);
+		}
+		clear_rows(mib);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	}
+
+	/*
+	 * The default rule of the double-tagged frames is one of the three
+	 * default rules too: it comes last in list order, after a rule of
+	 * single-tagged frames whose bytes sort after its own, and needs
+	 * nothing from the hardware.
+	 */
+	{
+		uint8_t dbl[16], t[16];
+		const struct omci_vlan_fate_rec *f = NULL;
+
+		clear_rows(mib);
+		/* double-tagged, the default: left as they are */
+		pack(dbl, 0xe8000000u, 0xe8000000u, 0x000f0000u, 0x000f0000u);
+		xlate_row(t, 0u, 410u, 1410u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, dbl, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, t, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 1u);
+		CHECK_EQ(omci_vlan_fates(&f, NULL), 2u);
+		if (f != NULL && omci_vlan_fates(NULL, NULL) == 2u) {
+			CHECK_EQ(f[0].fate, (uint8_t)OMCI_VLAN_FATE_PROGRAMMED);
+			CHECK_EQ(f[0].match_cvid, 410u);
+			CHECK_EQ(f[0].row, 1u);
+			CHECK_EQ(f[1].fate, (uint8_t)OMCI_VLAN_FATE_INERT);
+			CHECK_EQ(f[1].row, 0u);
+		}
+		clear_rows(mib);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	}
+
+	/*
 	 * A discard of the frames of a VID is programmed in its place in list
 	 * order. Of any priority, it leaves the priorities that earlier rules
 	 * take from its VID to them, and takes no frame when they take all
