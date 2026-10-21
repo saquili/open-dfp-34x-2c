@@ -353,6 +353,32 @@ The keys and the certificate are kept in the stick's store, so they hold
 after a restart and an update, and a copy of the flash holds them
 (``backup.rst``).
 
+Standing in for an operator's ONT
+=================================
+
+An OLT knows the box at the end of a fibre only by what the box tells it of
+itself, and sets up the services its profile holds for that line. To put the
+stick in the place of an operator's ONT, have it tell the OLT what the ONT
+told, under Operator, Identity:
+
+* the identity, as the ONT's label and its own pages give it: the serial
+  number, the PLOAM password or the LOID with its password where the
+  operator registers lines by them, the vendor ID, the equipment ID, the
+  version and the versions of the software images (an OLT that finds the
+  software it expects tries no update, which the stick refuses anyway);
+* the ports, in the card "Ports told to the OLT": as many Ethernet ports as
+  the ONT told the OLT of, its LAN sockets as a rule and not a router's WAN
+  socket, and the VEIP with them, as an ONT with a router of its own has
+  it. Every port is the one SFP lane: the services of each reach the host
+  there, and Operator, Services says which port each came by, and settles
+  two that would reach the host in one VLAN.
+
+A change of either registers the stick again. When the operator sends the
+PPPoE login through OMCI, the card "PPPoE login from the OLT" shows it and
+hands it to a new PPPoE connection of the stick's own; otherwise the
+router behind the stick needs it from the operator. The stick has no
+phone socket that takes a wire.
+
 Updating to a newer release
 ===========================
 
