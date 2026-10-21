@@ -1642,19 +1642,24 @@ before it and whether that one had the enable set, and the status word::
    * - ``RTL9602C_TSENSE_CTRL`` (``0x000138``) holds the sensor's enable,
        ``RTL9602C_TSENSE_CTRL_EN`` (bit 16), among settings of its analog part.
        The driver writes ``RTL9602C_TSENSE_CTRL_INIT`` (``0x00034ad7``) whole:
-       the enable, with the analog settings in the other bits.
-     - I
-     - The setup log line, which gives the word found and the word written.
-       That the other bits are the analog settings the sensor needs is not
-       established; the readings, compared with another sensor as below,
-       would show whether they read true.
+       the enable, with the analog settings in the other bits. After a warm
+       restart from an image that does not write the word, it already held
+       that value, with the enable set.
+     - M, I
+     - M: the setup log line at the first boot of the image, a warm restart
+       (2026-10-21): ``sensor control 00034ad7, found 00034ad7, on``. I: that
+       the other bits are the analog settings the sensor needs; the readings,
+       compared with another sensor as below, would show whether they read
+       true, and a boot after a power-up what the word holds then.
    * - ``RTL9602C_TSENSE_STAT`` (``0x00013c``):
        ``RTL9602C_TSENSE_STAT_TEMP`` (bits 22:16) is the last reading, seven
        bits. A write of the control word starts a measurement, whose result is
        there 1 ms later.
-     - I
-     - Readings that change with the die's temperature; two reads 1 ms and
-       10 ms after a write that agree.
+     - M, I
+     - M: the field read 66 in the setup log line (status ``00420047``), and
+       ``temp1_input`` read 68000 a minute later (2026-10-21). I: that a write
+       starts a measurement whose result is there 1 ms later; two reads 1 ms
+       and 10 ms after a write that agree would settle it.
    * - The reading counts whole degrees Celsius from 0, so that 0 to 127 read
        0 to 127 degrees; ``temp1_input`` is the reading times 1000
        (``rtl9602c_tsense_mdeg()``).
@@ -1667,7 +1672,9 @@ before it and whether that one had the enable set, and the status word::
        a measurement's state, the reading at power-on and the extremes seen,
        are not used.
      - I
-     - The status word in the setup log line, against the readings.
+     - The status word in the setup log line, against the readings. It read
+       ``00420047`` with the reading at 66: bits 25 and 24 clear, and bits 6:0
+       ``0x47`` (71).
 
 The calibration against the optics' own sensor, at two temperatures:
 
@@ -1685,6 +1692,14 @@ The calibration against the optics' own sensor, at two temperatures:
 
 A scale or an offset that the calibration finds goes into
 ``rtl9602c_tsense_mdeg()`` and its KUnit case.
+
+One point is measured, not the calibration: at the first boot of the image, a
+warm restart of the lab stick, setup logged ``die temperature 66 C (sensor
+control 00034ad7, found 00034ad7, on; status 00420047)``, and a minute later
+``temp1_input`` of ``rtl9602c`` (``hwmon0``) read 68000 while that of
+``gn25l95`` (``hwmon1``) read 46426 (2026-10-21). The die reads warmer than
+the module, as step 3 says it does; with one temperature and no cold start
+this fixes neither the offset nor the scale.
 
 Per-port counters
 =================
@@ -2119,7 +2134,7 @@ A step that belongs to another page is named and handed over.
 6. Set up the interrupt (see "Interrupt setup"). (T) Then turn the die
    temperature sensor on, log its first reading and register the hwmon device
    ``rtl9602c`` (see "The die temperature sensor"); a failed registration is
-   logged and setup goes on. (I)
+   logged and setup goes on. (M)
 7. Mark the DSCP map switch-wide, forget the apptrust owner and write the
    classifier's two patterns (*acl-qos*). (T; the patterns I, see *acl-qos*)
 8. Report the memory self-test (see "Access and identification"). (T)
