@@ -201,10 +201,12 @@ Interfaces to user space
 
 - The hwmon device ``gn25l95``, with the five measurements of the diagnostics.
   Its directory is ``/sys/class/hwmon/hwmonN``, where N follows the order of
-  registration, and it is found by its ``name`` file::
+  registration, and it is found by its ``name`` file. On this board the
+  switch driver's ``rtl9602c``, the die temperature, registers first, so the
+  optics are ``hwmon1``::
 
       # grep -l gn25l95 /sys/class/hwmon/hwmon*/name
-      /sys/class/hwmon/hwmon0/name
+      /sys/class/hwmon/hwmon1/name
 
   The attributes are ``temp1_input``, ``in0_input``, ``curr1_input``,
   ``power1_input`` and ``power2_input``, each with a ``_label`` file and the
@@ -591,7 +593,10 @@ the SFP modules it manages.
      - In O5 on an OLT, with the automatic loop off as the driver then left
        it: 46.8 degC, 3.217 V, 7 mA, 1697 uW (+2.3 dBm) and 10 uW, the same
        values the ``a2`` view showed. With the loop on, 13.8 mA and 1687 uW
-       (2026-10-21).
+       (2026-10-21). The device test ``optics.diagnostics``, which finds the
+       device by its name, on an image whose die temperature device
+       registers first: 47.8 degC, 3.23 V, 13 mA, +2.2 dBm transmitted and
+       -27.0 dBm received (2026-10-21).
 
 To read the five measurements, in the directory of the device::
 
@@ -1050,7 +1055,10 @@ defined in ``gn25l95.c``):
      - The modulation hold's log: ``e3 -> e2`` at the first bring-up after
        each module power-up, ``e2 -> e2`` after a warm reboot. A test build
        that set the bit at bring-up (2026-10-21): ``e2 -> e3`` in its log, and
-       hwmon ``curr1_input``.
+       hwmon ``curr1_input``. This driver, after a warm reboot from a kernel
+       of the modulation hold (2026-10-21): ``the module runs its factory
+       configuration: automatic ER loop on (ER control e2 -> e3), set point
+       ab -> ab``, then O5 at a bias of 14 mA and 1687 uW.
    * - The shipped firmware writes nothing to the laser driver, so that under
        it the module runs the configuration it loads at power-up, the loop on.
      - I
@@ -1069,6 +1077,16 @@ defined in ``gn25l95.c``):
      - On the lab OLT, 2026-10-21, a test build with a debugfs switch between
        the two: the kernel log, the OMCC frame counts, hwmon ``curr1_input``
        and ``power1_input``.
+   * - A bring-up that finds the factory configuration in place leaves it so,
+       and the activations that follow are alike: of ten ``ip link set pon
+       down`` and ``up`` in a row, each logged ``(ER control e3 -> e3), set
+       point ab -> ab``, reached O5 in 1.4 to 1.7 s and was provisioned over
+       OMCI 4.7 to 4.8 s after O5, the data GEM port bridged, with the same
+       count of OMCC frames each time and none sent again; the bias read
+       14 mA and the transmitted power 1672 to 1697 uW.
+     - M
+     - On the lab OLT, 2026-10-21, this driver on a RAM image: the kernel log,
+       the OMCC frame counts, hwmon ``curr1_input`` and ``power1_input``.
    * - The burst overhead the OLT can lock on is as short with the loop on as
        with it off: with the burst overhead of O5 forced to 48, 40, 32, 24, 20,
        16 and 12 bytes in place of the 63 the OLT asks for, every activation of
@@ -1129,9 +1147,10 @@ defined in ``gn25l95.c``):
        ONU sent at a lower level. Nothing in the table tells the two apart.
      - M, I
      - M: ``0xa8`` read ``ab`` at mode 0, and the table kept a lower level
-       across a warm reboot ("Transmit power levelling"). I: that nothing
-       tells them apart; the ``tables`` view after ``reset`` of ``t2write``
-       shows the module's own.
+       across a warm reboot ("Transmit power levelling"); after an orderly
+       ``reboot`` at mode 2, whose shutdown put mode 0 back, the next kernel
+       found ``ab`` (2026-10-21). I: that nothing tells them apart; the
+       ``tables`` view after ``reset`` of ``t2write`` shows the module's own.
    * - The table takes writes with nothing else written. The text of the
        GN25L95's datasheet places the access control of the upper page at
        ``0xcc``, and the driver used to clear bits 3:2 there before writing the
@@ -1220,12 +1239,12 @@ kept out of the EEPROM in the same way.
 The part's power control loop moves the bias until the monitor photodiode
 reaches a set point, so the transmitted power follows the set point while the
 bias has room, and the automatic extinction-ratio loop sets the modulation for
-the bias it finds. So a lower level is set by the set point alone. Whether the
-loops reach 6 dB down before the bias reaches its floor is not measured. With
-the loop off and the modulation held, as until 2026-10-21, the bias reached
-its floor about 1.5 dB down, and the driver lowered the modulation by the same
-factor as the power before it lowered the set point; the measurements of that
-driver are kept in the rows below.
+the bias it finds. So a lower level is set by the set point alone. On this
+module the loops reach 6 dB down with the bias at 12.05 mA (see the rows
+below). With the loop off and the modulation held, as until 2026-10-21, the
+bias reached its floor about 1.5 dB down, and the driver lowered the
+modulation by the same factor as the power before it lowered the set point;
+the measurements of that driver are kept in the rows below.
 
 The set point of a lower level is found by measuring, and the module measures
 the power only in bursts, which come often only from O4 on. So the MAC says
@@ -1284,16 +1303,28 @@ unset, with the optics where they are.
      - M
      - The same reads.
    * - With the loop on, as the driver now runs the part, the set point alone
-       takes the power 3 dB and 6 dB down with the bias above its floor; the
-       power read 20 ms after each step is the settled one; and a set point
-       kept from a measurement gives the mode's power again when it is written
-       later without measuring.
-     - I
-     - Change_Power_Level injected in O5, down, down, up and up: the logged
-       power about a half and a quarter of mode 0's, hwmon ``curr1_input``
-       above 0 and ``power1_input`` a few seconds on equal to the logged
-       power, the ONU in O5 throughout; then Upstream_Overhead naming modes 1
-       and 2 in O2, as below. Not run.
+       takes the power 3 dB and 6 dB down, the bias staying between 12 and
+       14 mA, so that the extinction-ratio loop is taken to lower the
+       modulation (the modulation DAC reads ``0000`` with the loop on, see
+       "The factory configuration"). Change_Power_Level injected in O5 took
+       the ONU to mode 1 at 838.3 uW, bias 12.70 mA, set point ``8a``; mode 2
+       at 421.6 uW, bias 12.05 mA, set point ``6b``; mode 1 at 848.4 uW, bias
+       12.65 mA, set point ``8b``; and mode 0 at 1676.6 uW, bias 13.70 mA,
+       set point ``ab``: 3.0 dB and 6.0 dB below mode 0, the ONU in O5
+       throughout. A set point kept from a measurement gives the mode's power
+       again when it is written later without measuring, and the power read
+       20 ms after a step is the settled one: written before the ONU was
+       ranged, ``8b`` gave 843 uW and ``6b`` 425 uW in O5, within 1 % of the
+       848.4 uW and 421.6 uW read 20 ms after the search reached them.
+     - M
+     - On the lab OLT, 2026-10-21, this driver on a RAM image: the levels'
+       log lines after Change_Power_Level injected down, down, up and up;
+       then, each time in O2 after an injected Disable_Serial_Number and its
+       enable, an Upstream_Overhead injected with flags ``0x21``, ``0x22``
+       and ``0x23`` (mode 1, mode 2 and the reserved value), which logged
+       ``transmit power level mode 1 at set point 8b, not measured``, ``mode
+       2 at set point 6b, not measured`` and mode 0, and the OLT ranged the
+       ONU to O5 at 843 uW, 425 uW and 1692 uW.
    * - With the loop off and the modulation lowered with the power, as the
        driver set the levels until 2026-10-21: Change_Power_Level injected in
        O5 took the transmitted power from 1672 uW to 823 uW at mode 1 (3.1 dB
@@ -1341,12 +1372,17 @@ unset, with the optics where they are.
        with it, as a restart notifier of the switch driver before the split
        into a driver of its own, ``reboot`` at mode 2 logged ``transmit power
        back at level mode 0 before the restart``, and the next kernel held the
-       modulation at 39.0 mA (``5f80``) and sent 1661 uW. The GPON MAC's
+       modulation at 39.0 mA (``5f80``) and sent 1661 uW. The restore as this
+       driver's shutdown, after the restart notifiers (2026-10-21):
+       ``reboot`` at mode 2 (421.6 uW, set point ``6b``) logged ``Dying_Gasp
+       sent 3 of 3 times before the restart`` and then ``transmit power back
+       at level mode 0 before the restart``, and the next kernel's bring-up
+       logged ``(ER control e3 -> e3), set point ab -> ab``. The GPON MAC's
        request for mode 0: each Disable_Serial_Number injected in O5 at mode
        1 or 2 logged ``transmit power level mode 0 at set point ab, not
        measured``, and TO1 in O3 after the ONU's own step to mode 1 put mode
-       0 back as well. I: the restore as the driver's shutdown, which runs
-       after the restart notifiers, has not been run.
+       0 back as well. I: a reset that shuts no device down, taken at a lower
+       level with the loop on, has not been run.
 
 Setting a level (``gn25l95_set_power_level()``, called from the GPON MAC's
 work, ``rtl9602c_gpon_power_work()``, which the MAC queues for each request and
@@ -1366,7 +1402,7 @@ which says whether the power can be measured):
 5. For mode 0, write the set point of mode 0. (M)
 6. For a lower mode when the power cannot be measured, write the set point
    kept for the mode. Purpose: the level the last measurement found, before
-   the ONU is ranged. (I with the loop on)
+   the ONU is ranged. (M)
 7. For a lower mode when it can, read the set point and the transmitted
    power; while the optics are at mode 0 the module measures the bursts of
    mode 0, so the power read is that of mode 0 (no power read gives
@@ -1377,7 +1413,7 @@ which says whether the power can be measured):
    the set point it crossed at for the mode. A set point above that of mode 0,
    a power of 0 or a bias above ``GN25L95_LEVEL_BIAS_MAX`` (40 mA) gives
    ``-ERANGE``. Purpose: the power lands at the level without the laser going
-   out. (I with the loop on)
+   out. (M)
 9. On a failure, put mode 0 back; when even that fails, log it and count the
    optics at no known level, which the next request and the next bring-up try
    to leave. (I)
@@ -1495,8 +1531,9 @@ prefix ``rtl9602c-switch:``, and the GPON MAC with ``<GPON>``.
      - ``the module runs its factory configuration: automatic ER loop on (ER
        control <hh> -> <hh>), set point <hh> -> <hh>``. Each pair is the
        register as found and as left: ER control ``e3`` after a module
-       power-up, ``e2`` when an earlier kernel turned the loop off; a set point
-       found below the one left when a lower level was set.
+       power-up or an earlier bring-up of this driver, ``e2`` when an earlier
+       kernel turned the loop off; a set point found below the one left when a
+       lower level was set.
    * - Bring-up, PERSIST lets register changes reach the EEPROM
      - ``EEPROM updates are enabled (C7h <hh>); the configuration table is left
        alone rather than written to the EEPROM``
@@ -1562,7 +1599,7 @@ of a step is the tag of the fact the step rests on (see the tables above).
    whatever an earlier kernel left in its registers, at level mode 0. (M)
 
 At shutdown, restart or halt the driver puts level mode 0 back
-(``gn25l95_shutdown()``).
+(``gn25l95_shutdown()``). (M)
 
 The hwmon device, the dummy client and the optics are device-managed and go
 with the laser driver's device, whose debugfs directory the I2C core removes
@@ -1590,14 +1627,14 @@ Known limitations
   module power cycle ends it. The ONU sends at a lower level only from O3 to
   O6, at the mode the OLT names or asks for or, in O3, at the one it took
   itself after unanswered serial-number requests; below O3 and in O7 the GPON
-  MAC asks for mode 0. The extinction ratio at the lower levels is not
-  measured. A loop turned off by an earlier kernel is turned on again by the
-  bring-up.
-- The transmit power levels were measured only with the automatic loop off.
-  With the loop on, as the driver now runs the part, whether the set point
-  alone reaches modes 1 and 2 is not measured (see "Transmit power
-  levelling"); a level the search cannot reach gives ``-ERANGE``, and the
-  ONU stays at mode 0 and says so.
+  MAC asks for mode 0. An orderly restart puts mode 0 back before it, as the
+  driver's shutdown. A loop turned off by an earlier kernel is turned on
+  again by the bring-up.
+- A level the search cannot reach gives ``-ERANGE``, and the ONU stays at
+  mode 0 and says so. On this module, with the loop on, the set point alone
+  reached modes 1 and 2 with the bias at 12.70 and 12.05 mA (see "Transmit
+  power levelling"); the extinction ratio at the lower levels is not
+  measured.
 - Before the ONU is ranged a lower level is set only at a set point kept from
   a measurement since probe, and the module measures a level only when the
   OLT asks for it with Change_Power_Level in O4 or O5. Until it has, the
@@ -1646,14 +1683,6 @@ Assumptions the driver depends on
        power levelling").
      - The eye of the transmitted light at each mode, with an optical
        instrument.
-   * - That with the automatic loop on the set point alone takes the power
-       3 dB and 6 dB down before the bias reaches its floor, that the power
-       read 20 ms after a step is the settled one, and that a kept set point
-       gives its mode's power again without measuring ("Transmit power
-       levelling").
-     - Change_Power_Level injected in O5, down twice and up twice, then
-       Upstream_Overhead naming modes 1 and 2 in O2: the logged power and
-       hwmon ``power1_input`` and ``curr1_input`` at each mode.
    * - That the set point the first bring-up since probe finds is the module's
        own ("The factory configuration").
      - The bring-up's first log line after a module power cycle against the
