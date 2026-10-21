@@ -525,16 +525,15 @@ omcid_applied() {
 # The rules of the services, SVCn ("FIBRE/ACTION[/HOST]"), as omcid reads
 # them from $RUN/omcid/rules: a line "FIBRE ACTION [HOST]" each, readable by
 # its account. A new file only when they changed, as omcid programs its data
-# path again at each new one (its target/hw_kernel.c, rules_changed()).
+# path again at each new one (its target/hw_kernel.c, rules_changed()); the
+# shell compares them, as the image has no cmp.
 omcid_rules() {
 	[ -d "$RUN/omcid" ] || return 0
-	awk -F '[=/]' '/^SVC[0-9]+=[0-9]/ { print $2, $3 ($4 != "" ? " " $4 : "") }' \
-		"$CONF" 2>/dev/null >"$RUN/omcid/rules.new" || return 0
-	if cmp -s "$RUN/omcid/rules.new" "$RUN/omcid/rules"; then
-		rm -f "$RUN/omcid/rules.new"
-		return 0
-	fi
-	chmod 644 "$RUN/omcid/rules.new" && mv "$RUN/omcid/rules.new" "$RUN/omcid/rules" ||
+	or=$(awk -F '[=/]' '/^SVC[0-9]+=[0-9]/ { print $2, $3 ($4 != "" ? " " $4 : "") }' \
+		"$CONF" 2>/dev/null) || return 0
+	[ -e "$RUN/omcid/rules" ] && [ "$(cat "$RUN/omcid/rules")" = "$or" ] && return 0
+	{ [ -z "$or" ] || printf '%s\n' "$or"; } >"$RUN/omcid/rules.new" &&
+		chmod 644 "$RUN/omcid/rules.new" && mv "$RUN/omcid/rules.new" "$RUN/omcid/rules" ||
 		log "omcid cannot read the rules of the services"
 }
 
