@@ -86,6 +86,9 @@ IMAGE_ENFORCE ?= k0 r0
 # are copied and built again at every build.
 LOCAL_PACKAGES = omcid onu-utils pppoed dhcp6d timed pond netifd
 
+# The kernel of the flash names no function in its reports (it is built without
+# KALLSYMS, which only a RAM boot carries), so the symbols of the kernel in
+# k0.uImage go beside it, k0.System.map, to read the addresses of a report by.
 image:
 	$(BR2_ENV) $(TOOLCHAIN_ENV) $(IMAGE_CONFIG) && \
 	if [ "$$(cat "$(IMAGE_OUT)/.kernel-archive" 2>/dev/null)" != "$$OPEN_DFP_34X_2C_KERNEL_ARCHIVE" ]; then \
@@ -94,6 +97,7 @@ image:
 	fi && \
 	rm -rf $(foreach p,$(LOCAL_PACKAGES),"$(IMAGE_OUT)/build/$(p)-local") && \
 	make -C "$(IMAGE_OUT)"
+	cp "$(IMAGE_OUT)/build/linux-custom/System.map" "$(IMAGE_OUT)/images/k0.System.map"
 	$(MAKE) image-check
 
 # What the build left, judged: the flash layout against the kernel's erase sector,
@@ -122,11 +126,19 @@ image-check:
 # builds the board's kernel configuration with the
 # image's own cross compiler in RAM_OUT. That configuration leaves out the
 # initial RAM disk, which the kernel in the flash does not use, so the RAM
-# kernel switches it on. OPEN_DFP_34X_2C_RAM_KCONFIG, options
+# kernel switches it on; and it leaves out the kernel's own tools of
+# diagnosis, which only a RAM boot carries, so that the RAM kernel switches
+# them on too, unless RAM_DIAG=no: the names of its functions in its reports
+# (KALLSYMS), the debug messages turned on at run time (DYNAMIC_DEBUG), the
+# drivers' files of debugfs (DEBUG_FS) and a process's pages in /proc
+# (PROC_PAGE_MONITOR).
+# OPEN_DFP_34X_2C_RAM_KCONFIG, options
 # for scripts/config such as "--enable NET_DSA_RTL9602C_PLOAM_INJECT", changes
 # that configuration for a test image.
 RAM_OUT ?= $(CURDIR)/build/ram
 RAM_DIAG ?= yes
+RAM_DIAG_KCONFIG = --enable KALLSYMS --enable DYNAMIC_DEBUG --enable DEBUG_FS \
+		   --enable PROC_PAGE_MONITOR
 RAM_MAKE = $(MAKE) -C linux O="$(RAM_OUT)/kernel" ARCH=$(ARCH) \
 	   CROSS_COMPILE="$(IMAGE_OUT)/host/bin/mips-buildroot-linux-uclibc-"
 
@@ -143,6 +155,7 @@ ram-image:
 	linux/scripts/config --file "$(RAM_OUT)/kernel/.config" --enable BLK_DEV_INITRD \
 	  --set-str INITRAMFS_SOURCE "$(RAM_OUT)/root $(CURDIR)/br2-external/board/dfp-34x-2c3/initramfs.list" \
 	  --set-val INITRAMFS_ROOT_UID 0 --set-val INITRAMFS_ROOT_GID 0
+	$(if $(filter no,$(RAM_DIAG)),,linux/scripts/config --file "$(RAM_OUT)/kernel/.config" $(RAM_DIAG_KCONFIG))
 	$(if $(OPEN_DFP_34X_2C_RAM_KCONFIG),linux/scripts/config --file "$(RAM_OUT)/kernel/.config" $(OPEN_DFP_34X_2C_RAM_KCONFIG))
 	$(RAM_MAKE) olddefconfig
 	$(RAM_MAKE) -j$(JOBS) uImage
