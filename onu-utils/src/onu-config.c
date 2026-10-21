@@ -117,17 +117,20 @@
  * the key's line written anew, and SSH_KEYS_ONLY=1 while the server takes
  * them alone, and no password. With no verb it prints ONLY=0 or ONLY=1 and a
  * line KEY=TYPE BITS FINGERPRINT COMMENT for each key, in the order of their
- * places; add prints that line of the key it kept. It refuses, saying why, a
- * key it does not take, one it keeps already, a ninth, one the store has no
- * room for, the last key while the server takes keys alone, and keys alone
- * while there is no key. A change, and install, write the files the ssh
- * server reads (onu-run ssh): /run/dropbear/authorized_keys, which its -D
- * names, with the lines of the image's /root/.ssh/authorized_keys first, as a
- * bench's image carries them, and /run/dropbear/keys-only, which turns its
- * passwords off, while the store says so and holds a key. The server reads
- * the keys at each login; when the passwords go or come back, ssh-keys ends
- * it (/run/dropbear.pid), and procd starts it again with them or without
- * them. Its sessions go on.
+ * places, then the line IMAGE= of the same form for each key of the image's
+ * /root/.ssh/authorized_keys, which the server takes too and no change here
+ * touches, IMAGE=unknown 0 - for a line of it that is no key of the form the
+ * store takes; add prints the line KEY= of the key it kept. It refuses,
+ * saying why, a key it does not take, one it keeps already, a ninth, one the
+ * store has no room for, the last key while the server takes keys alone, and
+ * keys alone while there is no key. A change, and install, write the files
+ * the ssh server reads (onu-run ssh): /run/dropbear/authorized_keys, which
+ * its -D names, with the lines of the image's /root/.ssh/authorized_keys
+ * first, as a bench's image carries them, and /run/dropbear/keys-only,
+ * which turns its passwords off, while the store says so and holds a key.
+ * The server reads the keys at each login; when the passwords go or come
+ * back, ssh-keys ends it (/run/dropbear.pid), and procd starts it again with
+ * them or without them. Its sessions go on.
  *
  * identity-current prints the identity the unit introduces itself with,
  * the name=value lines of /run/onu-identity, which root alone may read,
@@ -1038,10 +1041,48 @@ static void ssh_restart(void)
 		kill((pid_t)pid, SIGTERM);
 }
 
-static void print_key(const struct sshkey *k)
+/* The line @what=TYPE BITS FINGERPRINT COMMENT of @k. */
+static void print_key(const char *what, const struct sshkey *k)
 {
-	printf("KEY=%s %u %s%s%s\n", k->type, k->bits, k->fingerprint, *k->comment ? " " : "",
-	       k->comment);
+	printf("%s=%s %u %s%s%s\n", what, k->type, k->bits, k->fingerprint,
+	       *k->comment ? " " : "", k->comment);
+}
+
+/*
+ * The keys of the image's /root/.ssh/authorized_keys, which the ssh server
+ * takes before the store's and nobody changes on the stick: a line
+ * IMAGE=TYPE BITS FINGERPRINT COMMENT for each that sshkey_parse() takes,
+ * and IMAGE=unknown 0 - for one it does not, which the server may take all
+ * the same (options in front of a key, a type the store does not take).
+ * Blank lines and comments are none.
+ */
+static void print_image_keys(void)
+{
+	static char line[4 * SSHKEY_LINE_MAX];
+	char path[PATH_MAX], err[160];
+	struct sshkey k;
+	FILE *f;
+
+	root_path(SSH_IMAGE_KEYS, 0, path, sizeof(path));
+	f = fopen(path, "r");
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f)) {
+		const char *p = line + strspn(line, " \t\r");
+		bool cut = !strchr(line, '\n') && !feof(f);
+		char rest[256];
+
+		/* A line longer than any key is none, and the rest of it goes too. */
+		for (bool more = cut; more && fgets(rest, sizeof(rest), f);)
+			more = !strchr(rest, '\n');
+		if (*p == '\n' || !*p || *p == '#')
+			continue;
+		if (!cut && !sshkey_parse(p, &k, err, sizeof(err)))
+			print_key("IMAGE", &k);
+		else
+			puts("IMAGE=unknown 0 -");
+	}
+	fclose(f);
 }
 
 /*
@@ -1168,7 +1209,8 @@ static int ssh_keys_cmd(const char *store, int argc, char **argv)
 		printf("ONLY=%d\n", count && keys_alone(payload));
 		for (int i = 0; i < SSHKEY_MAX; i++)
 			if (held[i])
-				print_key(&keys[i]);
+				print_key("KEY", &keys[i]);
+		print_image_keys();
 	}
 	if (writing && strcmp(before, payload)) {
 		err = change_store(store, payload);
@@ -1188,7 +1230,7 @@ static int ssh_keys_cmd(const char *store, int argc, char **argv)
 			ssh_restart();
 	}
 	if (added >= 0)
-		print_key(&keys[added]);
+		print_key("KEY", &keys[added]);
 	rc = fflush(stdout) ? 1 : 0;
 out:
 	if (lock >= 0)

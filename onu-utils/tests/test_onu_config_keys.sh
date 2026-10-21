@@ -141,7 +141,29 @@ feed "$P256"
 keys add
 check '[ $rc -eq 0 ] && stored "SSH_KEY2=$P256"'
 keys
-check '[ $rc -eq 0 ] && [ "$(cat "$T/out")" = "$(printf "ONLY=0\nKEY=ssh-ed25519 256 %s test-ed25519@example\nKEY=ecdsa-sha2-nistp256 256 %s p256" "$ED25519_FP" "$P256_FP")" ]'
+check '[ $rc -eq 0 ] && [ "$(cat "$T/out")" = "$(printf "ONLY=0\nKEY=ssh-ed25519 256 %s test-ed25519@example\nKEY=ecdsa-sha2-nistp256 256 %s p256\nIMAGE=unknown 0 -" "$ED25519_FP" "$P256_FP")" ]'
+teardown
+
+echo "the image's keys: said apart, after the store's, and none of them the store's"
+setup
+{
+	echo "# the bench's key"
+	echo
+	echo "  $P256"
+	echo "no-pty $ED25519"
+	head -c 5000 /dev/zero | tr '\0' a
+	echo
+	printf '%s' "$ED25519"
+} >"$ONU_ROOT/root/.ssh/authorized_keys"
+keys
+check '[ $rc -eq 0 ] && [ "$(cat "$T/out")" = "$(printf "ONLY=0\nIMAGE=ecdsa-sha2-nistp256 256 %s p256\nIMAGE=unknown 0 -\nIMAGE=unknown 0 -\nIMAGE=ssh-ed25519 256 %s test-ed25519@example" "$P256_FP" "$ED25519_FP")" ]'
+feed "$ED25519"
+keys add
+check '[ $rc -eq 0 ] && stored "SSH_KEY1=$ED25519"'
+keys only on
+check '[ $rc -eq 0 ] && stored SSH_KEYS_ONLY=1'
+keys
+check '[ "$(sed -n 1,2p "$T/out")" = "$(printf "ONLY=1\nKEY=ssh-ed25519 256 %s test-ed25519@example" "$ED25519_FP")" ] && [ "$(grep -c ^IMAGE= "$T/out")" -eq 4 ]'
 teardown
 
 echo "what a key added may not be"

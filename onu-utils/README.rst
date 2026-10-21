@@ -179,7 +179,8 @@ by its whole path where procd starts it.
    nistp521, and RSA of 2048 to 4096 bits, one a line as ``ssh-keygen`` writes
    it, with a comment of at most 100 bytes, eight at most::
 
-      onu-config ssh-keys                      # ONLY=0|1, KEY=TYPE BITS FINGERPRINT COMMENT
+      onu-config ssh-keys                      # ONLY=0|1, KEY=TYPE BITS FINGERPRINT COMMENT,
+                                               # IMAGE= of the same form, the image's keys
       onu-config ssh-keys add <key.pub         # prints the KEY= line of the key
       onu-config ssh-keys remove SHA256:...    # or the fingerprint on the input
       onu-config ssh-keys only on|off          # no password, keys alone
@@ -192,6 +193,11 @@ by its whole path where procd starts it.
    reads ``/run/dropbear/authorized_keys`` (``onu-run``), which a change and
    ``install`` write: the keys of the image's ``/root/.ssh/authorized_keys``
    first, which an image built with a bench's keys carries, then the store's.
+   ``onu-config ssh-keys`` prints the image's after the store's, as lines
+   ``IMAGE=``, so that the panel shows them, read-only and apart from the
+   eight; a line of that file that is no key of the form the store takes
+   (options in front of it, another type) is ``IMAGE=unknown 0 -``, since the
+   server may take it all the same. No change touches them.
    While the store says keys alone and holds a key, ``/run/dropbear/keys-only``
    is there, and the server takes no password; when that changes,
    ``onu-config`` ends the server, and procd starts it again. Sessions open
