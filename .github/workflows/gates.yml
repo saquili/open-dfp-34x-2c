@@ -98,7 +98,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git make gcc libc6-dev \
-            python3 perl clang-format gcovr libmnl-dev zlib1g-dev rsync
+            python3 perl clang-format gcovr libmnl-dev zlib1g-dev rsync openssl
           git config --global --add safe.directory '*'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: The user-space headers of this tree's kernel
@@ -227,11 +227,12 @@ jobs:
     steps:
       - name: Install the tools
         # The tests of the post-image script run the real mksquashfs and
-        # unsquashfs, and are skipped without them.
+        # unsquashfs, and those of signupdate.py openssl; each is skipped
+        # without them.
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git python3 \
-            squashfs-tools
+            squashfs-tools openssl
           git config --global --add safe.directory '*'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Tests of the image scripts, the boot script and the defconfig

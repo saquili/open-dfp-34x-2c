@@ -11,9 +11,12 @@
 # gathered (make legal-info, which adds the toolchain's own). The release is
 # named by the image's own version, the time of the commit in UTC
 # (post-build.sh): its tag is v2026.10.19-2130 for 2026.10.19-2130. The last
-# job, the only one that may write to the repository, makes a draft release of
-# that tag on that commit, with the files and their SHA-256 digests, for a
-# person to test on two sticks against the lab OLT and publish. It is a full
+# job, the only one that may write to the repository, signs the update file
+# with the release key (ADR 0022), the secret RELEASE_SIGNING_KEY, which no
+# other job sees, packs the shipped firmware's package again with the
+# signature, and makes a draft release of that tag on that commit, with the
+# files and their SHA-256 digests, for a person to test on two sticks against
+# the lab OLT and publish. It is a full
 # release, not a pre-release: published, it is the repository's latest, which
 # a release of the toolchain never is (toolchain.yml). The tag comes into
 # being when it is published. Nothing built elsewhere goes into a release.
@@ -254,6 +257,39 @@ jobs:
         run: |
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name release --dir dist
           cd dist && sha256sum -c SHA256SUMS
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: src
+      - name: Sign the update
+        # The key lives in a file of this step's own for as long as the
+        # signature takes. The stick checks the signature with the keys its
+        # image trusts, /etc/onu-update.keys; so does this step, before the
+        # files go anywhere. The package of the shipped firmware's page
+        # carries the root filesystem with its signature, so that a bank it
+        # writes is signed too, and is packed again as the build packed it,
+        # with the time of the commit. r0.squashfs stays the image the build
+        # made, without the signature.
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          board=src/br2-external/board/dfp-34x-2c3
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::No secret RELEASE_SIGNING_KEY: a release is signed (ADR 0022)."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/release.pem"
+          (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
+          python3 "$board/signupdate.py" sign "$key" dist/update.bin "$RUNNER_TEMP/update.bin"
+          rm -f "$key"
+          mv "$RUNNER_TEMP/update.bin" dist/update.bin
+          python3 "$board/signupdate.py" check dist/update.bin "$board/overlay/etc/onu-update.keys" |
+            tee "$RUNNER_TEMP/check.txt"
+          grep -qx SIGNATURE=valid "$RUNNER_TEMP/check.txt"
+          python3 "$board/signupdate.py" rootfs dist/update.bin "$RUNNER_TEMP/r0.signed"
+          python3 "$board/mkweb.py" --version "$VERSION" --time "$(git -C src log -1 --format=%ct)" \
+            dist/k0.uImage "$RUNNER_TEMP/r0.signed" dist/web-install.tar
+          (cd dist && sha256sum -- $(ls | grep -vx SHA256SUMS) > SHA256SUMS)
+          cat dist/SHA256SUMS
       - name: The draft release
         # Refused when the tag or a release of it exists already: a version
         # is released once. A full release, not a pre-release: published, it
@@ -288,7 +324,11 @@ jobs:
           - \`web-install.tar\`: installs this system through the shipped
             firmware's web page (docs/handbook/install-guide.rst).
           - \`update.bin\`: updates a stick that runs this system, from its
-            panel or with \`onu-update write\`.
+            panel or with \`onu-update write\`. It is signed with the
+            release key, which the panel shows as "release" beside the
+            system; \`br2-external/board/dfp-34x-2c3/signupdate.py check
+            update.bin br2-external/board/dfp-34x-2c3/overlay/etc/onu-update.keys\`
+            checks it on a computer.
           - \`k0.uImage\`, \`r0.squashfs\`: the two images, for the bench
             (docs/handbook/flashing.rst).
           - \`k0.System.map\`: the symbols of the kernel in \`k0.uImage\`,
