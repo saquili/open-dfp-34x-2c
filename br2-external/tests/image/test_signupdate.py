@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
 MKUPDATE = os.path.join(BOARD, "mkupdate.py")
 SCRIPT = os.path.join(BOARD, "signupdate.py")
+IMAGE_KEYS = os.path.join(BOARD, "overlay", "etc", "onu-update.keys")
 KERNEL_TIME = 1760000000
 
 
@@ -126,6 +127,15 @@ class Signatures(unittest.TestCase):
         self.assertEqual(len(part), len(self.squash) + 128)
         self.assertEqual(part[:len(self.squash)], self.squash)
         self.assertEqual(part[len(self.squash):][:4], b"ONUS")
+
+    def test_the_image_s_keys_file_reads(self):
+        # Its comments hold a name that is not ASCII; this key is not in it.
+        done = self.run_script("check", self.sign(), IMAGE_KEYS)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("SIGNATURE=unknown", done.stdout.splitlines())
+        with open(IMAGE_KEYS, encoding="utf-8") as handle:
+            keys = [line for line in handle if line.startswith("ed25519 ")]
+        self.assertEqual(len(keys), 1)
 
     def test_a_damaged_file_is_not_signed(self):
         data = bytearray(self.read(self.unsigned))

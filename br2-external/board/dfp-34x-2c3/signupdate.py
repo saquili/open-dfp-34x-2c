@@ -135,7 +135,8 @@ def sign(keyfile, src, dst):
 def keys_of(path):
     """The keys of a file in the form of /etc/onu-update.keys: (raw, name) by id."""
     keys = {}
-    with open(path, encoding="ascii") as handle:
+    # The comments are UTF-8, as the licence header of the image's file is.
+    with open(path, encoding="utf-8") as handle:
         for line in handle:
             words = line.split(None, 2)
             if not words or words[0].startswith("#"):
