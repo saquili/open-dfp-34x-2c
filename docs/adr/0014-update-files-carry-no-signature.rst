@@ -5,7 +5,8 @@
 ADR 0014: Carry no signature in update files
 ============================================
 
-:Status: Accepted
+:Status: Superseded by ADR 0022 (2026-10-22): a release is signed, and the
+          stick says what a file is signed with
 :Date: 2026-10-11
 :Deciders: the maintainer
 

@@ -102,7 +102,7 @@ The index
      - Accepted
    * - 0014
      - Carry no signature in update files
-     - Accepted
+     - Superseded by 0022
    * - 0015
      - Hold the kernel series to mainline's rules without submitting it
      - Accepted
@@ -123,4 +123,7 @@ The index
      - Accepted
    * - 0021
      - Use the core's ll and sc for atomic operations, without threads
+     - Accepted
+   * - 0022
+     - Sign each release, and say what a file is signed with
      - Accepted

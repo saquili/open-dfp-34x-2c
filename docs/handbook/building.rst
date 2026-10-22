@@ -42,8 +42,8 @@ What the build makes
    * - ``update.bin``
      - The two images in one update file, which the stick's ``onu-update``
        writes into the bank it did not start from (``updating.rst``): a header
-       with the board, the version and the build's time, the two images, and
-       their SHA-256.
+       with the board, the version and the kernel image's time, the two
+       images, and their SHA-256. A release signs it afterwards (ADR 0022).
      - The two images and 288 bytes.
    * - ``web-install.tar``
      - The two images in the package that the web page of the stick's shipped
@@ -516,7 +516,13 @@ Known limitations
   and says why, the ssh server takes keys only, and the console takes
   ``admin``, so that the store can be mended there. A new password cannot be
   kept until the store is back.
-* The update file has a checksum and no signature (``updating.rst``).
+* The update file built here has a checksum and no signature: the panel
+  calls it a build of the source, not a release, and writes it after a
+  warning. A release is signed by the release workflow (ADR 0022). An owner
+  who signs their own builds makes an Ed25519 key with ``openssl genpkey
+  -algorithm ed25519``, adds the line that ``signupdate.py key KEY NAME``
+  prints to ``overlay/etc/onu-update.keys`` and signs with ``signupdate.py
+  sign KEY update.bin OUT`` (``br2-external/board/dfp-34x-2c3``).
 
 Files of one bench
 ------------------
@@ -742,10 +748,15 @@ stays: the bench restarts a board by it.
 Reproducibility
 ===============
 
-``BR2_REPRODUCIBLE`` is on: the build writes no time of its own. The kernel
-builds as ``buildroot@buildroot`` at the time the build system's release was
-made, ``mkimage`` writes the same time into the image header, and the
-post-image script gives it to ``mksquashfs`` for every file. Two builds from
+``BR2_REPRODUCIBLE`` is on: the build writes no time of its own. ``make
+image`` gives it the time of the commit it builds, the one the version names
+(``SOURCE_DATE_EPOCH``, from ``git log``; outside a git checkout, or with
+``SOURCE_DATE_EPOCH`` given, the build system keeps that, or the time its
+release was made). The kernel builds as ``buildroot@buildroot`` at that time,
+``mkimage`` writes it into the image header, the post-image script gives it to
+``mksquashfs`` for every file, and ``mkupdate.py`` takes the kernel image's
+time into the update file's header, from where ``onu-update read`` takes it
+back. The panel shows it as the time a system was built. Two builds from
 clean, each with a toolchain of its own, from a fresh clone of the repository
 in a container of the pinned image, in directories whose paths are 21 and 60
 characters long, gave the same ``k0.uImage``, ``r0.squashfs`` and

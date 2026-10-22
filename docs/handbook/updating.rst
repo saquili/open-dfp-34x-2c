@@ -31,15 +31,17 @@ The parts
      - The update file that ``make image`` leaves beside ``k0.uImage`` and
        ``r0.squashfs`` (``building.rst``): a header with the board, the version
        (the image's ``VERSION_ID``: the time of its commit in UTC, as
-       ``2026.10.19-2130``), the build's time and the two lengths, the
+       ``2026.10.19-2130``), the kernel image's time and the two lengths, the
        kernel image, the root filesystem image, and the SHA-256 of the three.
-       ``onu-utils/src/update.h`` gives the layout. The file is not signed: its
-       checksum guards against damage only.
+       ``onu-utils/src/update.h`` gives the layout. A release's file carries
+       the release's signature behind the root filesystem (ADR 0022); the
+       checksum guards against damage.
    * - ``onu-update``
      - The stick's program for the banks (``onu-utils``): it checks an update
-       file, writes it into the bank that does not run and reads it back, reads
-       a bank out as an update file, arms a start of a bank once, commits the
-       running bank, and prints or changes the boot loader's environment.
+       file and its signature, writes it into the bank that does not run and
+       reads it back, reads a bank out as an update file, says each bank's
+       SHA-256 and signature, arms a start of a bank once, commits the running
+       bank, and prints or changes the boot loader's environment.
    * - ``onu-trial``
      - Run last by the boot script: after a start of a bank on trial, it
        commits the bank once the system is up, and restarts into the committed
@@ -52,6 +54,39 @@ The parts
        to the shipped firmware when the other bank holds that, and copies the
        whole flash. pond hands the upload on a pipe to onu-act, which runs
        ``onu-update`` on it (``pond/README.rst``).
+
+Signatures
+==========
+
+The release workflow signs ``update.bin`` with the release key, whose public
+half every image carries in ``/etc/onu-update.keys`` (ADR 0022). The stick
+says what a file and each bank are signed with, and the panel shows it beside
+each system, with the SHA-256 that the release's ``SHA256SUMS`` lists for
+``update.bin``:
+
+* ``release`` (``valid``): signed with a key of ``/etc/onu-update.keys``, whose
+  name the panel shows under it.
+* ``no signature`` (``none``): a build of the source, such as ``make image``
+  leaves, or a bank that a release before signatures, or the bench from
+  ``r0.squashfs``, wrote. It is written after a warning.
+* ``unknown key`` (``unknown``): signed with a key the stick does not trust.
+  It is written after a warning.
+* ``does not match`` (``bad``): changed after it was signed. The browser does
+  not send it, and ``onu-update`` does not write it.
+
+The panel reads a file before it sends it, and its confirmation shows the
+file's version, build time, SHA-256 and signature. The boot script has every
+bank read once after a start, at the lowest priority, about 3 s a bank; the
+panel says "being read" until then. On a computer, with a checkout of this
+repository::
+
+    br2-external/board/dfp-34x-2c3/signupdate.py check update.bin \
+        br2-external/board/dfp-34x-2c3/overlay/etc/onu-update.keys
+
+says the same as the stick, from openssl and python3. ``web-install.tar``
+carries the signature as well, inside its root filesystem, so that a bank the
+shipped firmware's page writes says ``release`` too; that page itself checks
+only its ``md5.txt``.
 
 Which bank runs
 ===============

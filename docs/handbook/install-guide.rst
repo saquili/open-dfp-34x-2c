@@ -117,8 +117,11 @@ have must say ``OK``::
     web-install.tar: OK
 
 A file that says ``FAILED`` is damaged or is not the release's: download it
-again. Nothing else checks who made a file: the package and the update file
-carry a checksum against damage, not a signature (ADR 0014).
+again. ``update.bin`` carries the release's signature too, and so does the
+system inside ``web-install.tar``: once this system runs, the panel shows
+"release" beside it, and before an update it checks the file you choose
+(ADR 0022, ``updating.rst``, "Signatures"). The shipped firmware's page
+checks only that the package is whole.
 
 Step 2: Reach the shipped firmware's page
 =========================================
@@ -431,7 +434,8 @@ shipped firmware as well.
    after the upload" off, so that the start waits for you. Turned on, it has
    the stick start the new system as soon as it is written.
 3. Press "Upload new software" and choose ``update.bin``. A dialog says where
-   it goes, "Write system B", and asks for root's password. While the other
+   it goes, "Write system B", shows the file's version, SHA-256 and signature,
+   which says "release" for a release, and asks for root's password. While the other
    system is the shipped firmware, the card warns under the button and the
    dialog says it once more: "System B holds the firmware the stick shipped
    with. This writes over it, and then the only way back to it is a copy of
