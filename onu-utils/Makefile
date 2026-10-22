@@ -63,7 +63,8 @@ $(BUILD)/test_dlparam: $(BUILD)/tests/test_dlparam.o $(BUILD)/src/dlparam.o \
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/onu-config: $(BUILD)/src/onu-config.o $(BUILD)/src/cfgstore.o $(BUILD)/src/settings.o \
-		    $(BUILD)/src/password.o $(BUILD)/src/sha256.o $(BUILD)/src/sshkey.o
+		    $(BUILD)/src/password.o $(BUILD)/src/sha256.o $(BUILD)/src/sshkey.o \
+		    $(BUILD)/src/base64.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz -lcrypt
 
 $(BUILD)/test_password: $(BUILD)/tests/test_password.o $(BUILD)/src/password.o \
@@ -120,7 +121,8 @@ $(BUILD)/test_cfgstore: $(BUILD)/tests/test_cfgstore.o $(BUILD)/src/cfgstore.o
 $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(BUILD)/test_sshkey: $(BUILD)/tests/test_sshkey.o $(BUILD)/src/sshkey.o $(BUILD)/src/sha256.o
+$(BUILD)/test_sshkey: $(BUILD)/tests/test_sshkey.o $(BUILD)/src/sshkey.o $(BUILD)/src/sha256.o \
+		      $(BUILD)/src/base64.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # test_genl asks the kernel it runs on, through a generic netlink socket;

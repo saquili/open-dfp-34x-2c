@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "base64.h"
 #include "sha256.h"
 #include "sshkey.h"
 
@@ -16,9 +17,6 @@
 
 /* The longest blob a line of SSHKEY_LINE_MAX bytes can carry. */
 #define BLOB_MAX (SSHKEY_LINE_MAX / 4 * 3)
-
-static const char g_b64[] =
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /* The types taken, with the curve's name and point, or 0 for none. */
 static const struct {
@@ -33,76 +31,6 @@ static const struct {
 	{ "ecdsa-sha2-nistp521", "nistp521", 521, 133 },
 	{ "ssh-rsa", NULL, 0, 0 },
 };
-
-static int b64_value(char c)
-{
-	const char *p = c ? strchr(g_b64, c) : NULL;
-
-	return p ? (int)(p - g_b64) : -1;
-}
-
-/*
- * The bytes of the base64 @s of @n characters, padded to a multiple of four,
- * into @out of @cap bytes: their number, or -1 for a text that is not that.
- */
-static long b64_decode(const char *s, size_t n, uint8_t *out, size_t cap)
-{
-	size_t len = 0, pad = 0;
-
-	if (!n || n % 4)
-		return -1;
-	if (s[n - 1] == '=')
-		pad = s[n - 2] == '=' ? 2 : 1;
-	if (n / 4 * 3 - pad > cap)
-		return -1;
-	for (size_t i = 0; i < n; i += 4) {
-		int v[4];
-		uint32_t w = 0;
-
-		for (int j = 0; j < 4; j++) {
-			bool padded = i + 4 == n && j >= 4 - (int)pad;
-
-			v[j] = padded ? 0 : b64_value(s[i + j]);
-			if (v[j] < 0)
-				return -1;
-			w = w << 6 | (uint32_t)v[j];
-		}
-		out[len++] = (uint8_t)(w >> 16);
-		if (i + 4 < n || pad < 2)
-			out[len++] = (uint8_t)(w >> 8);
-		if (i + 4 < n || pad < 1)
-			out[len++] = (uint8_t)w;
-	}
-	return (long)len;
-}
-
-/* @in of @n bytes as base64 into @out, padded with @pad: the length written. */
-static size_t b64_encode(const uint8_t *in, size_t n, char *out, bool pad)
-{
-	size_t len = 0;
-
-	for (size_t i = 0; i < n; i += 3) {
-		uint32_t w = (uint32_t)in[i] << 16;
-		size_t left = n - i;
-
-		if (left > 1)
-			w |= (uint32_t)in[i + 1] << 8;
-		if (left > 2)
-			w |= in[i + 2];
-		out[len++] = g_b64[w >> 18 & 63];
-		out[len++] = g_b64[w >> 12 & 63];
-		if (left > 1)
-			out[len++] = g_b64[w >> 6 & 63];
-		else if (pad)
-			out[len++] = '=';
-		if (left > 2)
-			out[len++] = g_b64[w & 63];
-		else if (pad)
-			out[len++] = '=';
-	}
-	out[len] = '\0';
-	return len;
-}
 
 /* A blob being read: a string of RFC 4251 section 5 at a time. */
 struct reader {
@@ -246,7 +174,7 @@ int sshkey_parse(const char *text, struct sshkey *k, char *err, size_t errcap)
 				 (int)(tlen > 40 ? 40 : tlen), type);
 		return -EINVAL;
 	}
-	n = b64_decode(data, dlen, blob, BLOB_MAX);
+	n = base64_decode(data, dlen, blob, BLOB_MAX);
 	if (n < 0) {
 		snprintf(err, errcap, "the key is not base64, or too long for the store");
 		return -EINVAL;
@@ -274,7 +202,7 @@ int sshkey_parse(const char *text, struct sshkey *k, char *err, size_t errcap)
 	k->comment[clen] = '\0';
 	/* The longest blob of a type taken, with its comment, fits: no check. */
 	t = (size_t)snprintf(k->line, sizeof(k->line), "%s ", k->type);
-	t += b64_encode(blob, (size_t)n, k->line + t, true);
+	t += base64_encode(blob, (size_t)n, k->line + t, true);
 	if (clen)
 		snprintf(k->line + t, sizeof(k->line) - t, " %s", k->comment);
 
@@ -282,6 +210,6 @@ int sshkey_parse(const char *text, struct sshkey *k, char *err, size_t errcap)
 	sha256_update(&h, blob, (size_t)n);
 	sha256_final(&h, digest);
 	memcpy(k->fingerprint, "SHA256:", 7);
-	b64_encode(digest, sizeof(digest), k->fingerprint + 7, false);
+	base64_encode(digest, sizeof(digest), k->fingerprint + 7, false);
 	return 0;
 }
