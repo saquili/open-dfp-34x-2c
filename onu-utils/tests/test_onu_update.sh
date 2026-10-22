@@ -485,6 +485,11 @@ if command -v openssl >/dev/null 2>&1; then
 	rm "$ONU_ROOT/etc/onu-update.keys"
 	run check "$T/signed.bin"
 	check '[ $rc -eq 0 ] && echo "$out" | grep -qx SIGNATURE=unknown'
+	# The image's own file, whose comments are not all ASCII: one key, read
+	# without a complaint.
+	cp "$HERE/../br2-external/board/dfp-34x-2c3/overlay/etc/onu-update.keys" "$ONU_ROOT/etc/"
+	run status
+	check '[ "$(echo "$out" | grep -c ^KEY=)" -eq 1 ] && [ -z "$err" ]'
 	teardown
 else
 	echo "no openssl: the tests of signatures are skipped"
