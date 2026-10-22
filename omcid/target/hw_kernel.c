@@ -4214,31 +4214,10 @@ static const uint8_t *nla_find(const uint8_t *p, const uint8_t *end,
 	return NULL;
 }
 
-int omci_hw_kernel_stats_bytes(const uint8_t *stats, size_t len,
-			       uint64_t *bytes)
-{
-	const uint8_t *end = stats + len, *a;
-	struct gnet_stats_basic basic;
-	uint16_t n = 0;
-
-	a = nla_find(stats, end, TCA_STATS_BASIC, &n);
-	if (!a || n < sizeof(basic))
-		return -EPROTO;
-	memcpy(&basic, a, sizeof(basic));
-	*bytes = basic.bytes;
-
-	a = nla_find(stats, end, TCA_STATS_BASIC_HW, &n);
-	if (a && n >= sizeof(basic)) {
-		memcpy(&basic, a, sizeof(basic));
-		*bytes += basic.bytes;
-	}
-	return 0;
-}
-
 /*
  * The bytes the counting rule of priority @prio has passed: the counts of
  * its action, which the kernel brings up to date from the switch as it
- * answers, in software and in the switch.
+ * answers.
  */
 static int tc_watch_bytes(int ifindex, unsigned int prio, uint16_t proto,
 			  uint64_t *bytes)
@@ -4253,6 +4232,7 @@ static int tc_watch_bytes(int ifindex, unsigned int prio, uint16_t proto,
 		.tcm_info = tc_info(prio, proto),
 	};
 	const uint8_t *a, *end;
+	struct gnet_stats_basic basic;
 	size_t got = 0, off;
 	uint16_t len = 0;
 	int err;
@@ -4284,7 +4264,13 @@ static int tc_watch_bytes(int ifindex, unsigned int prio, uint16_t proto,
 	if (!a)
 		return -EPROTO;
 
-	return omci_hw_kernel_stats_bytes(a, len, bytes);
+	end = a + len;
+	a = nla_find(a, end, TCA_STATS_BASIC, &len);
+	if (!a || len < sizeof(basic))
+		return -EPROTO;
+	memcpy(&basic, a, sizeof(basic));
+	*bytes = basic.bytes;
+	return 0;
 }
 
 static enum omci_status kernel_mcast_watch(const uint8_t *group, bool on)

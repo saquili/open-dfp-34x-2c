@@ -7,8 +7,6 @@
 #define OMCID_TARGET_HW_KERNEL_H
 
 #include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
 
 /**
  * omci_hw_kernel_router() - route instead of bridging
@@ -31,23 +29,5 @@ void omci_hw_kernel_router(bool on);
  * wait for it.
  */
 void omci_hw_kernel_notify(const char *program);
-
-/**
- * omci_hw_kernel_stats_bytes() - the bytes an action has counted
- * @stats: the attributes of its TCA_ACT_STATS
- * @len: their length
- * @bytes: the bytes
- *
- * The kernel keeps the count of the frames that went through an action in
- * software (TCA_STATS_BASIC) apart from the count the switch reports of the
- * frames it handled itself (TCA_STATS_BASIC_HW). A rule offloaded to the
- * switch has nearly all of its frames in the second, which a software
- * count alone shows as a thousandth of the traffic; the sum is what has
- * passed, and goes on rising with either.
- *
- * Return: 0, or -EPROTO when there is no software count to read.
- */
-int omci_hw_kernel_stats_bytes(const uint8_t *stats, size_t len,
-			       uint64_t *bytes);
 
 #endif

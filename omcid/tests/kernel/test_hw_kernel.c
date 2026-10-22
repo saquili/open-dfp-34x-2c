@@ -18,10 +18,8 @@
 #define _GNU_SOURCE
 
 #include <arpa/inet.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <linux/if_ether.h>
-#include <linux/gen_stats.h>
 #include <linux/if_packet.h>
 #include <net/if.h>
 #include <poll.h>
@@ -801,64 +799,11 @@ static void pon_encryption(void)
 	omci_hw_kernel_ops.pon_drain();
 }
 
-/* An attribute of @type holding a gnet_stats_basic of @bytes, at @out; its length. */
-static size_t stats_basic(uint8_t *out, uint16_t type, uint64_t bytes)
-{
-	struct gnet_stats_basic basic = { .bytes = bytes, .packets = 7 };
-	const uint16_t len = (uint16_t)(4 + sizeof(basic));
-
-	memset(out, 0, 4u + ((sizeof(basic) + 3u) & ~3u));
-	memcpy(out, &len, 2);
-	memcpy(out + 2, &type, 2);
-	memcpy(out + 4, &basic, sizeof(basic));
-	return 4u + ((sizeof(basic) + 3u) & ~3u);
-}
-
-/*
- * The bytes of an action are the software count and the switch's together: a
- * rule offloaded to the switch keeps nearly all of its frames in the second.
- */
-static void action_bytes(void)
-{
-	uint8_t stats[128];
-	uint64_t bytes = 0;
-	size_t n;
-
-	puts("the bytes an action has counted");
-
-	n = stats_basic(stats, TCA_STATS_BASIC, 500);
-	CHECK(omci_hw_kernel_stats_bytes(stats, n, &bytes) == 0 &&
-	      bytes == 500);
-
-	n = stats_basic(stats, TCA_STATS_BASIC, 500);
-	n += stats_basic(stats + n, TCA_STATS_BASIC_HW, 1750000);
-	CHECK(omci_hw_kernel_stats_bytes(stats, n, &bytes) == 0 &&
-	      bytes == 1750500);
-
-	/* The order of the attributes is the kernel's to choose. */
-	n = stats_basic(stats, TCA_STATS_BASIC_HW, 9000);
-	n += stats_basic(stats + n, TCA_STATS_BASIC, 1000);
-	CHECK(omci_hw_kernel_stats_bytes(stats, n, &bytes) == 0 &&
-	      bytes == 10000);
-
-	/* A count of the switch alone is no count: the kernel always gives the first. */
-	n = stats_basic(stats, TCA_STATS_BASIC_HW, 9000);
-	CHECK(omci_hw_kernel_stats_bytes(stats, n, &bytes) == -EPROTO);
-	CHECK(omci_hw_kernel_stats_bytes(stats, 0, &bytes) == -EPROTO);
-
-	/* A count that is cut short is not read. */
-	n = stats_basic(stats, TCA_STATS_BASIC, 500);
-	CHECK(omci_hw_kernel_stats_bytes(stats, n - 8, &bytes) == -EPROTO);
-}
-
 int main(void)
 {
-	action_bytes();
-
 	if (geteuid() != 0) {
-		printf("test_hw_kernel: %d checks, %d failed; the rest SKIPPED: it needs root, network namespaces and tc\n",
-		       checks, failures);
-		return failures ? 1 : 0;
+		puts("test_hw_kernel: SKIPPED: it needs root, network namespaces and tc");
+		return 0;
 	}
 	/* Before the namespace of its own, as the PON family announces outside it. */
 	pon_encryption();
