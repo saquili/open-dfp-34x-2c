@@ -21,11 +21,16 @@
 #define ME_BRIDGE_PORT_PM 52u
 #define ME_ETH_PM_2 89u
 #define ME_IP_HOST_PM 135u
+#define ME_CALL_CONTROL_PM 140u
+#define ME_RTP_PM 144u
+#define ME_SIP_AGENT_PM 151u
+#define ME_SIP_CALL_PM 152u
 #define ME_GEM_IW_TP 266u
 #define ME_GEM_CTP 268u
 #define ME_THRESHOLD_1 273u
 #define ME_THRESHOLD_2 274u
 #define ME_MCAST_GEM_IW_TP 281u
+#define ME_GAL_ETH_PM 276u
 #define ME_ETH_PM_3 296u
 #define ME_TCP_UDP_PM 342u
 #define ME_IP_HOST_PM_2 458u
@@ -366,6 +371,72 @@ static const struct pm_tca g_tcp_udp_pm_tca[] = {
 	{ 6u, 4u, 4u }, { 7u, 5u, 5u },
 };
 
+/*
+ * The voice entities below count what a phone call and a SIP agent do. The
+ * device has none of either, so every attribute reads 0.
+ */
+#define NO_CALLS "none: the device sets up and ends no call"
+#define NO_RTP "none: the device carries no RTP session"
+#define NO_SIP "none: the device has no SIP agent"
+
+/* Call control PM history data (G.988 9.9.12), of the POTS UNI. */
+static const struct pm_attr g_call_control_pm[] = {
+	NONE(3u, NO_CALLS), NONE(4u, NO_CALLS), NONE(5u, NO_CALLS),
+	NONE(6u, NO_CALLS), NONE(7u, NO_CALLS),
+};
+
+static const struct pm_tca g_call_control_pm_tca[] = {
+	{ 3u, 0u, 1u }, { 4u, 1u, 2u }, { 5u, 2u, 3u },
+	{ 6u, 3u, 4u }, { 7u, 4u, 5u },
+};
+
+/* RTP PM history data (G.988 9.9.13), of the POTS UNI. */
+static const struct pm_attr g_rtp_pm[] = {
+	NONE(3u, NO_RTP), NONE(4u, NO_RTP), NONE(5u, NO_RTP),
+	NONE(6u, NO_RTP), NONE(7u, NO_RTP), NONE(8u, NO_RTP),
+};
+
+static const struct pm_tca g_rtp_pm_tca[] = {
+	{ 3u, 0u, 1u }, { 4u, 1u, 2u }, { 5u, 2u, 3u },
+	{ 6u, 3u, 4u }, { 7u, 4u, 6u }, { 8u, 5u, 7u },
+};
+
+/* SIP agent PM history data (G.988 9.9.14), of the SIP agent. */
+static const struct pm_attr g_sip_agent_pm[] = {
+	NONE(3u, NO_SIP),  NONE(4u, NO_SIP),  NONE(5u, NO_SIP),
+	NONE(6u, NO_SIP),  NONE(7u, NO_SIP),  NONE(8u, NO_SIP),
+	NONE(9u, NO_SIP),  NONE(10u, NO_SIP), NONE(11u, NO_SIP),
+	NONE(12u, NO_SIP), NONE(13u, NO_SIP), NONE(14u, NO_SIP),
+	NONE(15u, NO_SIP),
+};
+
+static const struct pm_tca g_sip_agent_pm_tca[] = {
+	{ 4u, 0u, 1u }, { 5u, 1u, 2u }, { 6u, 2u, 3u },
+	{ 7u, 3u, 4u }, { 8u, 4u, 5u }, { 9u, 5u, 6u },
+};
+
+/* SIP call initiation PM history data (G.988 9.9.15), of the SIP agent. */
+static const struct pm_attr g_sip_call_pm[] = {
+	NONE(3u, NO_SIP), NONE(4u, NO_SIP), NONE(5u, NO_SIP),
+	NONE(6u, NO_SIP), NONE(7u, NO_SIP),
+};
+
+static const struct pm_tca g_sip_call_pm_tca[] = {
+	{ 3u, 0u, 1u }, { 4u, 1u, 2u }, { 5u, 2u, 3u },
+	{ 6u, 3u, 4u }, { 7u, 4u, 5u },
+};
+
+/* GAL Ethernet PM history data (G.988 9.2.8), of a GEM interworking termination point. */
+static const struct pm_attr g_gal_eth_pm[] = {
+	NONE(3u, "none: the discards are not counted by GEM port"),
+	NONE(4u, "none: the discards are not counted by GEM port"),
+};
+
+static const struct pm_tca g_gal_eth_pm_tca[] = {
+	{ 3u, 0u, 1u },
+	{ 4u, 1u, 2u },
+};
+
 /* How an instance finds what it counts. */
 enum pm_where {
 	AT_UNI,
@@ -375,7 +446,7 @@ enum pm_where {
 	AT_EXTENDED,
 	AT_GEM_PORT,
 	AT_PON,
-	AT_HOST,
+	AT_NONE,
 };
 
 /*
@@ -465,7 +536,7 @@ static const struct pm_class g_class[] = {
 	},
 	{
 		.class_id = ME_IP_HOST_PM,
-		.where = AT_HOST,
+		.where = AT_NONE,
 		.rx = g_ip_host_pm,
 		.n = ARRAY_SIZE(g_ip_host_pm),
 		.tca = g_ip_host_pm_tca,
@@ -473,7 +544,7 @@ static const struct pm_class g_class[] = {
 	},
 	{
 		.class_id = ME_TCP_UDP_PM,
-		.where = AT_HOST,
+		.where = AT_NONE,
 		.rx = g_tcp_udp_pm,
 		.n = ARRAY_SIZE(g_tcp_udp_pm),
 		.tca = g_tcp_udp_pm_tca,
@@ -481,11 +552,51 @@ static const struct pm_class g_class[] = {
 	},
 	{
 		.class_id = ME_IP_HOST_PM_2,
-		.where = AT_HOST,
+		.where = AT_NONE,
 		.rx = g_ip_host_pm_2,
 		.n = ARRAY_SIZE(g_ip_host_pm_2),
 		.tca = g_ip_host_pm_2_tca,
 		.ntca = ARRAY_SIZE(g_ip_host_pm_2_tca),
+	},
+	{
+		.class_id = ME_CALL_CONTROL_PM,
+		.where = AT_NONE,
+		.rx = g_call_control_pm,
+		.n = ARRAY_SIZE(g_call_control_pm),
+		.tca = g_call_control_pm_tca,
+		.ntca = ARRAY_SIZE(g_call_control_pm_tca),
+	},
+	{
+		.class_id = ME_RTP_PM,
+		.where = AT_NONE,
+		.rx = g_rtp_pm,
+		.n = ARRAY_SIZE(g_rtp_pm),
+		.tca = g_rtp_pm_tca,
+		.ntca = ARRAY_SIZE(g_rtp_pm_tca),
+	},
+	{
+		.class_id = ME_SIP_AGENT_PM,
+		.where = AT_NONE,
+		.rx = g_sip_agent_pm,
+		.n = ARRAY_SIZE(g_sip_agent_pm),
+		.tca = g_sip_agent_pm_tca,
+		.ntca = ARRAY_SIZE(g_sip_agent_pm_tca),
+	},
+	{
+		.class_id = ME_SIP_CALL_PM,
+		.where = AT_NONE,
+		.rx = g_sip_call_pm,
+		.n = ARRAY_SIZE(g_sip_call_pm),
+		.tca = g_sip_call_pm_tca,
+		.ntca = ARRAY_SIZE(g_sip_call_pm_tca),
+	},
+	{
+		.class_id = ME_GAL_ETH_PM,
+		.where = AT_NONE,
+		.rx = g_gal_eth_pm,
+		.n = ARRAY_SIZE(g_gal_eth_pm),
+		.tca = g_gal_eth_pm_tca,
+		.ntca = ARRAY_SIZE(g_gal_eth_pm_tca),
 	},
 	{
 		.class_id = ME_GEM_CTP_PM,
@@ -848,7 +959,7 @@ static void resolve(const struct omci_pm *pm, const struct pm_row *r,
 			     &t->port_id))
 			t->kind = T_GEM;
 		break;
-	case AT_HOST:
+	case AT_NONE:
 		break;
 	default:
 		t->kind = T_PON;

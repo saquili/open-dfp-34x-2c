@@ -7,8 +7,8 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * a70cb503a6883601d46cb61e7de6e62980821636b1caf64e6fb194eb77214c7d
- * 67 classes, 607 attributes.
+ * 415e4d43276d8e68b997f359287d2ee771eaa9435e4eae6f6b0ae70921ec88b5
+ * 72 classes, 648 attributes.
  */
 
 #include "me/table.h"
@@ -561,6 +561,25 @@ static const struct omci_me_attr attrs_class_139[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
 };
 
+/* Class 140: Call control performance monitoring history data */
+static const struct omci_me_attr attrs_class_140[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Call setup failures", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Call setup timer", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Call terminate failures", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Analog port releases", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Analog port off-hook timer", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
 /* Class 141: VoIP line status */
 static const struct omci_me_attr attrs_class_141[] = {
 	{ "Voip codec used", 2, OMCI_ME_ACC_READ,
@@ -659,6 +678,25 @@ static const struct omci_me_attr attrs_class_143[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
 	{ "IP host config pointer", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  0 }, /* 8 */
+};
+
+/* Class 144: RTP performance monitoring history data */
+static const struct omci_me_attr attrs_class_144[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "RTP errors", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Packet loss", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Maximum jitter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Maximum time between RTCP packets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Buffer underflows", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Buffer overflows", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
 };
 
 /* Class 145: Network dial plan table */
@@ -794,6 +832,47 @@ static const struct omci_me_attr attrs_class_150[] = {
 	{ "Redundant SIP agent pointer", 2,
 	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
 	  0 }, /* 15 */
+};
+
+/* Class 151: SIP agent performance monitoring history data */
+static const struct omci_me_attr attrs_class_151[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Transactions", 4, OMCI_ME_ACC_READ, 0 }, /* 3 */
+	{ "Rx invite reqs", 4, OMCI_ME_ACC_READ, 0 }, /* 4 */
+	{ "Rx invite retrans", 4, OMCI_ME_ACC_READ, 0 }, /* 5 */
+	{ "Rx noninvite reqs", 4, OMCI_ME_ACC_READ, 0 }, /* 6 */
+	{ "Rx noninvite retrans", 4, OMCI_ME_ACC_READ, 0 }, /* 7 */
+	{ "Rx response", 4, OMCI_ME_ACC_READ, 0 }, /* 8 */
+	{ "Rx response retransmissions", 4, OMCI_ME_ACC_READ, 0 }, /* 9 */
+	{ "Tx invite reqs", 4, OMCI_ME_ACC_READ, 0 }, /* 10 */
+	{ "Tx invite retrans", 4, OMCI_ME_ACC_READ, 0 }, /* 11 */
+	{ "Tx noninvite reqs", 4, OMCI_ME_ACC_READ, 0 }, /* 12 */
+	{ "Tx noninvite retrans", 4, OMCI_ME_ACC_READ, 0 }, /* 13 */
+	{ "Tx response", 4, OMCI_ME_ACC_READ, 0 }, /* 14 */
+	{ "Tx response retransmissions", 4, OMCI_ME_ACC_READ, 0 }, /* 15 */
+};
+
+/* Class 152: SIP call initiation performance monitoring history data */
+static const struct omci_me_attr attrs_class_152[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Failed to connect counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Failed to validate counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Timeout counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Failure received counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Failed to authenticate counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
 };
 
 /* Class 153: SIP user data */
@@ -1107,6 +1186,18 @@ static const struct omci_me_attr attrs_class_274[] = {
 	{ "Threshold value 14", 4,
 	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
 	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
+/* Class 276: GAL Ethernet performance monitoring history data */
+static const struct omci_me_attr attrs_class_276[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Discarded downstream frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Discarded upstream frames", 4, OMCI_ME_ACC_READ, 0 }, /* 4 */
 };
 
 /* Class 277: Priority queue */
@@ -1868,6 +1959,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_139,
 	},
 	{
+		.class_id = 140,
+		.name = "Call control performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000001fu,
+		.attr_count = 7,
+		.attrs = attrs_class_140,
+	},
+	{
 		.class_id = 141,
 		.name = "VoIP line status",
 		.creator = OMCI_ME_CREATED_BY_ONU,
@@ -1896,6 +1997,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000000u,
 		.attr_count = 8,
 		.attrs = attrs_class_143,
+	},
+	{
+		.class_id = 144,
+		.name = "RTP performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000003fu,
+		.attr_count = 8,
+		.attrs = attrs_class_144,
 	},
 	{
 		.class_id = 145,
@@ -1946,6 +2057,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x0000000fu,
 		.attr_count = 15,
 		.attrs = attrs_class_150,
+	},
+	{
+		.class_id = 151,
+		.name = "SIP agent performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000003fu,
+		.attr_count = 15,
+		.attrs = attrs_class_151,
+	},
+	{
+		.class_id = 152,
+		.name = "SIP call initiation performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000001fu,
+		.attr_count = 7,
+		.attrs = attrs_class_152,
 	},
 	{
 		.class_id = 153,
@@ -2076,6 +2207,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000000u,
 		.attr_count = 7,
 		.attrs = attrs_class_274,
+	},
+	{
+		.class_id = 276,
+		.name = "GAL Ethernet performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x00000003u,
+		.attr_count = 4,
+		.attrs = attrs_class_276,
 	},
 	{
 		.class_id = 277,

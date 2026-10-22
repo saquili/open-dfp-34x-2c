@@ -25,6 +25,11 @@
 #define ME_BRIDGE_PORT_PM 52u
 #define ME_ETH_PM_2 89u
 #define ME_IP_HOST_PM 135u
+#define ME_CALL_CONTROL_PM 140u
+#define ME_RTP_PM 144u
+#define ME_SIP_AGENT_PM 151u
+#define ME_SIP_CALL_PM 152u
+#define ME_GAL_ETH_PM 276u
 #define ME_ANI_G 263u
 #define ME_GEM_IW_TP 266u
 #define ME_GEM_CTP 268u
@@ -212,7 +217,7 @@ static void test_the_surface(void)
 	CHECK(!omci_pm_owns(ME_ANI_G));
 	while (omci_pm_class_at(n) != 0u)
 		n++;
-	CHECK_EQ(n, 12u);
+	CHECK_EQ(n, 17u);
 
 	CHECK(!omci_pm_tick(NULL, 0));
 	omci_pm_synchronize(NULL, 0, 0);
@@ -1105,18 +1110,21 @@ static void test_an_alert_is_notified_and_cleared_at_the_interval_end(void)
 }
 
 /*
- * The PM entities of a host (G.988 9.4.2, 9.4.4 and 9.4.6) are kept, read and
- * closed like the others, but a Linux stack counts none of what they name.
+ * The PM entities of a host (G.988 9.4.2, 9.4.4 and 9.4.6), of the voice
+ * (9.9.12 to 9.9.15) and of the GAL Ethernet profile (9.2.8) are kept, read
+ * and closed like the others, but the device counts none of what they name.
  */
-static void test_the_host_pm_entities_count_nothing_and_raise_no_alert(void)
+static void
+test_the_pm_entities_of_nothing_count_nothing_and_raise_no_alert(void)
 {
 	static const struct {
 		uint16_t cls;
 		uint8_t last;
 	} host[] = {
-		{ ME_IP_HOST_PM, 8u },
-		{ ME_TCP_UDP_PM, 7u },
-		{ ME_IP_HOST_PM_2, 7u },
+		{ ME_IP_HOST_PM, 8u },	 { ME_TCP_UDP_PM, 7u },
+		{ ME_IP_HOST_PM_2, 7u }, { ME_CALL_CONTROL_PM, 7u },
+		{ ME_RTP_PM, 8u },	 { ME_SIP_AGENT_PM, 15u },
+		{ ME_SIP_CALL_PM, 7u },	 { ME_GAL_ETH_PM, 4u },
 	};
 	struct omci_mib *mib;
 	struct omci_pm *pm;
@@ -1137,7 +1145,7 @@ static void test_the_host_pm_entities_count_nothing_and_raise_no_alert(void)
 
 int main(void)
 {
-	RUN(test_the_host_pm_entities_count_nothing_and_raise_no_alert);
+	RUN(test_the_pm_entities_of_nothing_count_nothing_and_raise_no_alert);
 	RUN(test_the_surface);
 	RUN(test_every_counter_is_accounted_for);
 	RUN(test_the_ethernet_pm_counts_the_uni);

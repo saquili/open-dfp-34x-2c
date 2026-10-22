@@ -317,7 +317,7 @@ static void test_every_class_that_lists_create_round_trips(void)
 		classes++;
 	}
 	printf("  %u classes round-tripped\n", classes);
-	CHECK_EQ(classes, 44u);
+	CHECK_EQ(classes, 49u);
 
 	omci_t_down(&fx);
 }
