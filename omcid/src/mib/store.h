@@ -202,6 +202,25 @@ omci_mib_attr_set(struct omci_mib *mib, uint16_t class_id, uint16_t instance,
 		  uint8_t attr_no, const void *value, size_t len);
 
 /**
+ * omci_mib_attr_reading() - Store a reading the ONU takes when it is asked.
+ * @mib: the MIB
+ * @class_id: the class
+ * @instance: the instance
+ * @attr_no: the attribute
+ * @value: the reading
+ * @len: its size, which must be the attribute's
+ *
+ * A reading is not a change of the MIB: the generation stays, and nothing
+ * is announced. The attribute then holds what a Get or a MIB upload gives.
+ *
+ * Return: as omci_mib_attr_set().
+ */
+__must_check enum omci_status
+omci_mib_attr_reading(struct omci_mib *mib, uint16_t class_id,
+		      uint16_t instance, uint8_t attr_no, const void *value,
+		      size_t len);
+
+/**
  * omci_mib_table_changed() - Say that the ONU changed the rows of a table.
  * @mib: the MIB
  * @class_id: the class

@@ -381,6 +381,8 @@ enum {
 	ME_PRIORITY_QUEUE = 277,
 	ME_TRAFFIC_SCHED = 278,
 	ME_TRAFFIC_DESCRIPTOR = 280,
+	ME_ONU_TIME = 457,
+	ONU_TIME_ATTR_NOW = 1,
 
 	ME171_RULE_ATTR = 6,
 
@@ -1500,6 +1502,29 @@ static void pm_refresh_for(struct omci_engine *eng,
 			   const struct omci_frame *req, bool current);
 
 /*
+ * The time of the ONU (G.988 9.1.17): the time of day the OLT gave with
+ * Synchronize time, carried on by the monotonic clock, in the seven bytes
+ * of that message; zeros while the OLT has not given it.
+ */
+static void keep_onu_time(struct omci_engine *eng, uint16_t instance)
+{
+	struct omci_civil t = { 0 };
+	uint8_t wire[7] = { 0 };
+
+	if (omci_clock_is_set(&eng->clock))
+		omci_clock_civil(omci_clock_now(&eng->clock, eng->now_sec), &t);
+
+	omci_be16_store(&wire[0], t.year);
+	wire[2] = t.month;
+	wire[3] = t.day;
+	wire[4] = t.hour;
+	wire[5] = t.minute;
+	wire[6] = t.second;
+	(void)omci_mib_attr_reading(eng->mib, ME_ONU_TIME, instance,
+				    ONU_TIME_ATTR_NOW, wire, sizeof(wire));
+}
+
+/*
  * Get and Get current data (G.988 A.3.7, A.3.8, A.3.40, A.3.41). A table
  * attribute answers with its size and opens a Get next read. Attributes
  * that do not exist, or do not fit, are named in the masks at the end.
@@ -1522,6 +1547,9 @@ static void handle_get_inner(struct omci_engine *eng,
 	if (req->class_id == ME_GEM_PORT_NET_CTP &&
 	    omci_attr_in_mask(want, OMCI_GEM_ATTR_ENCRYPTION))
 		keep_encryption(eng);
+	if (req->class_id == ME_ONU_TIME &&
+	    omci_attr_in_mask(want, ONU_TIME_ATTR_NOW))
+		keep_onu_time(eng, req->instance);
 
 	uint8_t body[OMCI_CONTENTS_LEN];
 	uint16_t got = 0;

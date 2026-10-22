@@ -79,4 +79,29 @@ __must_check int64_t omci_clock_days_from_civil(int64_t year,
 						unsigned int month,
 						unsigned int day);
 
+/**
+ * struct omci_civil - A date and a time of day, UTC.
+ * @year: the year
+ * @month: 1 to 12
+ * @day: 1 to 31
+ * @hour: 0 to 23
+ * @minute: 0 to 59
+ * @second: 0 to 59
+ */
+struct omci_civil {
+	uint16_t year;
+	uint8_t month;
+	uint8_t day;
+	uint8_t hour;
+	uint8_t minute;
+	uint8_t second;
+};
+
+/**
+ * omci_clock_civil() - Take seconds since 1970-01-01 UTC apart.
+ * @secs: the seconds, up to the year 2200 that the clock keeps
+ * @out: the date and the time of day
+ */
+void omci_clock_civil(uint64_t secs, struct omci_civil *out);
+
 #endif

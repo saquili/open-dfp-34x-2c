@@ -36,6 +36,13 @@ static void synthetic_caps(struct omci_hw_caps *out)
 	out->ani_instance = 0x8001;
 	out->ip_host_count = 1;
 	out->ipv6_host_count = 1;
+	out->onu_info.manufacturing_data = true;
+	out->onu_info.time_config = true;
+	out->onu_info.rates = true;
+	out->onu_info.ds_rate = 248;
+	out->onu_info.ds_rab = 128;
+	out->onu_info.us_rate = 124;
+	out->onu_info.us_rab = 128;
 	out->sw_committed_image = 0;
 	out->sw_valid_images = 1;
 	out->num_gem_ports = 32;

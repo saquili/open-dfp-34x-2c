@@ -367,6 +367,27 @@ enum omci_status omci_mib_attr_set(struct omci_mib *mib, uint16_t class_id,
 	return attr_set(mib, class_id, instance, attr_no, value, len, true);
 }
 
+enum omci_status omci_mib_attr_reading(struct omci_mib *mib, uint16_t class_id,
+				       uint16_t instance, uint8_t attr_no,
+				       const void *value, size_t len)
+{
+	if (mib == NULL || value == NULL)
+		return OMCI_ERR_INVAL;
+
+	uint8_t *bytes;
+	size_t size;
+	const enum omci_status rc =
+		locate(mib, class_id, instance, attr_no, &bytes, &size);
+
+	if (rc != OMCI_OK)
+		return rc;
+	if (len != size)
+		return OMCI_ERR_INVAL;
+
+	omci_wire_copy(bytes, value, size);
+	return OMCI_OK;
+}
+
 enum omci_status omci_mib_attr_set_by_olt(struct omci_mib *mib,
 					  uint16_t class_id, uint16_t instance,
 					  uint8_t attr_no, const void *value,

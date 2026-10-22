@@ -522,7 +522,7 @@ static void test_one_upload_serves_both_channels(void)
 		upload_next(fx.eng, 0x0704u, false, (uint16_t)(high - 1));
 	CHECK(last != NULL);
 	if (last != NULL)
-		CHECK_EQ(be16(&last[8]), 347u);
+		CHECK_EQ(be16(&last[8]), 460u);
 
 	const uint8_t *edge =
 		upload_next(fx.eng, 0x0705u, true, (uint16_t)high);

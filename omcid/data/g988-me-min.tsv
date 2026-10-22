@@ -86,7 +86,10 @@
 #class	341	GEM port network CTP performance monitoring history data	OLT	4,6,8,9,28	1:Encryption key errors	-	set by create; the same value as the GEM port network CTP it monitors (implicit link)	g988:9.2.13
 #class	342	TCP/UDP performance monitoring history data	OLT	4,6,8,9,28	1:Socket failed;2:Listen failed;3:Bind failed;4:Accept failed;5:Select failed	-	set by create; the same value as the TCP/UDP config data instance it monitors (implicit link)	g988:9.4.4
 #class	347	IPv6 host config data	ONU	8,9,26	-	9,10,11,14	one instance for each independent IPv6 stack of the ONU, numbered from 0 upwards as a recommendation; IPv4 and IPv6 host config data instances have separate ids	g988:9.4.5
+#class	456	ONU manufacturing data	ONU	9	-	-	single instance, number 0	g988:9.1.16
+#class	457	ONU time configuration	ONU	8,9	-	-	single instance, number 0	g988:9.1.17
 #class	458	IP host performance monitoring history data part 2	OLT	4,6,8,9,28	0:DHCP response error;1:DHCP response incomplete	-	set by create; the same value as the IP host config data or IPv6 host config data instance it monitors (implicit link)	g988:9.4.6
+#class	460	ONU4-G	ONU	9	-	-	single instance, number 0	g988:9.1.19
 2	ONU data	1	MIB data sync	1	R,W	mandatory	no	g988:9.1.3
 5	Cardholder	1	Actual plug-in unit type	1	R	mandatory	no	g988:9.1.5
 5	Cardholder	2	Expected plug-in unit type	1	R,W	mandatory	no	g988:9.1.5
@@ -728,6 +731,16 @@
 347	IPv6 host config data	13	On-link prefix	17	R,W	optional	no	g988:9.4.5
 347	IPv6 host config data	14	Current on-link prefix table	26	R	optional	yes	g988:9.4.5
 347	IPv6 host config data	15	Relay agent options	2	R,W	optional	no	g988:9.4.5
+456	ONU manufacturing data	1	Manufacturer name	25	R	optional	no	g988:9.1.16
+456	ONU manufacturing data	2	Serial number part 1	25	R	optional	no	g988:9.1.16
+456	ONU manufacturing data	3	Serial number part 2	25	R	optional	no	g988:9.1.16
+456	ONU manufacturing data	4	Model name	25	R	optional	no	g988:9.1.16
+456	ONU manufacturing data	5	Manufacturing date	25	R	optional	no	g988:9.1.16
+456	ONU manufacturing data	6	Hardware revision	25	R	optional	no	g988:9.1.16
+456	ONU manufacturing data	7	Firmware revision	25	R	optional	no	g988:9.1.16
+456	ONU manufacturing data	8	MAC address	6	R	optional	no	g988:9.1.16
+457	ONU time configuration	1	Current local ONU time	7	R	mandatory	no	g988:9.1.17
+457	ONU time configuration	2	Time qualification block	2	R,W	mandatory	no	g988:9.1.17
 458	IP host performance monitoring history data part 2	1	Interval end time	1	R	mandatory	no	g988:9.4.6
 458	IP host performance monitoring history data part 2	2	Threshold data 1/2 ID	2	R,W,C	mandatory	no	g988:9.4.6
 458	IP host performance monitoring history data part 2	3	DHCP Attempts count	4	R	mandatory	no	g988:9.4.6
@@ -735,3 +748,7 @@
 458	IP host performance monitoring history data part 2	5	DHCP Nacks count	4	R	mandatory	no	g988:9.4.6
 458	IP host performance monitoring history data part 2	6	DHCP response error count	2	R	mandatory	no	g988:9.4.6
 458	IP host performance monitoring history data part 2	7	DHCP response incomplete count	2	R	mandatory	no	g988:9.4.6
+460	ONU4-G	1	Sustained downstream MAC client rate	2	R	mandatory	no	g988:9.1.19
+460	ONU4-G	2	Downstream RAB size	2	R	mandatory	no	g988:9.1.19
+460	ONU4-G	3	Sustained upstream MAC client rate	2	R	mandatory	no	g988:9.1.19
+460	ONU4-G	4	Upstream RAB size	2	R	mandatory	no	g988:9.1.19

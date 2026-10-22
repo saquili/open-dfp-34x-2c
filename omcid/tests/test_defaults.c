@@ -391,6 +391,32 @@ static void test_the_values_the_sheet_states(void)
 	omci_mib_fini(mib);
 }
 
+/* What the device does not say it has, it does not tell the OLT. */
+static void test_the_descriptions_of_the_onu_follow_what_the_device_has(void)
+{
+	struct omci_hw_caps caps;
+	struct omci_mib *mib = NULL;
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 456u), 1u);
+	CHECK_EQ(instances_of(mib, 457u), 1u);
+	CHECK_EQ(instances_of(mib, 460u), 1u);
+
+	caps.onu_info.manufacturing_data = false;
+	caps.onu_info.time_config = false;
+	caps.onu_info.rates = false;
+	omci_mib_fini(mib);
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+	CHECK_EQ(instances_of(mib, 456u), 0u);
+	CHECK_EQ(instances_of(mib, 457u), 0u);
+	CHECK_EQ(instances_of(mib, 460u), 0u);
+
+	omci_mib_fini(mib);
+}
+
 static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 {
 	struct omci_hw_caps caps;
@@ -475,6 +501,24 @@ static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 			CHECK_EQ(b[i], 0u);
 	}
 	CHECK(!omci_mib_exists(mib, 347u, 4u));
+
+	/* The ONU describes itself: manufacturing data, ONU4-G and its time. */
+	CHECK(text_is(mib, 456u, 0u, 1u, "SEAM", 0));
+	CHECK(text_is(mib, 456u, 0u, 2u, "9091929394959697", 0));
+	CHECK(text_is(mib, 456u, 0u, 3u, "", 0));
+	CHECK(text_is(mib, 456u, 0u, 4u, "seam-equipment", 0));
+	CHECK(text_is(mib, 456u, 0u, 5u, "", 0));
+	CHECK(text_is(mib, 456u, 0u, 6u, "seam-version", 0));
+	CHECK(text_is(mib, 456u, 0u, 7u, "seam-sw-1", 0));
+	CHECK_EQ(read_attr(mib, 456u, 0u, 8u, b, sizeof(b)), 6u);
+	CHECK_MEM(b, caps.identity.mac, 6);
+	CHECK_EQ(read_u(mib, 460u, 0u, 1u),
+		 (unsigned int)caps.onu_info.ds_rate);
+	CHECK_EQ(read_u(mib, 460u, 0u, 2u), (unsigned int)caps.onu_info.ds_rab);
+	CHECK_EQ(read_u(mib, 460u, 0u, 3u),
+		 (unsigned int)caps.onu_info.us_rate);
+	CHECK_EQ(read_u(mib, 460u, 0u, 4u), (unsigned int)caps.onu_info.us_rab);
+	CHECK(omci_mib_exists(mib, 457u, 0u));
 	CHECK_EQ(read_u(mib, 6u, caps.ports[0].cardholder, 2u), 4u);
 
 	caps.port_count = (uint8_t)(ARRAY_SIZE(caps.ports) + 1u);
@@ -644,6 +688,7 @@ int main(int argc, char **argv)
 	RUN(test_the_phone_sockets_told_are_those_chosen);
 	RUN(test_the_identifiers_follow_the_rules_of_the_standard);
 	RUN(test_the_values_the_sheet_states);
+	RUN(test_the_descriptions_of_the_onu_follow_what_the_device_has);
 	RUN(test_the_identity_the_seam_gives_is_the_identity_the_mib_holds);
 	RUN(test_an_image_the_backend_calls_valid_is_valid_but_not_running);
 	RUN(test_the_population_is_repeatable);

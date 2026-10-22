@@ -68,6 +68,12 @@ enum omci_hw_uni_report {
  * @ani_instance: the instance of the ANI-G
  * @ip_host_count: the IP hosts
  * @ipv6_host_count: the IPv6 hosts, which are numbered after the IP hosts
+ * @onu_info: what the device tells the OLT of itself beyond the ONU-G and
+ *	ONU2-G: @manufacturing_data makes the ONU manufacturing data (from the
+ *	identity), @time_config the ONU time configuration, whose time is the
+ *	one the OLT gave with Synchronize time, and @rates the ONU4-G, with the
+ *	sustained MAC client rates in units of 10 Mbit/s and the rate
+ *	adaptation buffers in blocks of 1024 bytes, downstream and upstream
  * @sw_committed_image: the software image that is committed (0 or 1)
  * @sw_valid_images: the software images that hold valid software, bit n
  *	for image n; the committed image is valid whatever it says
@@ -91,6 +97,15 @@ struct omci_hw_caps {
 	uint16_t ani_instance;
 	uint8_t ip_host_count;
 	uint8_t ipv6_host_count;
+	struct {
+		bool manufacturing_data;
+		bool time_config;
+		bool rates;
+		uint16_t ds_rate;
+		uint16_t ds_rab;
+		uint16_t us_rate;
+		uint16_t us_rab;
+	} onu_info;
 	uint8_t sw_committed_image;
 	uint8_t sw_valid_images;
 

@@ -9,6 +9,7 @@
 
 #include "harness.h"
 #include "hw/hw.h"
+#include "me/defaults.h"
 #include "mib/store.h"
 #include "omci/clock.h"
 #include "omcid/array_size.h"
@@ -371,6 +372,96 @@ static void tell(uint64_t utc)
  * A date reaches the backend, for the stick's time daemon, as seconds since
  * 1970; a time of day alone and a refused stamp do not.
  */
+static void test_civil_time_takes_a_count_of_seconds_apart(void)
+{
+	static const struct {
+		uint64_t secs;
+		struct omci_civil want;
+	} k[] = {
+		{ 0u, { 1970, 1, 1, 0, 0, 0 } },
+		{ 86399u, { 1970, 1, 1, 23, 59, 59 } },
+		{ 789u * 86400u + 43200u, { 1972, 2, 29, 12, 0, 0 } },
+		{ 11017u * 86400u + 1u, { 2000, 3, 1, 0, 0, 1 } },
+		{ 20680u * 86400u + 45045u, { 2026, 8, 15, 12, 30, 45 } },
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(k); i++) {
+		struct omci_civil t;
+
+		omci_clock_civil(k[i].secs, &t);
+		CHECK_EQ(t.year, k[i].want.year);
+		CHECK_EQ(t.month, k[i].want.month);
+		CHECK_EQ(t.day, k[i].want.day);
+		CHECK_EQ(t.hour, k[i].want.hour);
+		CHECK_EQ(t.minute, k[i].want.minute);
+		CHECK_EQ(t.second, k[i].want.second);
+	}
+
+	/* Every day to the year 2200 comes back as the day it was counted. */
+	for (int64_t day = 0; day < 83000; day++) {
+		struct omci_civil t;
+
+		omci_clock_civil((uint64_t)day * 86400u + 3661u, &t);
+		if (omci_clock_days_from_civil(t.year, t.month, t.day) != day ||
+		    t.hour != 1u || t.minute != 1u || t.second != 1u) {
+			CHECK_EQ(day, -1);
+			break;
+		}
+	}
+}
+
+/* Get of the ONU time configuration: the time, then the qualification. */
+static void read_onu_time(struct omci_engine *eng, uint8_t out[7])
+{
+	static uint16_t tid = 0x0150u;
+	uint8_t wire[OMCI_FRAME_LEN];
+
+	omci_t_build(wire, tid++, MT_GET, true, false, 457u, 0u);
+	wire[8] = 0x80u;
+	omci_t_tx_reset();
+	CHECK_EQ(omci_t_rx(eng, wire), OMCI_OK);
+	CHECK_EQ(omci_t_tx.n, 1u);
+
+	const uint8_t *rsp = reply_of();
+
+	CHECK_EQ(rsp[8], 0u);
+	memcpy(out, &rsp[11], 7);
+}
+
+static void test_the_onu_time_is_the_time_the_olt_gave(void)
+{
+	struct omci_t_fixture fx;
+	struct omci_hw_caps caps;
+	uint8_t t[7];
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	CHECK(omci_t_up(&fx));
+	CHECK_EQ(omci_me_defaults_apply(fx.mib, &caps), OMCI_OK);
+	omci_engine_tick(fx.eng, 1000u);
+
+	/* Before the OLT gives the time, the ONU has none. */
+	read_onu_time(fx.eng, t);
+	for (unsigned int i = 0; i < sizeof(t); i++)
+		CHECK_EQ(t[i], 0u);
+
+	CHECK_EQ(send_sync(fx.eng, 0x0151u, 2026u, 10u, 22u, 18u, 30u, 15u),
+		 OMCI_OK);
+	omci_engine_tick(fx.eng, 1042u);
+
+	const uint32_t before = omci_mib_generation(fx.mib);
+
+	read_onu_time(fx.eng, t);
+	CHECK_EQ(t[0] << 8 | t[1], 2026u);
+	CHECK_EQ(t[2], 10u);
+	CHECK_EQ(t[3], 22u);
+	CHECK_EQ(t[4], 18u);
+	CHECK_EQ(t[5], 30u);
+	CHECK_EQ(t[6], 57u);
+	CHECK_EQ(omci_mib_generation(fx.mib), before);
+
+	omci_t_down(&fx);
+}
+
 static void test_a_date_is_handed_to_the_backend(void)
 {
 	struct omci_hw_ops ops = omci_hw_host_ops;
@@ -477,6 +568,8 @@ int main(void)
 	RUN(test_a_sync_numbers_the_intervals_from_zero);
 	RUN(test_a_mib_reset_keeps_the_intervals);
 	RUN(test_every_sync_starts_the_numbering_again);
+	RUN(test_civil_time_takes_a_count_of_seconds_apart);
+	RUN(test_the_onu_time_is_the_time_the_olt_gave);
 	RUN(test_a_date_is_handed_to_the_backend);
 	RUN(test_olt_g_time_of_day_is_handed_to_the_backend);
 

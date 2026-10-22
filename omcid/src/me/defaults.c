@@ -39,6 +39,9 @@ enum {
 	ME_OMCI = 287,
 	ME_VEIP = 329,
 	ME_IPV6_HOST = 347,
+	ME_ONU_MANUFACTURING = 456,
+	ME_ONU_TIME = 457,
+	ME_ONU4_G = 460,
 };
 
 /* The slot of the PON side: T-CONTs, schedulers and upstream queues are 0x80nn. */
@@ -515,6 +518,60 @@ static void make_ip_host(struct build *b, const struct omci_hw_caps *caps,
 }
 
 /*
+ * The ONU manufacturing data (G.988 9.1.16): what the identity holds, as
+ * strings, and the MAC address. The device keeps no manufacturer name, date
+ * or serial number string of its own: the vendor ID names the maker, the
+ * serial number is the one of the ONU-G in hexadecimal, the equipment ID the
+ * model, the version the hardware and the committed image's version the
+ * firmware; the date and the second part of the serial number are empty.
+ */
+static void make_onu_manufacturing(struct build *b,
+				   const struct omci_hw_caps *caps)
+{
+	static const char hex[] = "0123456789abcdef";
+	char serial[17];
+
+	for (unsigned int i = 0; i < 8u; i++) {
+		serial[2u * i] = hex[caps->identity.serial[i] >> 4];
+		serial[2u * i + 1u] = hex[caps->identity.serial[i] & 0x0fu];
+	}
+	serial[16] = '\0';
+
+	begin(b, ME_ONU_MANUFACTURING, 0);
+	put_text(b, 1, caps->identity.vendor_id, 0);
+	put_text(b, 2, serial, 0);
+	put_text(b, 3, "", 0);
+	put_text(b, 4, caps->identity.equipment_id, 0);
+	put_text(b, 5, "", 0);
+	put_text(b, 6, caps->identity.version, 0);
+	put_text(b, 7, caps->identity.sw_version[caps->sw_committed_image & 1u],
+		 0);
+	put(b, 8, caps->identity.mac, sizeof(caps->identity.mac));
+	finish(b);
+}
+
+/* The ONU4-G (G.988 9.1.19): the rates and buffers the device says it has. */
+static void make_onu4_g(struct build *b, const struct omci_hw_caps *caps)
+{
+	begin(b, ME_ONU4_G, 0);
+	put_u16(b, 1, caps->onu_info.ds_rate);
+	put_u16(b, 2, caps->onu_info.ds_rab);
+	put_u16(b, 3, caps->onu_info.us_rate);
+	put_u16(b, 4, caps->onu_info.us_rab);
+	finish(b);
+}
+
+/*
+ * The ONU time configuration (G.988 9.1.17), whose time the engine fills in
+ * from the clock of Synchronize time when the OLT reads it.
+ */
+static void make_onu_time(struct build *b)
+{
+	begin(b, ME_ONU_TIME, 0);
+	finish(b);
+}
+
+/*
  * An IPv6 host, locked as G.988 9.4.5 has it until the OLT unlocks it, with
  * its MAC address and a DHCPv6 unique identifier of the link-layer kind
  * (RFC 8415 11.2): type 3, hardware type 1 for Ethernet, and the address.
@@ -608,6 +665,12 @@ enum omci_status omci_me_defaults_apply(struct omci_mib *mib,
 		make_ip_host(&b, caps, n);
 	for (unsigned int n = 0; n < caps->ipv6_host_count; n++)
 		make_ipv6_host(&b, caps, n);
+	if (caps->onu_info.manufacturing_data)
+		make_onu_manufacturing(&b, caps);
+	if (caps->onu_info.rates)
+		make_onu4_g(&b, caps);
+	if (caps->onu_info.time_config)
+		make_onu_time(&b);
 	if (caps->uni_report != OMCI_HW_UNI_PPTP)
 		make_veip(&b, caps);
 	make_lct_uni(&b);

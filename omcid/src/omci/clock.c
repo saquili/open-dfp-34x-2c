@@ -34,6 +34,28 @@ int64_t omci_clock_days_from_civil(int64_t year, unsigned int month,
 	return era * 146097 + (int64_t)doe - 719468;
 }
 
+/* The inverse of omci_clock_days_from_civil(), in the same eras of 400 years. */
+void omci_clock_civil(uint64_t secs, struct omci_civil *out)
+{
+	const int64_t z = (int64_t)(secs / 86400u) + 719468;
+	const int64_t era = z / 146097;
+	const uint64_t doe = (uint64_t)(z - era * 146097);
+	const uint64_t yoe =
+		(doe - doe / 1460u + doe / 36524u - doe / 146096u) / 365u;
+	const uint64_t doy = doe - (365u * yoe + yoe / 4u - yoe / 100u);
+	const uint64_t mp = (5u * doy + 2u) / 153u;
+	const uint64_t month = mp < 10u ? mp + 3u : mp - 9u;
+	const uint32_t rest = (uint32_t)(secs % 86400u);
+
+	out->year =
+		(uint16_t)((int64_t)yoe + era * 400 + (month <= 2u ? 1 : 0));
+	out->month = (uint8_t)month;
+	out->day = (uint8_t)(doy - (153u * mp + 2u) / 5u + 1u);
+	out->hour = (uint8_t)(rest / 3600u);
+	out->minute = (uint8_t)(rest % 3600u / 60u);
+	out->second = (uint8_t)(rest % 60u);
+}
+
 /* True for a date and time that exist, within the range the clock keeps. */
 static bool stamp_is_real(uint16_t year, uint8_t month, uint8_t day,
 			  uint8_t hour, uint8_t minute, uint8_t second)

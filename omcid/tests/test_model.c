@@ -17,7 +17,7 @@
 static void test_the_classes_are_the_data_classes(void)
 {
 	CHECK_EQ(omci_me_class_count, (size_t)tsv_class_count);
-	CHECK_EQ(tsv_class_count, 72u);
+	CHECK_EQ(tsv_class_count, 75u);
 
 	unsigned int attrs = 0;
 
@@ -46,7 +46,7 @@ static void test_the_classes_are_the_data_classes(void)
 			CHECK_EQ(omci_me_action_allowed(t->id, mt),
 				 (t->actions & (1u << mt)) != 0u);
 	}
-	CHECK_EQ(attrs, 648u);
+	CHECK_EQ(attrs, 662u);
 	printf("  %u classes, %u attributes\n", tsv_class_count, attrs);
 }
 

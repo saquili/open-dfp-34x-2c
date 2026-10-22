@@ -1214,6 +1214,37 @@ static void test_bytes_of_another_kind_leave_the_mib_empty(struct omci_mib *mib)
 	CHECK_EQ(omci_mib_count(mib), 0u);
 }
 
+static void
+test_a_reading_is_stored_without_a_change_of_the_mib(struct omci_mib *mib)
+{
+	CHECK_EQ(omci_mib_create(mib, ANIG, 1), OMCI_OK);
+
+	const uint8_t key[2] = { 0x12, 0x34 };
+	const uint32_t before = omci_mib_generation(mib);
+
+	CHECK_EQ(omci_mib_attr_reading(mib, ANIG, 1, 2, key, sizeof(key)),
+		 OMCI_OK);
+	CHECK_EQ(omci_mib_generation(mib), before);
+
+	uint8_t got[2] = { 0 };
+
+	CHECK_EQ(omci_mib_attr_get(mib, ANIG, 1, 2, got, sizeof(got), NULL),
+		 OMCI_OK);
+	CHECK_MEM(got, key, sizeof(key));
+
+	CHECK_EQ(omci_mib_attr_reading(NULL, ANIG, 1, 2, key, sizeof(key)),
+		 OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_attr_reading(mib, ANIG, 1, 2, NULL, sizeof(key)),
+		 OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_attr_reading(mib, ANIG, 1, 2, key, 1),
+		 OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_attr_reading(mib, ANIG, 9, 2, key, sizeof(key)),
+		 OMCI_ERR_INST_UNKNOWN);
+	CHECK_EQ(omci_mib_attr_reading(mib, ANIG, 1, 99, key, sizeof(key)),
+		 OMCI_ERR_ATTR_UNKNOWN);
+	CHECK_EQ(omci_mib_generation(mib), before);
+}
+
 int main(void)
 {
 	test_every_table_entry_fits_a_node();
@@ -1222,6 +1253,7 @@ int main(void)
 	RUN_MIB(test_a_new_row_is_zeroed);
 	RUN_MIB(test_attributes_round_trip);
 	RUN_MIB(test_attribute_errors_are_distinguishable);
+	RUN_MIB(test_a_reading_is_stored_without_a_change_of_the_mib);
 	RUN_MIB(test_delete_then_create_reuses_and_zeroes);
 	RUN_MIB(test_churn_does_not_exhaust_the_arena);
 	RUN_MIB(test_both_capacity_limits_refuse_honestly);

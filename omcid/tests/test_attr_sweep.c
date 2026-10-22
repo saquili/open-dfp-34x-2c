@@ -299,7 +299,7 @@ static void test_every_attribute_reads_back_what_the_mib_holds(void)
 	CHECK_EQ(tables, need.get_tables);
 	CHECK_EQ(undefined, need.get_undefined);
 	CHECK_EQ(defined + undefined, (tsv_class_count - no_get) * 16u);
-	CHECK_EQ(defined, 648u);
+	CHECK_EQ(defined, 662u);
 	CHECK_EQ(tables, 25u);
 	CHECK_EQ(no_get, 0u);
 
@@ -592,7 +592,7 @@ static void test_set_by_create_values_land_where_the_table_says(void)
 	CHECK_EQ(placed, need.placed);
 	CHECK_EQ(no_create, need.no_create);
 	CHECK_EQ(creates, 49u);
-	CHECK_EQ(no_create, 23u);
+	CHECK_EQ(no_create, 26u);
 
 	omci_t_down(&fx);
 }
@@ -616,7 +616,7 @@ static void test_the_census(void)
 
 	printf("  census: %u attributes: %u writable, %u read-only, %u set by create, %u announcing, %u tables\n",
 	       attrs, writable, read_only, set_by_create, avc, tables);
-	CHECK_EQ(attrs, 648u);
+	CHECK_EQ(attrs, 662u);
 	CHECK_EQ(writable + read_only, attrs);
 	CHECK_EQ(tables, 25u);
 }

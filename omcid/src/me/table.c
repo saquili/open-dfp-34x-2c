@@ -7,8 +7,8 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * 415e4d43276d8e68b997f359287d2ee771eaa9435e4eae6f6b0ae70921ec88b5
- * 72 classes, 648 attributes.
+ * c944943d05fdecac90055f71b2e5dccaab5278992d9c283b15089caff44e4b88
+ * 75 classes, 662 attributes.
  */
 
 #include "me/table.h"
@@ -1678,6 +1678,26 @@ static const struct omci_me_attr attrs_class_347[] = {
 	  0 }, /* 15 */
 };
 
+/* Class 456: ONU manufacturing data */
+static const struct omci_me_attr attrs_class_456[] = {
+	{ "Manufacturer name", 25, OMCI_ME_ACC_READ, 0 }, /* 1 */
+	{ "Serial number part 1", 25, OMCI_ME_ACC_READ, 0 }, /* 2 */
+	{ "Serial number part 2", 25, OMCI_ME_ACC_READ, 0 }, /* 3 */
+	{ "Model name", 25, OMCI_ME_ACC_READ, 0 }, /* 4 */
+	{ "Manufacturing date", 25, OMCI_ME_ACC_READ, 0 }, /* 5 */
+	{ "Hardware revision", 25, OMCI_ME_ACC_READ, 0 }, /* 6 */
+	{ "Firmware revision", 25, OMCI_ME_ACC_READ, 0 }, /* 7 */
+	{ "MAC address", 6, OMCI_ME_ACC_READ, 0 }, /* 8 */
+};
+
+/* Class 457: ONU time configuration */
+static const struct omci_me_attr attrs_class_457[] = {
+	{ "Current local ONU time", 7, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Time qualification block", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+};
+
 /* Class 458: IP host performance monitoring history data part 2 */
 static const struct omci_me_attr attrs_class_458[] = {
 	{ "Interval end time", 1, OMCI_ME_ACC_READ,
@@ -1695,6 +1715,18 @@ static const struct omci_me_attr attrs_class_458[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
 	{ "DHCP response incomplete count", 2, OMCI_ME_ACC_READ,
 	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
+/* Class 460: ONU4-G */
+static const struct omci_me_attr attrs_class_460[] = {
+	{ "Sustained downstream MAC client rate", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Downstream RAB size", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Sustained upstream MAC client rate", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Upstream RAB size", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
 };
 
 const struct omci_me_class omci_me_classes[] = {
@@ -2409,6 +2441,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_347,
 	},
 	{
+		.class_id = 456,
+		.name = "ONU manufacturing data",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Get */
+		.actions = 0x00000200u,
+		.alarms = 0x00000000u,
+		.attr_count = 8,
+		.attrs = attrs_class_456,
+	},
+	{
+		.class_id = 457,
+		.name = "ONU time configuration",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get */
+		.actions = 0x00000300u,
+		.alarms = 0x00000000u,
+		.attr_count = 2,
+		.attrs = attrs_class_457,
+	},
+	{
 		.class_id = 458,
 		.name = "IP host performance monitoring history data part 2",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -2417,6 +2469,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000003u,
 		.attr_count = 7,
 		.attrs = attrs_class_458,
+	},
+	{
+		.class_id = 460,
+		.name = "ONU4-G",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Get */
+		.actions = 0x00000200u,
+		.alarms = 0x00000000u,
+		.attr_count = 4,
+		.attrs = attrs_class_460,
 	},
 };
 
