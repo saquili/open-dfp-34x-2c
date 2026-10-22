@@ -49,6 +49,8 @@
 #include <linux/of.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <linux/reboot.h>
+#include <linux/workqueue.h>
 #include <net/dsa.h>
 #include <net/flow_offload.h>
 #include <net/pkt_cls.h>
@@ -1103,39 +1105,137 @@ static long rtl9602c_tsense_mdeg(u32 stat)
  */
 static u32 rtl9602c_tsense_sample(struct rtl9602c_priv *p)
 {
+	u32 stat;
+
+	mutex_lock(&p->tsense_lock);
 	rtl9602c_w(p, RTL9602C_TSENSE_CTRL, RTL9602C_TSENSE_CTRL_INIT);
 	fsleep(RTL9602C_TSENSE_SETTLE_US);
-	return rtl9602c_r(p, RTL9602C_TSENSE_STAT);
+	stat = rtl9602c_r(p, RTL9602C_TSENSE_STAT);
+	mutex_unlock(&p->tsense_lock);
+	return stat;
+}
+
+/* Whether a status word holds a temperature: 0 and 127 are a sensor not ready. */
+static bool rtl9602c_tsense_valid(u32 stat)
+{
+	u32 raw = FIELD_GET(RTL9602C_TSENSE_STAT_TEMP, stat);
+
+	return raw != 0 && raw != FIELD_MAX(RTL9602C_TSENSE_STAT_TEMP);
+}
+
+/* What a reading changed in the guard's state. */
+enum {
+	RTL9602C_TEMP_MAX_ON = BIT(0),
+	RTL9602C_TEMP_MAX_OFF = BIT(1),
+	RTL9602C_TEMP_STOP = BIT(2),
+};
+
+/*
+ * Judge one reading, @temp in millidegrees, against the levels: the warning
+ * is raised at @max and lowered HYST below it, and the stick is to be stopped
+ * once CRIT_HITS readings in a row have been at or above @crit. Returns what
+ * changed, as a mask of the events above.
+ */
+static unsigned int rtl9602c_temp_judge(struct rtl9602c_temp_guard *g, long temp,
+					long max, long crit)
+{
+	unsigned int events = 0;
+
+	if (!g->max_alarm && temp >= max) {
+		g->max_alarm = true;
+		events |= RTL9602C_TEMP_MAX_ON;
+	} else if (g->max_alarm && temp < max - RTL9602C_TEMP_HYST) {
+		g->max_alarm = false;
+		events |= RTL9602C_TEMP_MAX_OFF;
+	}
+
+	if (temp < crit)
+		g->crit_hits = 0;
+	else if (++g->crit_hits >= RTL9602C_TEMP_CRIT_HITS)
+		events |= RTL9602C_TEMP_STOP;
+
+	return events;
 }
 
 #if IS_ENABLED(CONFIG_HWMON)
-/* temp1_input: one measurement per read; the hwmon core serialises them. */
+/*
+ * temp1_input: one measurement per read. temp1_max and temp1_crit are the
+ * guard's levels, which may be written (within the sensor's range of 0 to
+ * 127 degrees), and temp1_max_alarm and temp1_crit_alarm its state.
+ */
 static int rtl9602c_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 			       u32 attr, int channel, long *val)
 {
 	struct rtl9602c_priv *p = dev_get_drvdata(dev);
 
-	if (type != hwmon_temp || attr != hwmon_temp_input)
+	if (type != hwmon_temp)
 		return -EOPNOTSUPP;
-	*val = rtl9602c_tsense_mdeg(rtl9602c_tsense_sample(p));
-	return 0;
+
+	switch (attr) {
+	case hwmon_temp_input:
+		*val = rtl9602c_tsense_mdeg(rtl9602c_tsense_sample(p));
+		return 0;
+	case hwmon_temp_max:
+		*val = READ_ONCE(p->temp.max);
+		return 0;
+	case hwmon_temp_crit:
+		*val = READ_ONCE(p->temp.crit);
+		return 0;
+	case hwmon_temp_max_alarm:
+		*val = READ_ONCE(p->temp.max_alarm);
+		return 0;
+	case hwmon_temp_crit_alarm:
+		*val = READ_ONCE(p->temp.crit_alarm);
+		return 0;
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static int rtl9602c_hwmon_write(struct device *dev, enum hwmon_sensor_types type,
+				u32 attr, int channel, long val)
+{
+	struct rtl9602c_priv *p = dev_get_drvdata(dev);
+
+	if (type != hwmon_temp)
+		return -EOPNOTSUPP;
+
+	val = clamp_val(val, 0, 127000);
+	switch (attr) {
+	case hwmon_temp_max:
+		WRITE_ONCE(p->temp.max, val);
+		return 0;
+	case hwmon_temp_crit:
+		WRITE_ONCE(p->temp.crit, val);
+		return 0;
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 static umode_t rtl9602c_hwmon_is_visible(const void *data,
 					 enum hwmon_sensor_types type, u32 attr,
 					 int channel)
 {
-	return 0444;
+	switch (attr) {
+	case hwmon_temp_max:
+	case hwmon_temp_crit:
+		return 0644;
+	default:
+		return 0444;
+	}
 }
 
 static const struct hwmon_channel_info * const rtl9602c_hwmon_info[] = {
-	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT),
+	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_MAX | HWMON_T_CRIT |
+				 HWMON_T_MAX_ALARM | HWMON_T_CRIT_ALARM),
 	NULL,
 };
 
 static const struct hwmon_ops rtl9602c_hwmon_ops = {
 	.is_visible	= rtl9602c_hwmon_is_visible,
 	.read		= rtl9602c_hwmon_read,
+	.write		= rtl9602c_hwmon_write,
 };
 
 static const struct hwmon_chip_info rtl9602c_hwmon_chip = {
@@ -1150,17 +1250,99 @@ static void rtl9602c_hwmon_register(struct rtl9602c_priv *p)
 
 	hwmon = devm_hwmon_device_register_with_info(p->dev, "rtl9602c", p,
 						     &rtl9602c_hwmon_chip, NULL);
-	if (IS_ERR(hwmon))
+	if (IS_ERR(hwmon)) {
 		pr_warn("no hwmon device for the die temperature: %pe\n", hwmon);
+		return;
+	}
+	p->temp.hwmon = hwmon;
+}
+
+/* Tell whoever waits on an alarm of the guard. */
+static void rtl9602c_temp_notify(struct rtl9602c_priv *p, u32 attr)
+{
+	if (p->temp.hwmon)
+		hwmon_notify_event(p->temp.hwmon, hwmon_temp, attr, 0);
 }
 #else
 static void rtl9602c_hwmon_register(struct rtl9602c_priv *p) { }
+static void rtl9602c_temp_notify(struct rtl9602c_priv *p, u32 attr) { }
 #endif
 
 /*
+ * The guard's pass: read the sensor, judge the reading, say what changed, and
+ * stop the stick when it has been too hot too long. The stick is stopped by
+ * the kernel's hardware protection, which asks user space to power it off
+ * and does it itself RTL9602C_TEMP_FORCED_MS later; the transmitter's driver
+ * turns the laser off as the devices shut down.
+ */
+static void rtl9602c_temp_work(struct work_struct *work)
+{
+	struct rtl9602c_priv *p = container_of(to_delayed_work(work),
+					       struct rtl9602c_priv, temp.work);
+	struct rtl9602c_temp_guard *g = &p->temp;
+	u32 stat = rtl9602c_tsense_sample(p);
+	unsigned int events;
+	long temp;
+
+	if (!rtl9602c_tsense_valid(stat)) {
+		dev_warn_once(p->dev, "the die temperature sensor is not ready (status %08x)\n",
+			      stat);
+		g->crit_hits = 0;
+		goto next;
+	}
+
+	temp = rtl9602c_tsense_mdeg(stat);
+	events = rtl9602c_temp_judge(g, temp, READ_ONCE(g->max), READ_ONCE(g->crit));
+
+	if (events & RTL9602C_TEMP_MAX_ON) {
+		dev_warn(p->dev, "die temperature %ld C, at or above the warning level of %ld C\n",
+			 temp / 1000, READ_ONCE(g->max) / 1000);
+		rtl9602c_temp_notify(p, hwmon_temp_max_alarm);
+	}
+	if (events & RTL9602C_TEMP_MAX_OFF) {
+		dev_info(p->dev, "die temperature %ld C, below the warning level again\n",
+			 temp / 1000);
+		rtl9602c_temp_notify(p, hwmon_temp_max_alarm);
+	}
+	if (events & RTL9602C_TEMP_STOP) {
+		if (!g->crit_alarm) {
+			g->crit_alarm = true;
+			rtl9602c_temp_notify(p, hwmon_temp_crit_alarm);
+		}
+		dev_emerg(p->dev, "die temperature %ld C, at or above the critical level of %ld C: stopping the stick\n",
+			  temp / 1000, READ_ONCE(g->crit) / 1000);
+		hw_protection_trigger("RTL9602C die temperature above the critical level",
+				      RTL9602C_TEMP_FORCED_MS);
+	}
+next:
+	schedule_delayed_work(&g->work, msecs_to_jiffies(RTL9602C_TEMP_POLL_MS));
+}
+
+static void rtl9602c_temp_stop(void *data)
+{
+	struct rtl9602c_priv *p = data;
+
+	cancel_delayed_work_sync(&p->temp.work);
+}
+
+/* Set the levels and start the guard's passes; they stop with the driver. */
+static void rtl9602c_temp_start(struct rtl9602c_priv *p)
+{
+	struct rtl9602c_temp_guard *g = &p->temp;
+
+	g->max = RTL9602C_TEMP_MAX_DEFAULT;
+	g->crit = RTL9602C_TEMP_CRIT_DEFAULT;
+	INIT_DELAYED_WORK(&g->work, rtl9602c_temp_work);
+	if (devm_add_action_or_reset(p->dev, rtl9602c_temp_stop, p))
+		return;
+	schedule_delayed_work(&g->work, msecs_to_jiffies(RTL9602C_TEMP_POLL_MS));
+}
+
+/*
  * Turn the die temperature sensor on, log its first reading with the control
- * word as found, and register the hwmon device, whose temp1_input is the die
- * temperature. The sensor's alarm, a source of the switch's interrupt, is
+ * word as found, register the hwmon device, whose temp1_input is the die
+ * temperature, and start the guard that warns and stops the stick when it is
+ * too hot. The sensor's own alarm, a source of the switch's interrupt, is
  * left masked.
  */
 static void rtl9602c_tsense_init(struct rtl9602c_priv *p)
@@ -1172,6 +1354,7 @@ static void rtl9602c_tsense_init(struct rtl9602c_priv *p)
 		rtl9602c_tsense_mdeg(stat) / 1000, RTL9602C_TSENSE_CTRL_INIT,
 		found, found & RTL9602C_TSENSE_CTRL_EN ? "on" : "off", stat);
 	rtl9602c_hwmon_register(p);
+	rtl9602c_temp_start(p);
 }
 
 /*
@@ -2661,6 +2844,7 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	p->i2c_nr = -1;
 	INIT_DELAYED_WORK(&p->sds_work, rtl9602c_sds_work);
 	mutex_init(&p->table_lock);
+	mutex_init(&p->tsense_lock);
 	mutex_init(&p->fdb_lock);
 	mutex_init(&p->acl_lock);
 	mutex_init(&p->meter_lock);

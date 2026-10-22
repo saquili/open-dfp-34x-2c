@@ -122,6 +122,26 @@
 #define RTL9602C_TSENSE_SETTLE_US		1000
 
 /*
+ * The guard of the die temperature, in millidegrees Celsius. The warning
+ * level is the one at which the stick is hot and says so; the critical level
+ * the one at which the kernel stops it (hw_protection_trigger()) once
+ * CRIT_HITS readings POLL_MS apart have all been at or above it. The
+ * warning ends HYST below its level. A reading of 0 or of the sensor's most,
+ * 127, is taken for a sensor that is not ready, not for a temperature. The
+ * levels are the driver's to start with and sysfs's to change
+ * (temp1_max, temp1_crit); they are chosen with the scale of the sensor
+ * not yet verified, so far from the 70 to 75 degrees the die shows idle that
+ * no error of some tens of degrees stops a stick that is well, and under the
+ * 125 degrees that the junction may reach (RTL9601-CG, the nearest datasheet).
+ */
+#define RTL9602C_TEMP_MAX_DEFAULT		95000
+#define RTL9602C_TEMP_CRIT_DEFAULT		110000
+#define RTL9602C_TEMP_HYST			5000
+#define RTL9602C_TEMP_POLL_MS			5000
+#define RTL9602C_TEMP_CRIT_HITS			3
+#define RTL9602C_TEMP_FORCED_MS			5000
+
+/*
  * In-band auto-negotiation (IEEE 802.3 clause 37), one bit per SerDes lane in
  * FORCE and RESTART; a set FORCE bit turns it off. A change reaches a running
  * link only when the lane is next parked and restarted. INIT turns it off on
@@ -1860,6 +1880,27 @@ struct rtl9602c_host {
 };
 
 /**
+ * struct rtl9602c_temp_guard - the watch on the die temperature
+ * @work: reads the sensor every RTL9602C_TEMP_POLL_MS
+ * @hwmon: the hwmon device that is told of an alarm; NULL when there is none
+ * @max: the warning level, millidegrees; written by sysfs, read by the work
+ * @crit: the critical level, millidegrees; written by sysfs, read by the work
+ * @max_alarm: the reading is at or above @max, and has not fallen to
+ *	RTL9602C_TEMP_HYST below it; written by the work alone
+ * @crit_alarm: the stick is being stopped
+ * @crit_hits: the readings in a row at or above @crit
+ */
+struct rtl9602c_temp_guard {
+	struct delayed_work work;
+	struct device *hwmon;
+	long max;
+	long crit;
+	bool max_alarm;
+	bool crit_alarm;
+	unsigned int crit_hits;
+};
+
+/**
  * struct rtl9602c_priv - the driver's state for one RTL9602C switch
  *
  * Shared by the files of the driver; each member is described where it is
@@ -1893,6 +1934,15 @@ struct rtl9602c_priv {
 	struct rtl9602c_pon_data pon;
 	/** @pon_adev: the device the GPON MAC's driver binds to; NULL when none is made */
 	struct auxiliary_device *pon_adev;
+
+	/**
+	 * @tsense_lock: makes the write of the die temperature sensor's control
+	 * word and the read of its status one measurement; the guard and the
+	 * hwmon read both take it
+	 */
+	struct mutex tsense_lock;
+	/** @temp: the watch on the die temperature */
+	struct rtl9602c_temp_guard temp;
 
 	/**
 	 * @l34_up: the L3/NAT engine's enable read back set; everything that

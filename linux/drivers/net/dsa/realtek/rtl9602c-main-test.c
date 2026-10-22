@@ -152,12 +152,71 @@ static void rtl9602c_test_tsense_mdeg(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rtl9602c_tsense_mdeg(0xffffffff), 127000);
 }
 
+static void rtl9602c_test_tsense_valid(struct kunit *test)
+{
+	KUNIT_EXPECT_FALSE(test, rtl9602c_tsense_valid(0));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_tsense_valid(0xffffffff));
+	KUNIT_EXPECT_FALSE(test, rtl9602c_tsense_valid(0x007f0000));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_tsense_valid(0x032d002a));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_tsense_valid(0x00010000));
+	KUNIT_EXPECT_TRUE(test, rtl9602c_tsense_valid(0x007e0000));
+}
+
+/*
+ * The warning rises at its level and falls HYST below it; the stick is to be
+ * stopped by the third reading in a row at the critical level, and a reading
+ * under it starts the count again.
+ */
+static void rtl9602c_test_temp_judge(struct kunit *test)
+{
+	struct rtl9602c_temp_guard g = { 0 };
+	const long max = 95000, crit = 110000;
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 73000, max, crit), 0u);
+	KUNIT_EXPECT_FALSE(test, g.max_alarm);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 94999, max, crit), 0u);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 95000, max, crit),
+			(unsigned int)RTL9602C_TEMP_MAX_ON);
+	KUNIT_EXPECT_TRUE(test, g.max_alarm);
+
+	/* Inside the hysteresis the warning stays, and is not raised again. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 96000, max, crit), 0u);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 90000, max, crit), 0u);
+	KUNIT_EXPECT_TRUE(test, g.max_alarm);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 89999, max, crit),
+			(unsigned int)RTL9602C_TEMP_MAX_OFF);
+	KUNIT_EXPECT_FALSE(test, g.max_alarm);
+
+	/* Two readings at the critical level are not enough, and a dip clears them. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 110000, max, crit),
+			(unsigned int)RTL9602C_TEMP_MAX_ON);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 111000, max, crit), 0u);
+	KUNIT_EXPECT_EQ(test, g.crit_hits, 2u);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 109999, max, crit), 0u);
+	KUNIT_EXPECT_EQ(test, g.crit_hits, 0u);
+
+	/* Three in a row stop the stick, and each reading after them says so. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 110000, max, crit), 0u);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 112000, max, crit), 0u);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 113000, max, crit),
+			(unsigned int)RTL9602C_TEMP_STOP);
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 113000, max, crit),
+			(unsigned int)RTL9602C_TEMP_STOP);
+
+	/* Levels lowered by sysfs apply to the next reading. */
+	g = (struct rtl9602c_temp_guard){ 0 };
+	KUNIT_EXPECT_EQ(test, rtl9602c_temp_judge(&g, 73000, 70000, 72000),
+			(unsigned int)RTL9602C_TEMP_MAX_ON);
+}
+
 static struct kunit_case rtl9602c_main_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_sds_auto),
 	KUNIT_CASE(rtl9602c_test_sds_found_lost),
 	KUNIT_CASE(rtl9602c_test_sds_one),
 	KUNIT_CASE(rtl9602c_test_sds_wait),
 	KUNIT_CASE(rtl9602c_test_tsense_mdeg),
+	KUNIT_CASE(rtl9602c_test_tsense_valid),
+	KUNIT_CASE(rtl9602c_test_temp_judge),
 	{ }
 };
 
