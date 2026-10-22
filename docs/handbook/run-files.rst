@@ -247,6 +247,11 @@ Private to one program or to onu-utils
    * - ``/run/onu-pdN.kept``
      - The copy of ``/run/dhcp6d/pdN`` that ``onu-apply`` keeps across a
        change of the sessions.
+   * - ``/run/onu-update/``
+     - What ``onu-update`` read of each bank, ``bankN``: its SHA-256 and its
+       signature, with a mark of what the bank held then, which ``onu-update
+       status`` gives while the mark is the bank's (ADR 0022). ``write``,
+       ``read`` and ``digest`` write it, and a write forgets it first.
    * - ``/run/onu-trial.d/``, ``/run/onu-trial``, ``/run/onu-trial.pon``,
        ``/run/onu-trial.omcid``, ``/run/onu-trial.reply``
      - The changes on trial, each with the moment it goes back (told as the
