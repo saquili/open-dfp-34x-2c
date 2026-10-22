@@ -109,12 +109,12 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		uint32_t cases;
 		uint32_t digest;
 	} pin[] = {
-		{ OMCI_CASE_ENVELOPE, 1660u, 0xe2017ea8u },
+		{ OMCI_CASE_ENVELOPE, 1664u, 0x593006a9u },
 		{ OMCI_CASE_MUTATE, 36864u, 0x7ce87501u },
 		{ OMCI_CASE_MSGTYPE, 256u, 0x7b94fe45u },
 		{ OMCI_CASE_MTCLASS, 896u, 0x321cec05u },
-		{ OMCI_CASE_REACH, 9421u, 0xfe427763u },
-		{ OMCI_CASE_POPULATED, 594u, 0x2c5e6f90u },
+		{ OMCI_CASE_REACH, 9459u, 0x5dfc2d39u },
+		{ OMCI_CASE_POPULATED, 633u, 0x5d981c98u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(pin); k++) {
 		CHECK_EQ(omci_case_count(pin[k].axis), pin[k].cases);
@@ -131,12 +131,12 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		enum omci_case_axis axis;
 		uint32_t digest;
 	} label_pin[] = {
-		{ OMCI_CASE_ENVELOPE, 0xd21fcbc5u },
+		{ OMCI_CASE_ENVELOPE, 0xbfa5814au },
 		{ OMCI_CASE_MUTATE, 0xaceb5285u },
 		{ OMCI_CASE_MSGTYPE, 0xb6b6d2f5u },
 		{ OMCI_CASE_MTCLASS, 0x26e548e5u },
-		{ OMCI_CASE_REACH, 0x18038e88u },
-		{ OMCI_CASE_POPULATED, 0xbd32334du },
+		{ OMCI_CASE_REACH, 0x185f7bacu },
+		{ OMCI_CASE_POPULATED, 0x949c3851u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(label_pin); k++) {
 		const uint32_t d = label_digest(label_pin[k].axis);
@@ -152,8 +152,8 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 	CHECK(populated());
 	omci_case_prepare(OMCI_CASE_REACH, g_mib);
 	omci_case_prepare(OMCI_CASE_POPULATED, g_mib);
-	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0xfe427763u);
-	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0x2c5e6f90u);
+	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0x5dfc2d39u);
+	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0x5d981c98u);
 	omci_mib_fini(g_mib);
 }
 
@@ -169,10 +169,10 @@ static void test_a_second_preparation_leaves_nothing_of_the_first(void)
 		uint32_t cases;
 		uint32_t digest;
 	} without[] = {
-		{ 5u, 3u, 9385u, 0xd381a589u },
-		{ 256u, 1u, 9412u, 0xebbe0ea3u },
-		{ 263u, 1u, 9407u, 0xa8acbd63u },
-		{ 2u, 1u, 9417u, 0x66e3c3a7u },
+		{ 5u, 3u, 9423u, 0x9e8eef5au },
+		{ 256u, 1u, 9450u, 0xe71aa292u },
+		{ 263u, 1u, 9445u, 0x47d948bcu },
+		{ 2u, 1u, 9455u, 0x72b55a64u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(without); k++) {
 		CHECK(populated());
@@ -278,10 +278,10 @@ test_reach_has_the_families_it_was_counted_with_and_is_answered_as_it_was(void)
 		const char *family;
 		unsigned int n;
 	} families[] = {
-		{ "create", 41 }, { "get", 40 },	{ "mibreset", 1 },
-		{ "set", 238 },	  { "setagain", 5 },	{ "setback", 5 },
-		{ "swdl", 35 },	  { "synctime", 8820 }, { "table", 57 },
-		{ "test", 100 },  { "upload", 79 },
+		{ "create", 44 }, { "get", 41 },	{ "mibreset", 1 },
+		{ "set", 246 },	  { "setagain", 5 },	{ "setback", 5 },
+		{ "swdl", 35 },	  { "synctime", 8820 }, { "table", 69 },
+		{ "test", 105 },  { "upload", 88 },
 	};
 	unsigned int tally[11] = { 0 };
 	unsigned int total_families = 0;
@@ -324,13 +324,13 @@ test_reach_has_the_families_it_was_counted_with_and_is_answered_as_it_was(void)
 	CHECK_EQ(total_families, n);
 	CHECK_EQ(answered, n);
 
-	CHECK_EQ(no_result_byte, 79u);
-	CHECK_EQ(results[0], 768u);
-	CHECK_EQ(results[2], 129u);
-	CHECK_EQ(results[3], 8403u);
+	CHECK_EQ(no_result_byte, 88u);
+	CHECK_EQ(results[0], 783u);
+	CHECK_EQ(results[2], 134u);
+	CHECK_EQ(results[3], 8411u);
 	CHECK_EQ(results[4], 1u);
 	CHECK_EQ(results[5], 5u);
-	CHECK_EQ(results[9], 36u);
+	CHECK_EQ(results[9], 37u);
 	CHECK_EQ(results[1] + results[6] + results[7] + results[8], 0u);
 }
 
@@ -416,7 +416,7 @@ static void test_populated_asks_for_what_the_model_holds_and_gets_it_back(void)
 	omci_engine_fini(eng);
 	omci_mib_fini(g_mib);
 
-	CHECK_EQ(getall, 37u);
+	CHECK_EQ(getall, 38u);
 	CHECK_EQ(getall_ok, getall_full);
 	CHECK(getall_ok > 0u && getall_ok < getall);
 	CHECK(getpart >= getall);

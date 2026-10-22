@@ -317,7 +317,7 @@ static void test_every_class_that_lists_create_round_trips(void)
 		classes++;
 	}
 	printf("  %u classes round-tripped\n", classes);
-	CHECK_EQ(classes, 41u);
+	CHECK_EQ(classes, 44u);
 
 	omci_t_down(&fx);
 }
@@ -356,7 +356,7 @@ static void test_the_classes_the_onu_creates_refuse_create_and_delete(void)
 		if (rsp != NULL)
 			CHECK_EQ(rsp[8], R_NOT_SUPPORTED);
 	}
-	CHECK_EQ(classes, 22u);
+	CHECK_EQ(classes, 23u);
 	CHECK_EQ(omci_mib_count(fx.mib), before);
 
 	omci_t_down(&fx);

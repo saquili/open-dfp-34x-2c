@@ -17,7 +17,7 @@
 static void test_the_classes_are_the_data_classes(void)
 {
 	CHECK_EQ(omci_me_class_count, (size_t)tsv_class_count);
-	CHECK_EQ(tsv_class_count, 63u);
+	CHECK_EQ(tsv_class_count, 67u);
 
 	unsigned int attrs = 0;
 
@@ -46,7 +46,7 @@ static void test_the_classes_are_the_data_classes(void)
 			CHECK_EQ(omci_me_action_allowed(t->id, mt),
 				 (t->actions & (1u << mt)) != 0u);
 	}
-	CHECK_EQ(attrs, 570u);
+	CHECK_EQ(attrs, 607u);
 	printf("  %u classes, %u attributes\n", tsv_class_count, attrs);
 }
 
@@ -103,7 +103,7 @@ static void test_every_attribute_is_found_under_its_number(void)
 	CHECK(omci_me_attr_get(NULL, 1) == NULL);
 }
 
-static void test_the_thirteen_tables(void)
+static void test_the_tables(void)
 {
 	unsigned int tables = 0, classes = 0;
 
@@ -118,8 +118,8 @@ static void test_the_thirteen_tables(void)
 		if (here > 0u)
 			CHECK((tsv_classes[i].actions & (1u << 26)) != 0u);
 	}
-	CHECK_EQ(tables, 21u);
-	CHECK_EQ(classes, 11u);
+	CHECK_EQ(tables, 25u);
+	CHECK_EQ(classes, 12u);
 }
 
 static void
@@ -195,7 +195,7 @@ int main(int argc, char **argv)
 
 	RUN(test_the_classes_are_the_data_classes);
 	RUN(test_every_attribute_is_found_under_its_number);
-	RUN(test_the_thirteen_tables);
+	RUN(test_the_tables);
 	RUN(test_the_row_layout_is_the_sizes_of_the_attributes_that_are_not_tables);
 	RUN(test_the_classes_are_in_ascending_order_and_nothing_else_is_in);
 	RUN(test_the_creators_and_the_actions_agree);

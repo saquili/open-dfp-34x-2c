@@ -254,7 +254,7 @@ static void test_end_of_input(void)
 	CHECK(strstr(g_log, "omcid 0.1.0 starting") != NULL);
 	CHECK(strstr(g_log, "transport: stdin/stdout") != NULL);
 	CHECK(strstr(g_log, "hw: synthetic ONU") != NULL);
-	CHECK(strstr(g_log, "mib ready: 37 instances") != NULL);
+	CHECK(strstr(g_log, "mib ready: 38 instances") != NULL);
 	char want[128 + sizeof(g_sock)];
 	(void)snprintf(want, sizeof(want), "ctl: listening on %s", g_sock);
 	CHECK(strstr(g_log, want) != NULL);
@@ -951,7 +951,7 @@ static void test_the_mib_is_kept_across_a_start_again(void)
 	mds_set(frame, 42);
 	CHECK_EQ(run_kept(&g, frame, g_keep), EXIT_SUCCESS);
 	CHECK(strstr(g_log, "mib: nothing kept in") != NULL);
-	CHECK(strstr(g_log, "mib ready: 37 instances") != NULL);
+	CHECK(strstr(g_log, "mib ready: 38 instances") != NULL);
 	CHECK_EQ(stat(g_keep, &st), 0);
 	CHECK(st.st_size > 36);
 	rig_down(&g);
@@ -995,7 +995,7 @@ static void test_a_kept_file_it_cannot_go_on_from(void)
 	CHECK(rig_up(&g));
 	CHECK_EQ(run_kept(&g, NULL, g_keep), EXIT_SUCCESS);
 	CHECK(strstr(g_log, "is not one this daemon can go on from") != NULL);
-	CHECK(strstr(g_log, "mib ready: 37 instances") != NULL);
+	CHECK(strstr(g_log, "mib ready: 38 instances") != NULL);
 	rig_down(&g);
 	(void)unlink(g_sock);
 	CHECK(rig_up(&g));

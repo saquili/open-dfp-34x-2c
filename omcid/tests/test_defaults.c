@@ -421,6 +421,7 @@ static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 	caps.num_priq_per_tcont = 5u;
 	caps.num_priq_per_port = 3u;
 	caps.ip_host_count = 2u;
+	caps.ipv6_host_count = 2u;
 	caps.uni_port_count = 4u;
 	caps.num_gem_ports = 99u;
 
@@ -450,6 +451,30 @@ static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 	CHECK_EQ(instances_of(mib, 278u), 3u);
 	CHECK_EQ(instances_of(mib, 134u), 2u);
 	CHECK_EQ(instances_of(mib, 277u), 3u * 5u + 3u);
+
+	/*
+	 * The IPv6 hosts follow the IP hosts in numbering, locked, with the MAC
+	 * address and a link-layer DUID (RFC 8415 11.2) of it.
+	 */
+	CHECK_EQ(instances_of(mib, 347u), 2u);
+	for (unsigned int id = 2u; id <= 3u; id++) {
+		uint8_t duid[25] = { 0x00, 0x03, 0x00, 0x01 };
+
+		CHECK(omci_mib_exists(mib, 347u, (uint16_t)id));
+		CHECK_EQ(read_u(mib, 347u, (uint16_t)id, 1u), 0u);
+		CHECK_EQ(read_attr(mib, 347u, (uint16_t)id, 2u, b, sizeof(b)),
+			 6u);
+		CHECK_MEM(b, caps.identity.mac, 6);
+		memcpy(&duid[4], caps.identity.mac, 6);
+		CHECK_EQ(read_attr(mib, 347u, (uint16_t)id, 12u, b, sizeof(b)),
+			 25u);
+		CHECK_MEM(b, duid, sizeof(duid));
+		CHECK_EQ(read_attr(mib, 347u, (uint16_t)id, 5u, b, sizeof(b)),
+			 16u);
+		for (unsigned int i = 0; i < 16u; i++)
+			CHECK_EQ(b[i], 0u);
+	}
+	CHECK(!omci_mib_exists(mib, 347u, 4u));
 	CHECK_EQ(read_u(mib, 6u, caps.ports[0].cardholder, 2u), 4u);
 
 	caps.port_count = (uint8_t)(ARRAY_SIZE(caps.ports) + 1u);

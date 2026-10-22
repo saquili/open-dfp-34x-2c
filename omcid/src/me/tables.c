@@ -27,6 +27,7 @@ enum {
 	ME_MCAST_OPS_PROFILE = 309,
 	ME_MCAST_SUBSCRIBER = 310,
 	ME_MCAST_MONITOR = 311,
+	ME_IPV6_HOST = 347,
 };
 
 /* A table whose rows are known by all their bytes, kept in arrival order. */
@@ -70,7 +71,9 @@ enum {
  * agent (class 150) by its first two, a response code; a row of a zero key
  * clears its table. A dial plan (class 145) is known by its number, the
  * first byte, and removed by a row whose action, the second, is 0. The
- * others keep whole rows.
+ * others keep whole rows, among them the tables of the IPv6 host (class 347),
+ * which the ONU keeps of what its stack holds: the addresses with their
+ * lifetimes, the routers, the DNS servers and the on-link prefixes.
  */
 static const struct {
 	uint16_t class_id;
@@ -134,6 +137,11 @@ static const struct {
 	    .order = OMCI_MIB_TABLE_LAST,
 	    .max_entries = 32 } },
 	{ ME_SIP_AGENT, 12, INDEX_ROWS(2, 32) },
+
+	{ ME_IPV6_HOST, 9, WHOLE_ROW(24, 8) },
+	{ ME_IPV6_HOST, 10, WHOLE_ROW(16, 4) },
+	{ ME_IPV6_HOST, 11, WHOLE_ROW(16, 4) },
+	{ ME_IPV6_HOST, 14, WHOLE_ROW(26, 8) },
 };
 
 bool omci_me_table_policy(uint16_t class_id, uint8_t attr_no,

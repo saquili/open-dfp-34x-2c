@@ -38,6 +38,7 @@ enum {
 	ME_TRAFFIC_SCHED = 278,
 	ME_OMCI = 287,
 	ME_VEIP = 329,
+	ME_IPV6_HOST = 347,
 };
 
 /* The slot of the PON side: T-CONTs, schedulers and upstream queues are 0x80nn. */
@@ -514,6 +515,27 @@ static void make_ip_host(struct build *b, const struct omci_hw_caps *caps,
 }
 
 /*
+ * An IPv6 host, locked as G.988 9.4.5 has it until the OLT unlocks it, with
+ * its MAC address and a DHCPv6 unique identifier of the link-layer kind
+ * (RFC 8415 11.2): type 3, hardware type 1 for Ethernet, and the address.
+ * The ids follow those of the IP hosts, which G.988 wants kept apart.
+ */
+static void make_ipv6_host(struct build *b, const struct omci_hw_caps *caps,
+			   unsigned int n)
+{
+	uint8_t duid[25] = { 0x00, 0x03, 0x00, 0x01 };
+
+	begin(b, ME_IPV6_HOST, (uint16_t)(caps->ip_host_count + n));
+
+	put(b, 2, caps->identity.mac, sizeof(caps->identity.mac));
+	omci_wire_copy(&duid[4], caps->identity.mac,
+		       sizeof(caps->identity.mac));
+	put(b, 12, duid, sizeof(duid));
+
+	finish(b);
+}
+
+/*
  * The VEIP's slot: its cardholder and circuit pack, of one port, and the
  * VEIP, locked as G.988 suggests of a default (A.1.6), disabled until the
  * engine finds the router behind it, with a blank interdomain name and no
@@ -584,6 +606,8 @@ enum omci_status omci_me_defaults_apply(struct omci_mib *mib,
 		make_software_image(&b, caps, n);
 	for (unsigned int n = 0; n < caps->ip_host_count; n++)
 		make_ip_host(&b, caps, n);
+	for (unsigned int n = 0; n < caps->ipv6_host_count; n++)
+		make_ipv6_host(&b, caps, n);
 	if (caps->uni_report != OMCI_HW_UNI_PPTP)
 		make_veip(&b, caps);
 	make_lct_uni(&b);

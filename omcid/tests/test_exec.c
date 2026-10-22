@@ -235,7 +235,7 @@ int main(int argc, char **argv)
 		CHECK_EQ(WEXITSTATUS(status), 0);
 		CHECK(strstr(err, "omcid 0.1.0 starting") != NULL);
 		CHECK(strstr(err, "transport: stdin/stdout") != NULL);
-		CHECK(strstr(err, "mib ready: 37 instances") != NULL);
+		CHECK(strstr(err, "mib ready: 38 instances") != NULL);
 		CHECK(strstr(err, "stopping: 0 frames handled, 0 rejected") !=
 		      NULL);
 		CHECK(out_n > 0u && out_n % OMCI_FRAME_LEN == 0u);

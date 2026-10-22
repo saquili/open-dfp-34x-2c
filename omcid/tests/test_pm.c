@@ -24,6 +24,7 @@
 #define ME_BRIDGE_PORT 47u
 #define ME_BRIDGE_PORT_PM 52u
 #define ME_ETH_PM_2 89u
+#define ME_IP_HOST_PM 135u
 #define ME_ANI_G 263u
 #define ME_GEM_IW_TP 266u
 #define ME_GEM_CTP 268u
@@ -31,6 +32,8 @@
 #define ME_THRESHOLD_2 274u
 #define ME_MCAST_GEM_IW_TP 281u
 #define ME_ETH_PM_3 296u
+#define ME_TCP_UDP_PM 342u
+#define ME_IP_HOST_PM_2 458u
 #define ME_FEC_PM 312u
 #define ME_PM_DS 321u
 #define ME_PM_US 322u
@@ -209,7 +212,7 @@ static void test_the_surface(void)
 	CHECK(!omci_pm_owns(ME_ANI_G));
 	while (omci_pm_class_at(n) != 0u)
 		n++;
-	CHECK_EQ(n, 9u);
+	CHECK_EQ(n, 12u);
 
 	CHECK(!omci_pm_tick(NULL, 0));
 	omci_pm_synchronize(NULL, 0, 0);
@@ -1101,8 +1104,40 @@ static void test_an_alert_is_notified_and_cleared_at_the_interval_end(void)
 	hw_zero();
 }
 
+/*
+ * The PM entities of a host (G.988 9.4.2, 9.4.4 and 9.4.6) are kept, read and
+ * closed like the others, but a Linux stack counts none of what they name.
+ */
+static void test_the_host_pm_entities_count_nothing_and_raise_no_alert(void)
+{
+	static const struct {
+		uint16_t cls;
+		uint8_t last;
+	} host[] = {
+		{ ME_IP_HOST_PM, 8u },
+		{ ME_TCP_UDP_PM, 7u },
+		{ ME_IP_HOST_PM_2, 7u },
+	};
+	struct omci_mib *mib;
+	struct omci_pm *pm;
+
+	pm_up(&mib, &pm);
+	for (size_t k = 0; k < ARRAY_SIZE(host); k++) {
+		CHECK(omci_pm_owns(host[k].cls));
+		make(mib, host[k].cls, 7u);
+		for (uint8_t no = 3u; no <= host[k].last; no++) {
+			CHECK_EQ(now_count(pm, mib, host[k].cls, 7u, no), 0u);
+			CHECK_EQ(last_count(pm, mib, host[k].cls, 7u, no), 0u);
+		}
+		for (uint8_t bit = 0u; bit <= 7u; bit++)
+			CHECK_EQ(alerted(pm, host[k].cls, bit), 0u);
+	}
+	pm_down(mib, pm);
+}
+
 int main(void)
 {
+	RUN(test_the_host_pm_entities_count_nothing_and_raise_no_alert);
 	RUN(test_the_surface);
 	RUN(test_every_counter_is_accounted_for);
 	RUN(test_the_ethernet_pm_counts_the_uni);

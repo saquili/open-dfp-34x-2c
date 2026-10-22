@@ -7,8 +7,8 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * c8be1de266eeea602177155a42576ec18a8024b3c941f5ddff1da636d9394397
- * 63 classes, 570 attributes.
+ * a70cb503a6883601d46cb61e7de6e62980821636b1caf64e6fb194eb77214c7d
+ * 67 classes, 607 attributes.
  */
 
 #include "me/table.h"
@@ -480,6 +480,21 @@ static const struct omci_me_attr attrs_class_134[] = {
 	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 15 */
 	{ "Relay agent options", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  0 }, /* 16 */
+};
+
+/* Class 135: IP host performance monitoring history data */
+static const struct omci_me_attr attrs_class_135[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "ICMP errors", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "DNS errors", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "DHCP timeouts", 2, OMCI_ME_ACC_READ, 0 }, /* 5 */
+	{ "IP address conflict", 2, OMCI_ME_ACC_READ, 0 }, /* 6 */
+	{ "Out of memory", 2, OMCI_ME_ACC_READ, 0 }, /* 7 */
+	{ "Internal error", 2, OMCI_ME_ACC_READ, 0 }, /* 8 */
 };
 
 /* Class 136: TCP/UDP config data */
@@ -1518,6 +1533,79 @@ static const struct omci_me_attr attrs_class_341[] = {
 	{ "Encryption key errors", 4, OMCI_ME_ACC_READ, 0 }, /* 7 */
 };
 
+/* Class 342: TCP/UDP performance monitoring history data */
+static const struct omci_me_attr attrs_class_342[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Socket failed", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Listen failed", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Bind failed", 2, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Accept failed", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Select failed", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
+/* Class 347: IPv6 host config data */
+static const struct omci_me_attr attrs_class_347[] = {
+	{ "IP options", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "MAC address", 6, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Onu identifier", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "IPv6 link local address", 16, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "IPv6 address", 16, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Default router", 16, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Primary DNS", 16, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Secondary DNS", 16, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "Current address table", 24, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE |
+		  OMCI_ME_ATTR_AVC }, /* 9 */
+	{ "Current default router table", 16, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE |
+		  OMCI_ME_ATTR_AVC }, /* 10 */
+	{ "Current DNS table", 16, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE |
+		  OMCI_ME_ATTR_AVC }, /* 11 */
+	{ "Dynamic host configuration protocol unique identifier (DUID)", 25,
+	  OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 12 */
+	{ "On-link prefix", 17, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 13 */
+	{ "Current on-link prefix table", 26, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_TABLE | OMCI_ME_ATTR_AVC }, /* 14 */
+	{ "Relay agent options", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 15 */
+};
+
+/* Class 458: IP host performance monitoring history data part 2 */
+static const struct omci_me_attr attrs_class_458[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "DHCP Attempts count", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "DHCP Acks received count", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "DHCP Nacks count", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "DHCP response error count", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "DHCP response incomplete count", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
 const struct omci_me_class omci_me_classes[] = {
 	{
 		.class_id = 2,
@@ -1728,6 +1816,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000000u,
 		.attr_count = 16,
 		.attrs = attrs_class_134,
+	},
+	{
+		.class_id = 135,
+		.name = "IP host performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000007eu,
+		.attr_count = 8,
+		.attrs = attrs_class_135,
 	},
 	{
 		.class_id = 136,
@@ -2148,6 +2246,36 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000002u,
 		.attr_count = 7,
 		.attrs = attrs_class_341,
+	},
+	{
+		.class_id = 342,
+		.name = "TCP/UDP performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000003eu,
+		.attr_count = 7,
+		.attrs = attrs_class_342,
+	},
+	{
+		.class_id = 347,
+		.name = "IPv6 host config data",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get, Get Next */
+		.actions = 0x04000300u,
+		.alarms = 0x00000000u,
+		.attr_count = 15,
+		.attrs = attrs_class_347,
+	},
+	{
+		.class_id = 458,
+		.name = "IP host performance monitoring history data part 2",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x00000003u,
+		.attr_count = 7,
+		.attrs = attrs_class_458,
 	},
 };
 

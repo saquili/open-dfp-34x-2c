@@ -35,6 +35,7 @@ static void synthetic_caps(struct omci_hw_caps *out)
 	out->port_count = 2;
 	out->ani_instance = 0x8001;
 	out->ip_host_count = 1;
+	out->ipv6_host_count = 1;
 	out->sw_committed_image = 0;
 	out->sw_valid_images = 1;
 	out->num_gem_ports = 32;

@@ -20,7 +20,13 @@ downstream, and the optical alarms from the readings of the transceiver,
 whose levels it keeps in the ANI-G. It counts the performance monitoring
 of the Ethernet UNI, the bridge ports, the GEM ports and the downstream FEC
 in fifteen-minute intervals, which Synchronize time places, and raises the
-threshold crossing alerts that the threshold data ask for. It gives the
+threshold crossing alerts that the threshold data ask for. The performance
+monitoring of the IP hosts and of the TCP/UDP ports is kept the same way and
+reads 0, as the stack counts none of what it names. The IPv6 hosts the
+device has are told to the OLT with their addresses, routers, DNS servers and
+prefixes as tables; a change the ONU makes to a table is announced by the
+table's name alone, as G.988 A.3.20 has it, and the OLT reads the rows
+again. It gives the
 kernel the time of day that the OLT sets in the OLT-G, the frame it names and
 the time of that frame, and the switch's PTP clock takes the time at that
 frame; once the kernel took it, omcid tells the time daemon in

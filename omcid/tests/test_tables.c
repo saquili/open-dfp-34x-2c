@@ -190,7 +190,7 @@ static void test_every_table_is_stored_or_rendered(void)
 			other += !table && (is_rendered || is_stored) ? 1u : 0u;
 		}
 	printf("  %u stored, %u rendered\n", stored, rendered);
-	CHECK_EQ(stored, 15u);
+	CHECK_EQ(stored, 19u);
 	CHECK_EQ(rendered, 6u);
 	CHECK_EQ(other, 0u);
 
@@ -309,7 +309,7 @@ static void test_the_stored_tables_fold_rows_by_their_key(void)
 			const struct tsv_attr *a = &t->attrs[n - 1];
 			struct omci_me_table_policy policy;
 
-			if (!a->table ||
+			if (!a->table || !a->write ||
 			    !omci_me_table_policy(t->id, (uint8_t)n, &policy))
 				continue;
 			/* A dial plan is known by one byte: test_the_voice_tables(). */

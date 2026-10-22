@@ -36,6 +36,7 @@
 #class	130	IEEE 802.1p mapper service profile	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.3.10
 #class	131	OLT-G	ONU	8,9	-	-	single instance, number 0	g988:9.12.2
 #class	134	IP host config data	ONU	8,9,18	-	9,10,11,12,13,14,15	one instance for each independent IPv4 stack of the ONU, numbered from 0 upwards as a recommendation; IPv4 and IPv6 host config data instances have separate ids	g988:9.4.1
+#class	135	IP host performance monitoring history data	OLT	4,6,8,9,28	1:IPNPM ICMP error;2:IPNPM DNS error;3:DHCP timeout;4:IP address conflict;5:Out of memory;6:Internal error	-	set by create; the same value as the IP host config data or IPv6 host config data instance it monitors (implicit link)	g988:9.4.2
 #class	136	TCP/UDP config data	OLT	4,6,8,9	-	-	set by create; unique number, recommended to be the port number	g988:9.4.3
 #class	137	Network address	OLT	4,6,8,9	-	-	set by create; 0 to 0x7FFF for instances the ONU creates, 0x8000 to 0xFFFE for those the OLT creates, 0xFFFF is reserved	g988:9.12.3
 #class	138	VoIP config data	ONU	8,9	0:VCD config server name;1:VCD config server reach;2:VCD config server connect;3:VCD config server validate;4:VCD config server auth;5:VCD config server timeout;6:VCD config server fail;7:VCD config file error;8:VCD subscription name;9:VCD subscription reach;10:VCD subscription connect;11:VCD subscription validate;12:VCD subscription auth;13:VCD subscription timeout;14:VCD subscription fail;15:VCD reboot request;16:VCD Notify timeout;17:VCD Notify malformed;18:VCD Notify Rejected	8	single instance, number 0	g988:9.9.18
@@ -78,6 +79,9 @@
 #class	329	Virtual Ethernet interface point	ONU	8,9	0:Connecting function fail	2	first byte the slot, second byte the port	g988:9.5.5
 #class	334	Ethernet frame extended PM	OLT	4,6,8,9,28	1:Drop events;2:CRC errored frames;3:Undersize frames;4:Oversize frames	-	set by create; unique number, from 1 by preference; the control block names the entity monitored	g988:9.3.32
 #class	341	GEM port network CTP performance monitoring history data	OLT	4,6,8,9,28	1:Encryption key errors	-	set by create; the same value as the GEM port network CTP it monitors (implicit link)	g988:9.2.13
+#class	342	TCP/UDP performance monitoring history data	OLT	4,6,8,9,28	1:Socket failed;2:Listen failed;3:Bind failed;4:Accept failed;5:Select failed	-	set by create; the same value as the TCP/UDP config data instance it monitors (implicit link)	g988:9.4.4
+#class	347	IPv6 host config data	ONU	8,9,26	-	9,10,11,14	one instance for each independent IPv6 stack of the ONU, numbered from 0 upwards as a recommendation; IPv4 and IPv6 host config data instances have separate ids	g988:9.4.5
+#class	458	IP host performance monitoring history data part 2	OLT	4,6,8,9,28	0:DHCP response error;1:DHCP response incomplete	-	set by create; the same value as the IP host config data or IPv6 host config data instance it monitors (implicit link)	g988:9.4.6
 2	ONU data	1	MIB data sync	1	R,W	mandatory	no	g988:9.1.3
 5	Cardholder	1	Actual plug-in unit type	1	R	mandatory	no	g988:9.1.5
 5	Cardholder	2	Expected plug-in unit type	1	R,W	mandatory	no	g988:9.1.5
@@ -254,6 +258,14 @@
 134	IP host config data	14	Domain name	25	R	mandatory	no	g988:9.4.1
 134	IP host config data	15	Host name	25	R	mandatory	no	g988:9.4.1
 134	IP host config data	16	Relay agent options	2	R,W	optional	no	g988:9.4.1
+135	IP host performance monitoring history data	1	Interval end time	1	R	mandatory	no	g988:9.4.2
+135	IP host performance monitoring history data	2	Threshold data 1/2 ID	2	R,W,C	mandatory	no	g988:9.4.2
+135	IP host performance monitoring history data	3	ICMP errors	4	R	mandatory	no	g988:9.4.2
+135	IP host performance monitoring history data	4	DNS errors	4	R	mandatory	no	g988:9.4.2
+135	IP host performance monitoring history data	5	DHCP timeouts	2	R	optional	no	g988:9.4.2
+135	IP host performance monitoring history data	6	IP address conflict	2	R	optional	no	g988:9.4.2
+135	IP host performance monitoring history data	7	Out of memory	2	R	optional	no	g988:9.4.2
+135	IP host performance monitoring history data	8	Internal error	2	R	optional	no	g988:9.4.2
 136	TCP/UDP config data	1	Port ID	2	R,W,C	mandatory	no	g988:9.4.3
 136	TCP/UDP config data	2	Protocol	1	R,W,C	mandatory	no	g988:9.4.3
 136	TCP/UDP config data	3	TOS/diffserv field	1	R,W,C	mandatory	no	g988:9.4.3
@@ -648,3 +660,32 @@
 341	GEM port network CTP performance monitoring history data	5	Received payload bytes	8	R	mandatory	no	g988:9.2.13
 341	GEM port network CTP performance monitoring history data	6	Transmitted payload bytes	8	R	mandatory	no	g988:9.2.13
 341	GEM port network CTP performance monitoring history data	7	Encryption key errors	4	R	optional	no	g988:9.2.13
+342	TCP/UDP performance monitoring history data	1	Interval end time	1	R	mandatory	no	g988:9.4.4
+342	TCP/UDP performance monitoring history data	2	Threshold data 1/2 ID	2	R,W,C	mandatory	no	g988:9.4.4
+342	TCP/UDP performance monitoring history data	3	Socket failed	2	R	mandatory	no	g988:9.4.4
+342	TCP/UDP performance monitoring history data	4	Listen failed	2	R	mandatory	no	g988:9.4.4
+342	TCP/UDP performance monitoring history data	5	Bind failed	2	R	mandatory	no	g988:9.4.4
+342	TCP/UDP performance monitoring history data	6	Accept failed	2	R	mandatory	no	g988:9.4.4
+342	TCP/UDP performance monitoring history data	7	Select failed	2	R	mandatory	no	g988:9.4.4
+347	IPv6 host config data	1	IP options	1	R,W	mandatory	no	g988:9.4.5
+347	IPv6 host config data	2	MAC address	6	R	mandatory	no	g988:9.4.5
+347	IPv6 host config data	3	Onu identifier	25	R,W	mandatory	no	g988:9.4.5
+347	IPv6 host config data	4	IPv6 link local address	16	R	mandatory	no	g988:9.4.5
+347	IPv6 host config data	5	IPv6 address	16	R,W	mandatory	no	g988:9.4.5
+347	IPv6 host config data	6	Default router	16	R,W	mandatory	no	g988:9.4.5
+347	IPv6 host config data	7	Primary DNS	16	R,W	mandatory	no	g988:9.4.5
+347	IPv6 host config data	8	Secondary DNS	16	R,W	mandatory	no	g988:9.4.5
+347	IPv6 host config data	9	Current address table	24	R	mandatory	yes	g988:9.4.5
+347	IPv6 host config data	10	Current default router table	16	R	mandatory	yes	g988:9.4.5
+347	IPv6 host config data	11	Current DNS table	16	R	mandatory	yes	g988:9.4.5
+347	IPv6 host config data	12	Dynamic host configuration protocol unique identifier (DUID)	25	R	mandatory	no	g988:9.4.5
+347	IPv6 host config data	13	On-link prefix	17	R,W	optional	no	g988:9.4.5
+347	IPv6 host config data	14	Current on-link prefix table	26	R	optional	yes	g988:9.4.5
+347	IPv6 host config data	15	Relay agent options	2	R,W	optional	no	g988:9.4.5
+458	IP host performance monitoring history data part 2	1	Interval end time	1	R	mandatory	no	g988:9.4.6
+458	IP host performance monitoring history data part 2	2	Threshold data 1/2 ID	2	R,W,C	mandatory	no	g988:9.4.6
+458	IP host performance monitoring history data part 2	3	DHCP Attempts count	4	R	mandatory	no	g988:9.4.6
+458	IP host performance monitoring history data part 2	4	DHCP Acks received count	4	R	mandatory	no	g988:9.4.6
+458	IP host performance monitoring history data part 2	5	DHCP Nacks count	4	R	mandatory	no	g988:9.4.6
+458	IP host performance monitoring history data part 2	6	DHCP response error count	2	R	mandatory	no	g988:9.4.6
+458	IP host performance monitoring history data part 2	7	DHCP response incomplete count	2	R	mandatory	no	g988:9.4.6

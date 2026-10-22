@@ -67,6 +67,7 @@ enum omci_hw_uni_report {
  * @port_count: how many there are
  * @ani_instance: the instance of the ANI-G
  * @ip_host_count: the IP hosts
+ * @ipv6_host_count: the IPv6 hosts, which are numbered after the IP hosts
  * @sw_committed_image: the software image that is committed (0 or 1)
  * @sw_valid_images: the software images that hold valid software, bit n
  *	for image n; the committed image is valid whatever it says
@@ -89,6 +90,7 @@ struct omci_hw_caps {
 
 	uint16_t ani_instance;
 	uint8_t ip_host_count;
+	uint8_t ipv6_host_count;
 	uint8_t sw_committed_image;
 	uint8_t sw_valid_images;
 

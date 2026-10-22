@@ -396,10 +396,40 @@ enum omci_status omci_mib_announce_all(struct omci_mib *mib, uint16_t class_id,
 		if (a == NULL || (a->flags & OMCI_ME_ATTR_AVC) == 0)
 			continue;
 
-		announce(mib, class_id, instance, n,
-			 mib->rows[slot].data + omci_me_attr_offset(cls, n),
-			 a->size);
+		/* The notification of a table names it and holds no rows. */
+		if (omci_me_attr_is_table(a))
+			announce(mib, class_id, instance, n, NULL, 0);
+		else
+			announce(mib, class_id, instance, n,
+				 mib->rows[slot].data +
+					 omci_me_attr_offset(cls, n),
+				 a->size);
 	}
+	return OMCI_OK;
+}
+
+enum omci_status omci_mib_table_changed(struct omci_mib *mib, uint16_t class_id,
+					uint16_t instance, uint8_t attr_no)
+{
+	if (mib == NULL)
+		return OMCI_ERR_INVAL;
+
+	const struct omci_me_class *cls = omci_me_class_by_id(class_id);
+
+	if (cls == NULL)
+		return OMCI_ERR_ME_UNKNOWN;
+	if (find_slot(mib, class_id, instance) == NO_SLOT)
+		return OMCI_ERR_INST_UNKNOWN;
+
+	const struct omci_me_attr *a = omci_me_attr_get(cls, attr_no);
+
+	if (a == NULL)
+		return OMCI_ERR_ATTR_UNKNOWN;
+	if (!omci_me_attr_is_table(a))
+		return OMCI_ERR_INVAL;
+
+	if ((a->flags & OMCI_ME_ATTR_AVC) != 0)
+		announce(mib, class_id, instance, attr_no, NULL, 0);
 	return OMCI_OK;
 }
 

@@ -20,12 +20,15 @@
 #define ME_BRIDGE_PORT 47u
 #define ME_BRIDGE_PORT_PM 52u
 #define ME_ETH_PM_2 89u
+#define ME_IP_HOST_PM 135u
 #define ME_GEM_IW_TP 266u
 #define ME_GEM_CTP 268u
 #define ME_THRESHOLD_1 273u
 #define ME_THRESHOLD_2 274u
 #define ME_MCAST_GEM_IW_TP 281u
 #define ME_ETH_PM_3 296u
+#define ME_TCP_UDP_PM 342u
+#define ME_IP_HOST_PM_2 458u
 #define ME_FEC_PM 312u
 #define ME_ETH_FRAME_PM_DS 321u
 #define ME_ETH_FRAME_PM_US 322u
@@ -314,6 +317,55 @@ static const struct pm_tca g_gem_pm_tca[] = {
 	{ 7u, 1u, 1u },
 };
 
+/*
+ * IP host PM history data (G.988 9.4.2), of the IP host it is linked to. The
+ * host is a Linux stack, which keeps none of these counts.
+ */
+static const struct pm_attr g_ip_host_pm[] = {
+	NONE(3u, "none: the stack keeps no count of ICMP errors by this host"),
+	NONE(4u, "none: the stack keeps no count of DNS errors"),
+	NONE(5u, "none: the stack keeps no count of DHCP timeouts"),
+	NONE(6u, "none: the stack keeps no count of address conflicts"),
+	NONE(7u, "none: the stack keeps no count of failed allocations"),
+	NONE(8u, "none: the stack keeps no count of internal errors"),
+};
+
+static const struct pm_tca g_ip_host_pm_tca[] = {
+	{ 3u, 1u, 1u }, { 4u, 2u, 2u }, { 5u, 3u, 3u },
+	{ 6u, 4u, 4u }, { 7u, 5u, 5u }, { 8u, 6u, 6u },
+};
+
+/* IP host PM history data part 2 (G.988 9.4.6): the DHCP exchanges. */
+static const struct pm_attr g_ip_host_pm_2[] = {
+	NONE(3u, "none: the DHCP client keeps no count of its attempts"),
+	NONE(4u,
+	     "none: the DHCP client keeps no count of the ACKs it received"),
+	NONE(5u,
+	     "none: the DHCP client keeps no count of the NAKs it received"),
+	NONE(6u, "none: the DHCP client keeps no count of faulty responses"),
+	NONE(7u,
+	     "none: the DHCP client keeps no count of incomplete responses"),
+};
+
+static const struct pm_tca g_ip_host_pm_2_tca[] = {
+	{ 6u, 0u, 1u },
+	{ 7u, 1u, 2u },
+};
+
+/* TCP/UDP PM history data (G.988 9.4.4), of the TCP/UDP config data. */
+static const struct pm_attr g_tcp_udp_pm[] = {
+	NONE(3u, "none: the sockets are not counted when they fail to open"),
+	NONE(4u, "none: the sockets are not counted when listening fails"),
+	NONE(5u, "none: the sockets are not counted when binding fails"),
+	NONE(6u, "none: the sockets are not counted when accepting fails"),
+	NONE(7u, "none: the sockets are not counted when selecting fails"),
+};
+
+static const struct pm_tca g_tcp_udp_pm_tca[] = {
+	{ 3u, 1u, 1u }, { 4u, 2u, 2u }, { 5u, 3u, 3u },
+	{ 6u, 4u, 4u }, { 7u, 5u, 5u },
+};
+
 /* How an instance finds what it counts. */
 enum pm_where {
 	AT_UNI,
@@ -323,6 +375,7 @@ enum pm_where {
 	AT_EXTENDED,
 	AT_GEM_PORT,
 	AT_PON,
+	AT_HOST,
 };
 
 /*
@@ -409,6 +462,30 @@ static const struct pm_class g_class[] = {
 		.n = ARRAY_SIZE(g_eth_rx),
 		.tca = g_eth_ext_tca,
 		.ntca = ARRAY_SIZE(g_eth_ext_tca),
+	},
+	{
+		.class_id = ME_IP_HOST_PM,
+		.where = AT_HOST,
+		.rx = g_ip_host_pm,
+		.n = ARRAY_SIZE(g_ip_host_pm),
+		.tca = g_ip_host_pm_tca,
+		.ntca = ARRAY_SIZE(g_ip_host_pm_tca),
+	},
+	{
+		.class_id = ME_TCP_UDP_PM,
+		.where = AT_HOST,
+		.rx = g_tcp_udp_pm,
+		.n = ARRAY_SIZE(g_tcp_udp_pm),
+		.tca = g_tcp_udp_pm_tca,
+		.ntca = ARRAY_SIZE(g_tcp_udp_pm_tca),
+	},
+	{
+		.class_id = ME_IP_HOST_PM_2,
+		.where = AT_HOST,
+		.rx = g_ip_host_pm_2,
+		.n = ARRAY_SIZE(g_ip_host_pm_2),
+		.tca = g_ip_host_pm_2_tca,
+		.ntca = ARRAY_SIZE(g_ip_host_pm_2_tca),
 	},
 	{
 		.class_id = ME_GEM_CTP_PM,
@@ -770,6 +847,8 @@ static void resolve(const struct omci_pm *pm, const struct pm_row *r,
 		if (attr_u16(pm->mib, ME_GEM_CTP, r->instance, GEM_CTP_PORT_ID,
 			     &t->port_id))
 			t->kind = T_GEM;
+		break;
+	case AT_HOST:
 		break;
 	default:
 		t->kind = T_PON;

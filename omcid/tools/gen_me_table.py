@@ -151,8 +151,6 @@ def check_class(c):
     for no in c["avc"]:
         if no not in numbers_:
             raise TableError("%s: the announcing attribute %d does not exist" % (where, no))
-        if numbers_[no]["table"]:
-            raise TableError("%s: attribute %d is a table and cannot announce a change" % (where, no))
     for alarm in c["alarms"]:
         if alarm > 31:
             raise TableError("%s: alarm %d does not fit the alarm mask" % (where, alarm))
@@ -356,6 +354,14 @@ def row_lines(fields, tail):
     lines.append(cur + tail)
     return lines
 
+def wrap_flags(lines):
+    """Break a last line that is wider than 80 columns after its last |, as clang-format does."""
+    last = lines[-1]
+    if len(last.expandtabs(8)) > 80 and " | " in last:
+        head, tail = last.rsplit(" | ", 1)
+        lines = lines[:-1] + [head + " |", "\t\t  " + tail]
+    return lines
+
 def gen_header(classes, digest):
     return HEADER % dict(spdx=SPDX_H, banner=banner(digest, classes))
 
@@ -373,7 +379,7 @@ def gen_source(classes, digest):
             if a["no"] in c["avc"]:
                 flags.append("OMCI_ME_ATTR_AVC")
             fields = [c_string(a["name"]) + ",", "%d," % a["size"], ACCESS[a["access"]] + ",", " | ".join(flags) if flags else "0"]
-            out.append("\n".join(row_lines(fields, " }, /* %d */" % a["no"])) + "\n")
+            out.append("\n".join(wrap_flags(row_lines(fields, " }, /* %d */" % a["no"]))) + "\n")
         out.append("};\n\n")
 
     out.append("const struct omci_me_class omci_me_classes[] = {\n")

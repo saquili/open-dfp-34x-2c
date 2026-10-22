@@ -35,12 +35,18 @@ static const char *const AVC_OPER_STATE =
 	"0000110a010a0101040001000000000000000000000000000000000000000000000000000000000000000028";
 
 enum {
+	ME_VOICE_SERVICE_PROFILE = 58,
 	ME_ANI_G = 263,
 	ME_GEM_IW_TP = 266,
+	ME_IPV6_HOST = 347,
 	ANI_INSTANCE = 0x8001,
 	GEM_INSTANCE = 0x0101,
+	IPV6_INSTANCE = 1,
 	ATTR_ARC = 8,
 	ATTR_OPER = 6,
+	ATTR_ADDRESSES = 9,
+	ATTR_PREFIXES = 14,
+	ATTR_TONES = 10,
 };
 
 static uint8_t nib(char c)
@@ -229,8 +235,96 @@ static void test_the_announcement_names_each_of_the_sixteen_attributes(void)
 	CHECK_EQ((unsigned int)(wire[8] << 8 | wire[9]), 0u);
 }
 
+/* The mask of an announcement and whether the rest of it is empty. */
+static unsigned int mask_of(const uint8_t *frame, bool *empty)
+{
+	*empty = true;
+	for (unsigned int i = 10; i < 40u; i++)
+		if (frame[i] != 0u)
+			*empty = false;
+	return (unsigned int)(frame[8] << 8 | frame[9]);
+}
+
+static void test_a_table_the_onu_changes_is_announced_by_its_name_alone(void)
+{
+	struct omci_t_fixture fx;
+
+	if (!fixture(&fx))
+		return;
+
+	/* One address, with its lifetimes, as the stack holds it. */
+	uint8_t row[24] = { 0x20, 0x01, 0x0d, 0xb8 };
+	bool empty;
+
+	row[15] = 1u;
+	memset(&row[16], 0xff, 8);
+	CHECK_EQ(omci_mib_table_put(fx.mib, ME_IPV6_HOST, IPV6_INSTANCE,
+				    ATTR_ADDRESSES, row, sizeof(row),
+				    sizeof(row), OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	omci_t_tx_reset();
+	CHECK_EQ(omci_mib_table_changed(fx.mib, ME_IPV6_HOST, IPV6_INSTANCE,
+					ATTR_ADDRESSES),
+		 OMCI_OK);
+	CHECK_EQ(omci_t_tx.n, 1u);
+	if (omci_t_tx.n == 1u) {
+		const uint8_t *f = omci_t_tx.frame[0];
+
+		CHECK_EQ(f[2], 17u);
+		CHECK_EQ((unsigned int)(f[4] << 8 | f[5]), ME_IPV6_HOST);
+		CHECK_EQ((unsigned int)(f[6] << 8 | f[7]), IPV6_INSTANCE);
+		CHECK_EQ(mask_of(f, &empty), omci_attr_bit(ATTR_ADDRESSES));
+		CHECK(empty);
+		CHECK(omci_frame_mic_ok(f));
+	}
+
+	/* A table the class does not announce says nothing. */
+	CHECK_EQ(omci_mib_create(fx.mib, ME_VOICE_SERVICE_PROFILE, 0x0abcu),
+		 OMCI_OK);
+	omci_t_tx_reset();
+	CHECK_EQ(omci_mib_table_changed(fx.mib, ME_VOICE_SERVICE_PROFILE,
+					0x0abcu, ATTR_TONES),
+		 OMCI_OK);
+	CHECK_EQ(omci_t_tx.n, 0u);
+
+	/* What cannot be said is refused, and nothing is sent. */
+	CHECK_EQ(omci_mib_table_changed(NULL, ME_IPV6_HOST, IPV6_INSTANCE,
+					ATTR_ADDRESSES),
+		 OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_table_changed(fx.mib, 9999u, IPV6_INSTANCE,
+					ATTR_ADDRESSES),
+		 OMCI_ERR_ME_UNKNOWN);
+	CHECK_EQ(omci_mib_table_changed(fx.mib, ME_IPV6_HOST, 99u,
+					ATTR_ADDRESSES),
+		 OMCI_ERR_INST_UNKNOWN);
+	CHECK_EQ(omci_mib_table_changed(fx.mib, ME_IPV6_HOST, IPV6_INSTANCE,
+					17u),
+		 OMCI_ERR_ATTR_UNKNOWN);
+	CHECK_EQ(omci_mib_table_changed(fx.mib, ME_IPV6_HOST, IPV6_INSTANCE,
+					2u),
+		 OMCI_ERR_INVAL);
+	CHECK_EQ(omci_t_tx.n, 0u);
+
+	/* An announcement of the whole instance names its tables the same way. */
+	omci_t_tx_reset();
+	CHECK_EQ(omci_mib_announce_all(fx.mib, ME_IPV6_HOST, IPV6_INSTANCE),
+		 OMCI_OK);
+	CHECK_EQ(omci_t_tx.n, 4u);
+	if (omci_t_tx.n == 4u) {
+		static const uint8_t tables[4] = { 9, 10, 11, ATTR_PREFIXES };
+
+		for (unsigned int i = 0; i < 4u; i++) {
+			CHECK_EQ(mask_of(omci_t_tx.frame[i], &empty),
+				 omci_attr_bit(tables[i]));
+			CHECK(empty);
+		}
+	}
+	omci_t_down(&fx);
+}
+
 int main(void)
 {
+	RUN(test_a_table_the_onu_changes_is_announced_by_its_name_alone);
 	RUN(test_a_set_the_olt_sends_is_not_announced);
 	RUN(test_a_create_the_olt_sends_is_not_announced);
 	RUN(test_a_change_the_onu_makes_is_announced);

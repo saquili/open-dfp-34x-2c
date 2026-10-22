@@ -202,6 +202,27 @@ omci_mib_attr_set(struct omci_mib *mib, uint16_t class_id, uint16_t instance,
 		  uint8_t attr_no, const void *value, size_t len);
 
 /**
+ * omci_mib_table_changed() - Say that the ONU changed the rows of a table.
+ * @mib: the MIB
+ * @class_id: the class
+ * @instance: the instance
+ * @attr_no: the table attribute
+ *
+ * A table the class announces is reported to the listener of
+ * omci_mib_notify_set() with its name and no rows: the OLT reads them again
+ * with Get and Get Next (G.988 A.3.20). A table whose class does not announce
+ * it is not reported. The caller changes the rows with omci_mib_table_put()
+ * and omci_mib_table_remove() and says so once when it is done.
+ *
+ * Return: %OMCI_OK; %OMCI_ERR_INVAL for an attribute that is no table, or the
+ * error of a class, instance or attribute that is not there.
+ */
+__must_check enum omci_status omci_mib_table_changed(struct omci_mib *mib,
+						     uint16_t class_id,
+						     uint16_t instance,
+						     uint8_t attr_no);
+
+/**
  * omci_mib_attr_set_by_olt() - Change an attribute at the OLT's request.
  * @mib: the MIB
  * @class_id: the class
