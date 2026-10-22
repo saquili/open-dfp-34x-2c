@@ -8,3 +8,12 @@ version = 1
 path = "acl/dhcpc.json"
 SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
 SPDX-License-Identifier = "GPL-2.0-only"
+
+# Monocypher 4.0.2, as released: its files offer the BSD 2-clause licence or
+# CC0 (each names both in its SPDX line), and onu-update takes it under the BSD
+# 2-clause licence.
+[[annotations]]
+path = "third_party/monocypher/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2017-2020 Loup Vaillant"
+SPDX-License-Identifier = "BSD-2-Clause"
