@@ -5,6 +5,7 @@
  * The HTTP API of pond (pond/README.rst), which the panel uses. Every route but /api/health and /api/auth/login needs a session (the cookie pond_sid) or the token of scripts (Authorization: Bearer). A change made in a session carries the header X-Pond. A change that gives root, or that a person checks a connection by, carries root's password in X-Pond-Password as well; five wrong passwords hold every such change, and sign-ins from that address, back for half a minute. Values are read with /api/get/ID and changed with POST /api/set/ID, whose body is KEY=VALUE lines. Over HTTP, every route but /api/health is sent on to HTTPS.
  * OpenAPI spec version: 1
  */
+import type { FirmwareBankSignature } from "./firmwareBankSignature.ts";
 
 /**
  * A bank of the flash as onu-update tells it.
@@ -34,4 +35,19 @@ export interface FirmwareBank {
   kernel_used_b?: number | null;
   /** @nullable */
   rootfs_used_b?: number | null;
+  /**
+   * The SHA-256 of the bank as an update file (onu-update read), in lowercase hex: the digest of update.bin in a release's SHA256SUMS. Null while the stick reads the bank, which it does once after each start and after each write, and for a bank that holds no system of this kind.
+   * @nullable
+   */
+  sha256?: string | null;
+  /**
+   * Its signature (onu-update): valid, made with one of the keys the stick trusts (keys); none, a file without a signature, such as one built from this repository by anyone; unknown, made with a key the stick does not trust; bad, a signature that does not match the file. Null while the stick reads the bank, and for a bank that holds no system of this kind.
+   * @nullable
+   */
+  signature?: FirmwareBankSignature;
+  /**
+   * The name of the key a valid signature was made with.
+   * @nullable
+   */
+  signer?: string | null;
 }

@@ -33,6 +33,9 @@ struct fw_upload {
 	int bank;		/* the bank written, -1 before onu-update says */
 	char version[64];	/* the version written */
 	char message[256];	/* onu-update's last message, when it failed */
+	char sha256[65];	/* the SHA-256 of the file written, in hex */
+	char signature[16];	/* valid, none or unknown: what it is signed with */
+	char signer[64];	/* the key's name, for a valid signature */
 };
 
 extern struct fw_upload fw_upload;

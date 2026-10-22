@@ -7395,6 +7395,34 @@
               "number",
               "null"
             ]
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SHA-256 of the bank as an update file (onu-update read), in lowercase hex: the digest of update.bin in a release's SHA256SUMS. Null while the stick reads the bank, which it does once after each start and after each write, and for a bank that holds no system of this kind."
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "valid",
+              "none",
+              "unknown",
+              "bad",
+              null
+            ],
+            "description": "Its signature (onu-update): valid, made with one of the keys the stick trusts (keys); none, a file without a signature, such as one built from this repository by anyone; unknown, made with a key the stick does not trust; bad, a signature that does not match the file. Null while the stick reads the bank, and for a bank that holds no system of this kind."
+          },
+          "signer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of the key a valid signature was made with."
           }
         },
         "required": [
@@ -7484,6 +7512,33 @@
                   "string",
                   "null"
                 ]
+              },
+              "sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The SHA-256 of the file written, once it is written."
+              },
+              "signature": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "valid",
+                  "none",
+                  "unknown",
+                  "bad",
+                  null
+                ],
+                "description": "The signature of the file written, once it is written; a bad one is not written."
+              },
+              "signer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -7492,8 +7547,36 @@
               "expected_b",
               "bank",
               "version",
-              "message"
+              "message",
+              "sha256",
+              "signature",
+              "signer"
             ]
+          },
+          "keys": {
+            "type": "array",
+            "description": "The keys whose signatures the stick trusts: those of the system that runs.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string",
+                  "description": "The SHA-256 of the raw public key, in lowercase hex, as a signature names its key."
+                },
+                "public": {
+                  "type": "string",
+                  "description": "The raw Ed25519 public key, 32 bytes, in base64."
+                }
+              },
+              "required": [
+                "name",
+                "id",
+                "public"
+              ]
+            }
           }
         },
         "required": [
@@ -7503,7 +7586,8 @@
           "trial",
           "failed",
           "banks",
-          "update"
+          "update",
+          "keys"
         ]
       },
       "Identity": {

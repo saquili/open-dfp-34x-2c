@@ -3118,7 +3118,14 @@ static void test_rules(void)
 	unsetenv("POND_ONU_APPLY");
 }
 
-/* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
+/*
+ * onu-update's stand-in: the status of a stick that runs bank 1 on trial, a
+ * release whose bank it has read, beside an older bank it has not, and the
+ * key it trusts, after a line of a keys file that it left out.
+ */
+/* The SHA-256 and the key id of the stand-in, but their last digit. */
+#define HEX63 "000000000000000000000000000000000000000000000000000000000000000"
+
 static const char update_stub[] =
 	"#!/bin/sh\n"
 	"[ \"$1\" = status ] || exit 2\n"
@@ -3127,11 +3134,14 @@ static const char update_stub[] =
 	"printf 'BANK0_KERNEL_SIZE=1900544\\nBANK0_ROOTFS_SIZE=2031616\\n'\n"
 	"printf 'BANK1_STATE=valid\\nBANK1_VERSION=7c5fba548abc\\nBANK1_TIME=1759800000\\n'\n"
 	"printf 'BANK1_KERNEL_SIZE=1900544\\nBANK1_ROOTFS_SIZE=2031616\\n'\n"
-	"printf 'BANK1_KERNEL_USED=1712345\\nBANK1_ROOTFS_USED=1899954\\n'\n";
+	"printf 'BANK1_KERNEL_USED=1712345\\nBANK1_ROOTFS_USED=1899954\\n'\n"
+	"printf 'BANK1_SHA256=%064d\\nBANK1_SIGNATURE=valid\\nBANK1_SIGNER=releases, key 1\\n' 7\n"
+	"echo 'onu-update: /etc/onu-update.keys, line 3: not \"ed25519 KEY NAME\": left out'\n"
+	"printf 'KEY=%064d ymQRzCIep8hRSylvaFxCgLjX9aMRXjZlDMo6Qa4FQjs= releases, key 1\\n' 5\n";
 
 static void test_firmware(void)
 {
-	char buf[2048], stub[512];
+	char buf[4096], stub[512];
 	const char *s;
 	int err;
 
@@ -3146,12 +3156,19 @@ static void test_firmware(void)
 	check(strstr(s, "{\"bank\":1,\"state\":\"valid\",\"version\":\"7c5fba548abc\","
 			"\"time\":1759800000,\"kernel_size_b\":1900544,"
 			"\"rootfs_size_b\":2031616,\"kernel_used_b\":1712345,"
-			"\"rootfs_used_b\":1899954}") != NULL,
-	      "each bank, with its version, time, sizes and what its images use");
+			"\"rootfs_used_b\":1899954,\"sha256\":\"" HEX63 "7\","
+			"\"signature\":\"valid\",\"signer\":\"releases, key 1\"}") != NULL,
+	      "each bank, with its version, time, sizes, what its images use, SHA-256 and signature");
 	check(strstr(s, "\"rootfs_size_b\":2031616,\"kernel_used_b\":null,"
-			"\"rootfs_used_b\":null}") != NULL,
-	      "a bank whose use onu-update does not give has none");
-	check(strstr(s, "\"update\":{\"state\":\"idle\",\"received_b\":0") != NULL,
+			"\"rootfs_used_b\":null,\"sha256\":null,\"signature\":null,"
+			"\"signer\":null}") != NULL,
+	      "a bank whose use and reading onu-update does not give has none");
+	check(strstr(s, "\"keys\":[{\"name\":\"releases, key 1\",\"id\":\"" HEX63 "5\","
+			"\"public\":\"ymQRzCIep8hRSylvaFxCgLjX9aMRXjZlDMo6Qa4FQjs=\"}]") != NULL,
+	      "the keys the stick trusts, and no line of onu-update's complaint");
+	check(strstr(s, "\"update\":{\"state\":\"idle\",\"received_b\":0") != NULL &&
+		      strstr(s, "\"message\":null,\"sha256\":null,\"signature\":null,"
+				"\"signer\":null}") != NULL,
 	      "no update under way");
 
 	setenv("POND_ONU_UPDATE", "/nonexistent/onu-update", 1);

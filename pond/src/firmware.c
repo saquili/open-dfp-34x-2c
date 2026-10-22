@@ -85,6 +85,9 @@ static void read_said(const char *text)
 	if (fw_field(text, "BANK", bank, sizeof(bank)))
 		fw_upload.bank = atoi(bank);
 	fw_field(text, "VERSION", fw_upload.version, sizeof(fw_upload.version));
+	fw_field(text, "SHA256", fw_upload.sha256, sizeof(fw_upload.sha256));
+	fw_field(text, "SIGNATURE", fw_upload.signature, sizeof(fw_upload.signature));
+	fw_field(text, "SIGNER", fw_upload.signer, sizeof(fw_upload.signer));
 	first = strstr(text, tag);
 	for (p = first; p; p = strstr(p + 1, tag))
 		last = p;

@@ -2,9 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The value "firmware": the two banks as onu-update tells them, which bank
- * runs, which the boot loader starts next, a trial under way or one that
- * failed, and the upload of firmware.c.
+ * The value "firmware": the two banks as onu-update tells them, with the
+ * SHA-256 and the signature of each once it has read them, which bank runs,
+ * which the boot loader starts next, a trial under way or one that failed,
+ * the keys whose signatures the stick trusts, and the upload of firmware.c.
  */
 
 #include "bus.h"
@@ -93,6 +94,65 @@ static void pv_field_str(struct prov_buf *out, const char *text, const char *key
 		pv_null(out);
 }
 
+/* A text of the upload, or null while it is empty. */
+static void pv_text(struct prov_buf *out, const char *text)
+{
+	if (text[0])
+		pv_str(out, text);
+	else
+		pv_null(out);
+}
+
+/*
+ * The keys of the status's KEY= lines, each "ID KEY NAME": the SHA-256 of the
+ * raw public key in hex, the key in base64, and its name.
+ */
+static void pv_keys(struct prov_buf *out, const char *text)
+{
+	const char *p;
+	bool first = true;
+
+	pv_open(out, '[');
+	for (p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		char line[256], *id, *key, *name, *end;
+		size_t len;
+
+		if (strncmp(p, "KEY=", 4))
+			continue;
+		len = strcspn(p + 4, "\n");
+		if (len >= sizeof(line))
+			continue;
+		memcpy(line, p + 4, len);
+		line[len] = '\0';
+		id = line;
+		key = strchr(id, ' ');
+		if (!key)
+			continue;
+		*key++ = '\0';
+		name = strchr(key, ' ');
+		if (!name)
+			continue;
+		*name++ = '\0';
+		end = name + strlen(name);
+		if (strlen(id) != 64 || !*key || name == end)
+			continue;
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "name");
+		pv_str(out, name);
+		pv_comma(out);
+		pv_key(out, "id");
+		pv_str(out, id);
+		pv_comma(out);
+		pv_key(out, "public");
+		pv_str(out, key);
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
 static const char *const state_name[] = {
 	[FW_IDLE] = "idle",
 	[FW_RECEIVING] = "receiving",
@@ -104,7 +164,7 @@ static const char *const state_name[] = {
 int prov_firmware(struct prov_buf *out)
 {
 	static const char *const args[] = { "status", NULL };
-	static char text[2048];
+	static char text[4096];
 	int rc = fw_run(args, NULL, text, sizeof(text)), bank;
 
 	if (rc < 0)
@@ -166,9 +226,24 @@ int prov_firmware(struct prov_buf *out)
 		pv_key(out, "rootfs_used_b");
 		snprintf(key, sizeof(key), "BANK%d_ROOTFS_USED", bank);
 		pv_field_num(out, text, key);
+		pv_comma(out);
+		pv_key(out, "sha256");
+		snprintf(key, sizeof(key), "BANK%d_SHA256", bank);
+		pv_field_str(out, text, key);
+		pv_comma(out);
+		pv_key(out, "signature");
+		snprintf(key, sizeof(key), "BANK%d_SIGNATURE", bank);
+		pv_field_str(out, text, key);
+		pv_comma(out);
+		pv_key(out, "signer");
+		snprintf(key, sizeof(key), "BANK%d_SIGNER", bank);
+		pv_field_str(out, text, key);
 		pv_close(out, '}');
 	}
 	pv_close(out, ']');
+	pv_comma(out);
+	pv_key(out, "keys");
+	pv_keys(out, text);
 	pv_comma(out);
 	pv_key(out, "update");
 	pv_open(out, '{');
@@ -194,10 +269,16 @@ int prov_firmware(struct prov_buf *out)
 		pv_null(out);
 	pv_comma(out);
 	pv_key(out, "message");
-	if (fw_upload.message[0])
-		pv_str(out, fw_upload.message);
-	else
-		pv_null(out);
+	pv_text(out, fw_upload.message);
+	pv_comma(out);
+	pv_key(out, "sha256");
+	pv_text(out, fw_upload.sha256);
+	pv_comma(out);
+	pv_key(out, "signature");
+	pv_text(out, fw_upload.signature);
+	pv_comma(out);
+	pv_key(out, "signer");
+	pv_text(out, fw_upload.signer);
 	pv_close(out, '}');
 	pv_close(out, '}');
 	return 0;

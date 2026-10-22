@@ -20,6 +20,7 @@ function firmware(over: Partial<Firmware> = {}): Firmware {
     next: 0,
     trial: null,
     failed: null,
+    keys: [],
     banks: [
       {
         bank: 0,
@@ -45,6 +46,9 @@ function firmware(over: Partial<Firmware> = {}): Firmware {
       bank: null,
       version: null,
       message: null,
+      sha256: null,
+      signature: null,
+      signer: null,
     },
     ...over,
   };

@@ -36,6 +36,8 @@ export type {
   FdbEntry,
   Firmware,
   FirmwareBank,
+  FirmwareBankSignature,
+  FirmwareKeysItem,
   FixedInfo,
   ForwardInfo,
   FwDefaults,

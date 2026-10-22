@@ -6,6 +6,7 @@
  * OpenAPI spec version: 1
  */
 import type { FirmwareBank } from "./firmwareBank.ts";
+import type { FirmwareKeysItem } from "./firmwareKeysItem.ts";
 import type { FirmwareUpdate } from "./firmwareUpdate.ts";
 
 /**
@@ -30,4 +31,6 @@ export interface Firmware {
   failed: number | null;
   banks: FirmwareBank[];
   update: FirmwareUpdate;
+  /** The keys whose signatures the stick trusts: those of the system that runs. */
+  keys: FirmwareKeysItem[];
 }

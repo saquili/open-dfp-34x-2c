@@ -557,6 +557,17 @@ export const LIVE: Live = {
   },
 };
 
+/*
+ * The key the mock's releases are signed with, made for the mock alone: its
+ * private half signs the sample files of the panel's tests, and no stick
+ * trusts it.
+ */
+export const MOCK_KEY = {
+  name: "open-dfp-34x-2c release (mock)",
+  id: "9640d0bbdb2988fdbb765679bca6fc6baf58f7fbc23844f344486bc01c5d539a",
+  public: "DnPCSItncIJ4Af5lC83YJM8gRSeHxQT/1gBVUMch9vI=",
+};
+
 export const FIRMWARE: Firmware = {
   running: 0,
   committed: 0,
@@ -573,6 +584,9 @@ export const FIRMWARE: Firmware = {
       rootfs_size_b: 2031616,
       kernel_used_b: 1712044,
       rootfs_used_b: 1899954,
+      sha256: "d28c07e761c650fe354352a15809709860a2d5995a0841ce2c5fc2a1f490d938",
+      signature: "valid",
+      signer: MOCK_KEY.name,
     },
     {
       bank: 1,
@@ -583,9 +597,23 @@ export const FIRMWARE: Firmware = {
       rootfs_size_b: 2031616,
       kernel_used_b: 1709210,
       rootfs_used_b: 1886208,
+      sha256: "a380c6c272e750c3bcda2f4216b372e589476f2b4d1f2d36b10c369e0552f071",
+      signature: "none",
+      signer: null,
     },
   ],
-  update: { state: "idle", received_b: 0, expected_b: 0, bank: null, version: null, message: null },
+  keys: [MOCK_KEY],
+  update: {
+    state: "idle",
+    received_b: 0,
+    expected_b: 0,
+    bank: null,
+    version: null,
+    message: null,
+    sha256: null,
+    signature: null,
+    signer: null,
+  },
 };
 
 /* The panel's certificate at the address of the mock, made up. */
