@@ -892,7 +892,8 @@ static bool version_taken(const struct omci_mcast *m,
 }
 
 /*
- * Count and note each record of a message of the subscriber side. Return:
+ * Count and note each record of a message of the subscriber side, but not
+ * of a group of the link. Return:
  * whether the message goes upstream: one that leaves a group or has a join
  * that was allowed; one whose joins were all refused only when the profile
  * forwards an unauthorized join request (G.988 9.3.27); none of a version
@@ -921,6 +922,13 @@ static bool heard(struct omci_mcast *m, const struct omci_mcast_report *r,
 		enum verdict v;
 		char text[40];
 
+		/*
+		 * A group of the link (omci_mcast_group_link_local()) is
+		 * nobody's channel: the router's and the hosts' own groups are
+		 * not judged, counted or told to the OLT.
+		 */
+		if (omci_mcast_group_link_local(rec->group))
+			continue;
 		if (!rec->join) {
 			leave(m, rec->group, rec->source, r->client);
 			m->tally.leaves++;
@@ -1447,7 +1455,7 @@ static bool look(struct omci_mcast *m)
 		enum verdict v;
 		char text[40];
 
-		if (g[i].permanent)
+		if (g[i].permanent || omci_mcast_group_link_local(g[i].group))
 			continue;
 		for (size_t j = 0; j < m->n_active; j++)
 			if (same_channel(&m->active[j], g[i].group,

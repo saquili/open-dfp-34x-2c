@@ -67,6 +67,16 @@ bool omci_mcast_addr_v4(const uint8_t addr[static OMCI_MCAST_ADDR_LEN])
 	return addr[V4_ZEROS] == 0xffu && addr[V4_ZEROS + 1] == 0xffu;
 }
 
+bool omci_mcast_group_link_local(const uint8_t group[static OMCI_MCAST_ADDR_LEN])
+{
+	if (omci_mcast_addr_v4(group))
+		return group[V4_AT] == 224u && group[V4_AT + 1] == 0u &&
+		       group[V4_AT + 2] == 0u;
+
+	return group[0] == 0xffu && (group[1] & 0x0fu) >= 1u &&
+	       (group[1] & 0x0fu) <= 2u;
+}
+
 void omci_mcast_addr_set_v4(uint8_t addr[static OMCI_MCAST_ADDR_LEN],
 			    const uint8_t v4[static 4])
 {

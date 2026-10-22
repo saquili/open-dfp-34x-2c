@@ -81,6 +81,22 @@ __must_check bool
 omci_mcast_addr_v4(const uint8_t addr[static OMCI_MCAST_ADDR_LEN]);
 
 /**
+ * omci_mcast_group_link_local() - Whether a group never leaves its link.
+ * @group: the group
+ *
+ * The groups of the local network control block of IPv4 (224.0.0.0/24, RFC
+ * 5771) and those of IPv6 whose scope is the interface or the link (ff01
+ * and ff02, RFC 4291) are for the hosts of one link: routers, neighbour
+ * discovery, the queries themselves. A snooping bridge floods them and a
+ * proxy neither takes them in nor reports them (RFC 4541 2.1.2), for they
+ * are no channel that anyone watches.
+ *
+ * Return: true for such a group.
+ */
+__must_check bool
+omci_mcast_group_link_local(const uint8_t group[static OMCI_MCAST_ADDR_LEN]);
+
+/**
  * omci_mcast_addr_set_v4() - Make an address of an IPv4 address.
  * @addr: the address
  * @v4: the four bytes of the IPv4 address

@@ -2945,6 +2945,80 @@ static void test_the_panel_follows_the_groups(void)
 	down();
 }
 
+/* The groups of a link are the router's and the hosts' own, not channels. */
+static void test_the_groups_of_the_link_are_no_channels(void)
+{
+	static const uint8_t client6[16] = { 0xfe, 0x80, 0, 0, 0, 0, 0, 0,
+					     0,	   0,	 0, 0, 0, 0, 0, 2 };
+	static const uint8_t routers6[16] = { 0xff, 0x02, 0, 0, 0, 0, 0, 0,
+					      0,    0,	  0, 0, 0, 0, 0, 2 };
+	static const uint8_t solicited6[16] = { 0xff, 0x02, 0,	  0,   0, 0,
+						0,    0,    0,	  0,   0, 1,
+						0xff, 0xd0, 0x60, 0x9b };
+	static const uint8_t site6[16] = { 0xff, 0x05, 0, 0, 0, 0, 0, 0,
+					   0,	 0,    0, 0, 0, 1, 0, 3 };
+	struct omci_hw_mcast_group g6 = { .vid = 0 };
+	uint8_t f[160], a[16];
+
+	/* The address test itself. */
+	a4(a, IP4(224, 0, 0, 1));
+	CHECK(omci_mcast_group_link_local(a));
+	a4(a, IP4(224, 0, 0, 255));
+	CHECK(omci_mcast_group_link_local(a));
+	a4(a, IP4(224, 0, 1, 1));
+	CHECK(!omci_mcast_group_link_local(a));
+	a4(a, IP4(223, 255, 255, 255));
+	CHECK(!omci_mcast_group_link_local(a));
+	a4(a, IP4(232, 0, 18, 103));
+	CHECK(!omci_mcast_group_link_local(a));
+	CHECK(omci_mcast_group_link_local(routers6));
+	CHECK(omci_mcast_group_link_local(solicited6));
+	CHECK(!omci_mcast_group_link_local(site6));
+	CHECK(!omci_mcast_group_link_local(client6));
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* A router's groups, whatever the list says: not judged, counted, listed or refused. */
+	join(IP4(10, 0, 0, 2), IP4(224, 0, 0, 2), -1);
+	join(IP4(10, 0, 0, 2), IP4(224, 0, 0, 22), -1);
+	send(f, mld(f, -1, 143u, client6, routers6, 4u));
+	memcpy(g6.group, routers6, 16);
+	omci_hw_mcast_snoop(&g6, true);
+	omci_mcast_service(g_m, g_mib, g_now);
+	send(f, mld(f, -1, 143u, client6, solicited6, 4u));
+	memcpy(g6.group, solicited6, 16);
+	omci_hw_mcast_snoop(&g6, true);
+	omci_mcast_service(g_m, g_mib, g_now);
+	send(f, igmp(f, -1, 0x17u, IP4(10, 0, 0, 2), IP4(224, 0, 0, 2)));
+	omci_mcast_service(g_m, g_mib, g_now);
+
+	CHECK_EQ(get32(311, PORT, 3), 0u);
+	CHECK_EQ(listed(PORT, false), 0u);
+	CHECK_EQ(listed(PORT, true), 0u);
+	CHECK(shows("\"rejected\":[]"));
+	CHECK(shows("\"log\":[]"));
+	CHECK(shows("\"counters\":{\"joins\":0,\"leaves\":0,\"rejected\":0,"));
+
+	/* The bridge keeps flooding them, and nothing of them goes to the OLT. */
+	CHECK(held(IP4(224, 0, 0, 2)));
+	CHECK(held(IP4(224, 0, 0, 22)));
+	CHECK_EQ(sent_count(), 0u);
+
+	/* A group beside them, and one of the next block of IPv4, are judged as ever. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	join(IP4(10, 0, 0, 2), IP4(224, 0, 1, 1), -1);
+	CHECK(held(IP4(239, 1, 1, 5)));
+	CHECK(!held(IP4(224, 0, 1, 1)));
+	CHECK_EQ(get32(311, PORT, 3), 1u);
+	CHECK(shows("\"rejected\":[{"));
+	down();
+}
+
 static void test_the_panel_keeps_the_latest(void)
 {
 	up();
@@ -3201,6 +3275,7 @@ int main(void)
 	RUN(test_frames_that_are_not_messages_are_refused);
 	RUN(test_without_a_policy_every_group_is_allowed);
 	RUN(test_the_access_control_list_decides);
+	RUN(test_the_groups_of_the_link_are_no_channels);
 	RUN(test_the_limits_of_groups_and_bandwidth);
 	RUN(test_service_packages_go_by_the_vlan);
 	RUN(test_previews);

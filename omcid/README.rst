@@ -54,7 +54,9 @@ groups; under such a policy it sends the subscriber's IGMP and MLD
 upstream itself, a refused join held back, with the profile's tag and
 rate, and gives multicast the profile's downstream tag; and it reports
 the active groups and the join counts, and the groups whose stream
-stopped, with the lost multicast group alarm. With the profile's IGMP
+stopped, with the lost multicast group alarm. The groups of a link, 224.0.0.0/24 of IPv4 and the
+scopes 1 and 2 of IPv6, which are the routers' and hosts' own, are left alone:
+not judged, counted or told to the OLT. With the profile's IGMP
 function at 1 or 2 it speaks for the subscribers to the OLT instead
 (`The multicast proxy`_). A local control socket lets tools read the MIB,
 follow the frames and see what became of each VLAN rule.
