@@ -86,11 +86,20 @@ IMAGE_ENFORCE ?= k0 r0
 # are copied and built again at every build.
 LOCAL_PACKAGES = omcid onu-utils pppoed dhcp6d timed pond netifd
 
+# The time of the images: that of the commit they are built from, which their
+# version names (post-build.sh), so that the kernel image, the root filesystem
+# and the update file say when their source was committed, and two builds of
+# one commit stay alike. Outside a git checkout, or when SOURCE_DATE_EPOCH is
+# given, the build system keeps its own: the time given, or the date of its
+# release.
+IMAGE_TIME = t=$${SOURCE_DATE_EPOCH:-$$(git -C "$(CURDIR)" log -1 --format=%ct 2>/dev/null)} && \
+	if [ -n "$$t" ]; then export SOURCE_DATE_EPOCH="$$t"; fi &&
+
 # The kernel of the flash names no function in its reports (it is built without
 # KALLSYMS, which only a RAM boot carries), so the symbols of the kernel in
 # k0.uImage go beside it, k0.System.map, to read the addresses of a report by.
 image:
-	$(BR2_ENV) $(TOOLCHAIN_ENV) $(IMAGE_CONFIG) && \
+	$(IMAGE_TIME) $(BR2_ENV) $(TOOLCHAIN_ENV) $(IMAGE_CONFIG) && \
 	if [ "$$(cat "$(IMAGE_OUT)/.kernel-archive" 2>/dev/null)" != "$$OPEN_DFP_34X_2C_KERNEL_ARCHIVE" ]; then \
 	  make -C "$(IMAGE_OUT)" linux-dirclean linux-headers-dirclean && \
 	  echo "$$OPEN_DFP_34X_2C_KERNEL_ARCHIVE" > "$(IMAGE_OUT)/.kernel-archive"; \
