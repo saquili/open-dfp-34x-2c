@@ -168,6 +168,7 @@ def main():
     downloads(pond, os.path.dirname(key), token)
     own_file(pond, os.path.dirname(key), sys.argv[3])
     servers_keys(pond, os.path.dirname(key), sys.argv[3])
+    slow_flash(pond, os.path.dirname(key))
     sessions_and_token(pond, os.path.dirname(key))
 
 
@@ -781,6 +782,50 @@ def downloads(pond, workdir, token):
         proc.wait(5)
         if os.path.exists(system):
             os.unlink(system)
+
+
+def slow_flash(pond, workdir):
+    """An update file sent over HTTPS faster than the flash takes it: onu-update
+    erases the bank first and reads nothing for two seconds, as on the stick,
+    and the daemon holds the sender back by TCP rather than gather more than it
+    holds, which ended the connection after 256 KiB (2026-10-22)."""
+    print("an update file over HTTPS, faster than the flash takes it")
+    d = os.path.join(workdir, "flash")
+    os.makedirs(d, exist_ok=True)
+    for name in os.listdir(d):
+        os.unlink(os.path.join(d, name))
+    stub, update, keyf = (os.path.join(d, n) for n in ("stub", "onu-update", "tls.key"))
+    written = os.path.join(d, "written")
+    write(keyf, KEY + "\n")
+    write(stub, stub_text(d))
+    write(update, "#!/bin/sh\n[ \"$1\" = write ] || exit 2\nsleep 2\n"
+          f"cat >{written}\necho BANK=1\necho VERSION=2026.10.22-0000\n")
+    for f in (stub, update):
+        os.chmod(f, 0o755)
+    env = dict(os.environ, POND_ONU_CONFIG=stub, POND_ONU_UPDATE=update)
+    proc = subprocess.Popen([pond, "-l", f"https://127.0.0.1:{HTTPS}", "-k", keyf,
+                             "-t", "/tls-token"], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    body = os.urandom(3 << 20)
+    try:
+        if not started(proc, HTTPS):
+            check(False, "the daemon listens")
+            return
+        conn = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=60)
+        try:
+            status, _, reply = request(conn, "POST", "/api/firmware/upload", body,
+                                       {"Authorization": f"Bearer {TOKEN}", CONFIRM: ROOT,
+                                        "Content-Type": "application/octet-stream"})
+        except OSError as e:
+            status, reply = 0, str(e).encode()
+        conn.close()
+        got = os.path.getsize(written) if os.path.exists(written) else 0
+        check(status == 200 and b'"ok":true' in reply and got == len(body),
+              f"3 MiB, onu-update reading after 2 s: HTTP {status}, {got} of {len(body)} B "
+              "written")
+    finally:
+        proc.terminate()
+        proc.wait(5)
 
 
 def slow_change(pond, workdir):

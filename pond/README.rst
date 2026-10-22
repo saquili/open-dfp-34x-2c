@@ -198,7 +198,13 @@ CertificateVerify message is encoded as DER asks, without the leading zeros
 that made OpenSSL, and BoringSSL with it, refuse about one handshake in 128;
 a malformed key ends the connection rather than leaving it a key of the
 wrong bytes; and the Certificate message carries each certificate of a
-chain as an entry of its own, where it sent the chain as one.
+chain as an entry of its own, where it sent the chain as one. Its poll loop
+is changed in one more: a TLS connection whose reading is held back
+(``is_full``) is no longer read on for the TLS data it has already taken in.
+Before, an update file sent over HTTPS faster than the flash takes it went
+on into the connection's buffer while onu-update erased the bank, until the
+buffer's limit of 256 KiB ended the connection, and the panel said "Not
+written" (2026-10-22, through the router's nginx and from a phone alike).
 
 Routes
 ======

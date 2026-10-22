@@ -2,11 +2,12 @@
 // SPDX-FileCopyrightText: 2014-2015 Kenneth MacKay
 // Vendored from Cesanta mongoose 7.16, taken under the GPL-2.0 arm of its
 // dual licence. Changed, apart from this header, in four places of its
-// built-in TLS, each marked "open-dfp-34x-2c": the signature of the
-// CertificateVerify message is DER as RFC 8446 asks, a malformed EC key ends
-// the connection rather than lending it 32 bytes of the wrong place as its
-// key, ChaCha20 takes the byte order from the compiler, and the Certificate
-// message carries each certificate of a chain as an entry. Mongoose holds
+// built-in TLS and in its poll loop, each marked "open-dfp-34x-2c": the
+// signature of the CertificateVerify message is DER as RFC 8446 asks, a
+// malformed EC key ends the connection rather than lending it 32 bytes of the
+// wrong place as its key, ChaCha20 takes the byte order from the compiler,
+// the Certificate message carries each certificate of a chain as an entry,
+// and a TLS connection that is_full holds back reads no more. Mongoose holds
 // micro-ecc by Kenneth MacKay (its tls_uecc parts), under the BSD 2-clause
 // licence, whose notice a binary keeps too (LICENSES/preferred/BSD-2-Clause.txt).
 // Copyright (c) 2004-2013 Sergey Lyubka
@@ -8226,6 +8227,9 @@ static bool skip_iotest(const struct mg_connection *c) {
 }
 
 static void mg_iotest(struct mg_mgr *mgr, int ms) {
+  // open-dfp-34x-2c: TLS data already read is read on only while the
+  // connection may read; is_full held back no TLS connection before, which
+  // then read on until MG_MAX_RECV_SIZE and was ended
 #if MG_ENABLE_FREERTOS_TCP
   struct mg_connection *c;
   for (c = mgr->conns; c != NULL; c = c->next) {
@@ -8249,7 +8253,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
   size_t max = 1;
   for (struct mg_connection *c = mgr->conns; c != NULL; c = c->next) {
     c->is_readable = c->is_writable = 0;
-    if (c->rtls.len > 0 || mg_tls_pending(c) > 0) ms = 1, c->is_readable = 1;
+    if (can_read(c) && (c->rtls.len > 0 || mg_tls_pending(c) > 0)) ms = 1, c->is_readable = 1;
     if (can_write(c)) MG_EPOLL_MOD(c, 1);
     if (c->is_closing) ms = 1;
     max++;
@@ -8265,7 +8269,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
       bool wr = evs[i].events & EPOLLOUT;
       c->is_readable = can_read(c) && rd ? 1U : 0;
       c->is_writable = can_write(c) && wr ? 1U : 0;
-      if (c->rtls.len > 0 || mg_tls_pending(c) > 0) c->is_readable = 1;
+      if (can_read(c) && (c->rtls.len > 0 || mg_tls_pending(c) > 0)) c->is_readable = 1;
     }
   }
   (void) skip_iotest;
@@ -8282,7 +8286,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
       // Socket not valid, ignore
     } else {
       // Don't wait if TLS is ready
-      if (c->rtls.len > 0 || mg_tls_pending(c) > 0) ms = 1;
+      if (can_read(c) && (c->rtls.len > 0 || mg_tls_pending(c) > 0)) ms = 1;
       fds[n].fd = FD(c);
       if (can_read(c)) fds[n].events |= POLLIN;
       if (can_write(c)) fds[n].events |= POLLOUT;
@@ -8308,7 +8312,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
         c->is_readable =
             (unsigned) (fds[n].revents & (POLLIN | POLLHUP) ? 1 : 0);
         c->is_writable = (unsigned) (fds[n].revents & POLLOUT ? 1 : 0);
-        if (c->rtls.len > 0 || mg_tls_pending(c) > 0) c->is_readable = 1;
+        if (can_read(c) && (c->rtls.len > 0 || mg_tls_pending(c) > 0)) c->is_readable = 1;
       }
       n++;
     }
@@ -8330,7 +8334,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
     FD_SET(FD(c), &eset);
     if (can_read(c)) FD_SET(FD(c), &rset);
     if (can_write(c)) FD_SET(FD(c), &wset);
-    if (c->rtls.len > 0 || mg_tls_pending(c) > 0) tvp = &tv_zero;
+    if (can_read(c) && (c->rtls.len > 0 || mg_tls_pending(c) > 0)) tvp = &tv_zero;
     if (FD(c) > maxfd) maxfd = FD(c);
     if (c->is_closing) tvp = &tv_zero;
   }
@@ -8352,7 +8356,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
     } else {
       c->is_readable = FD(c) != MG_INVALID_SOCKET && FD_ISSET(FD(c), &rset);
       c->is_writable = FD(c) != MG_INVALID_SOCKET && FD_ISSET(FD(c), &wset);
-      if (c->rtls.len > 0 || mg_tls_pending(c) > 0) c->is_readable = 1;
+      if (can_read(c) && (c->rtls.len > 0 || mg_tls_pending(c) > 0)) c->is_readable = 1;
     }
   }
 #endif
