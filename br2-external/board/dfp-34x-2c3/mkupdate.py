@@ -4,7 +4,7 @@
 """mkupdate.py: pack a kernel image and a root filesystem image into an
 update file, which the stick's onu-update writes into one bank of its flash.
 
-Usage: mkupdate.py --board BOARD --version VERSION --time SECONDS
+Usage: mkupdate.py --board BOARD --version VERSION [--time SECONDS]
                    KERNEL ROOTFS OUTPUT
 
 The format is that of onu-utils/src/update.h: a header of 256 bytes, the
@@ -12,8 +12,12 @@ kernel image, the root filesystem image, and the SHA-256 of the three. The
 header, its integers big-endian, holds the magic "ONUF", the format version 1,
 its own length, the lengths of the two images, flags 0, the time of the build,
 the board and the version as NUL-padded texts of 64 bytes, zeros, and at 252
-the CRC32 of the bytes before it. The output is written under a name of its
+the CRC32 of the bytes before it. The time is the kernel image's own, that
+of its uImage header, unless --time names another: onu-update read takes it
+from there when it gives a bank back as an update file, which is then the
+file that went in, byte for byte. The output is written under a name of its
 own and renamed, so that an error never leaves half a file under its name.
+A release is signed afterwards (signupdate.py).
 """
 
 import argparse
@@ -47,7 +51,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--board", required=True)
     parser.add_argument("--version", required=True)
-    parser.add_argument("--time", required=True, type=int)
+    parser.add_argument("--time", type=int)
     parser.add_argument("kernel")
     parser.add_argument("rootfs")
     parser.add_argument("output")
@@ -59,10 +63,11 @@ def main(argv=None):
         rootfs = handle.read()
     if kernel[:4] != b"\x27\x05\x19\x56":
         sys.exit(f"mkupdate: {args.kernel} is not a uImage")
+    time = args.time if args.time is not None else struct.unpack(">I", kernel[8:12])[0]
     if rootfs[:4] != b"hsqs":
         sys.exit(f"mkupdate: {args.rootfs} is not a SquashFS image")
     try:
-        head = header(len(kernel), len(rootfs), args.time, args.board, args.version)
+        head = header(len(kernel), len(rootfs), time, args.board, args.version)
     except ValueError as err:
         sys.exit(f"mkupdate: {err}")
 

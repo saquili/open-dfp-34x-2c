@@ -19,7 +19,8 @@
 #                writes into the bank it did not start from: made by
 #                mkupdate.py, with the board, the version (VERSION_ID of the
 #                image's /etc/os-release, or BUILD_ID where it has none) and
-#                the build's time in its header
+#                the kernel image's time in its header; a release signs it
+#                afterwards (signupdate.py, .github/workflows/release.yml)
 #   web-install.tar
 #                the two in the package that the web page of the stick's
 #                shipped firmware installs into the bank it did not start
@@ -110,7 +111,7 @@ version=$(sed -n 's/^VERSION_ID=//p' "$root/etc/os-release" 2>/dev/null || true)
 [ -n "$version" ] || version=$(sed -n 's/^BUILD_ID=//p' "$root/etc/os-release" 2>/dev/null || true)
 [ -n "$version" ] || die "no VERSION_ID or BUILD_ID in $root/etc/os-release"
 "$python" "$(dirname "$0")/mkupdate.py" --board "$board" --version "$version" \
-	--time "$epoch" "$images/k0.uImage" "$images/r0.squashfs" "$images/update.bin" ||
+	"$images/k0.uImage" "$images/r0.squashfs" "$images/update.bin" ||
 	die "mkupdate.py failed"
 "$python" "$(dirname "$0")/mkweb.py" --version "$version" --time "$epoch" \
 	"$images/k0.uImage" "$images/r0.squashfs" "$images/web-install.tar" ||

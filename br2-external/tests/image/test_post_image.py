@@ -26,6 +26,9 @@ FINISH = os.path.join(BOARD, "finish-root.sh")
 SHADOW = "root::::::::\ndaemon:*:::::::\n"
 REAL_MKSQUASHFS = shutil.which("mksquashfs")
 EPOCH = "1747000000"
+# The time in the kernel image's header, which the update file's header takes,
+# so that onu-update read gives a bank back as the file that went in.
+KERNEL_TIME = 1234560000
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 STUB = """\
@@ -58,7 +61,9 @@ class Scratch(unittest.TestCase):
             handle.write("NAME=test\nBUILD_ID=0123456789ab\n")
         with open(os.path.join(self.target, "etc", "shadow"), "w") as handle:
             handle.write(SHADOW)
-        self.kernel = b"\x27\x05\x19\x56 a kernel image\n" * 5
+        # A uImage header's magic and, at 8, its time, which is not the build's.
+        self.kernel = (b"\x27\x05\x19\x56" + bytes(4) + struct.pack(">I", KERNEL_TIME) +
+                       b" a kernel image\n" * 5)
         with open(os.path.join(self.images, "uImage"), "wb") as handle:
             handle.write(self.kernel)
         self.payload = os.path.join(self.root, "payload")
@@ -110,7 +115,7 @@ class WithAStandIn(Scratch):
         self.assertEqual(head[:4], b"ONUF")
         fmt, hlen, klen, rlen, flags, time = struct.unpack(">IIIIIQ", head[4:32])
         self.assertEqual((fmt, hlen, klen, rlen, flags, time),
-                         (1, 256, len(kernel), len(rootfs), 0, int(EPOCH)))
+                         (1, 256, len(kernel), len(rootfs), 0, KERNEL_TIME))
         self.assertEqual(head[32:96].rstrip(b"\0"), b"odi,dfp-34x-2c3")
         self.assertEqual(head[96:160].rstrip(b"\0"), b"0123456789ab")
         self.assertEqual(head[160:252], bytes(92))

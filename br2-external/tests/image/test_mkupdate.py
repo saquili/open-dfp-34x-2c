@@ -4,10 +4,11 @@
 
 The layout itself is checked against the post-image script's output in
 test_post_image.py, and against the stick's onu-update by the tests of
-onu-utils; these are the refusals.
+onu-utils; these are the refusals, and the time it takes.
 """
 
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -33,10 +34,18 @@ class Refusals(unittest.TestCase):
             handle.write(data)
         return path
 
-    def pack(self, kernel=None, rootfs=None, version="0123456789ab", board="odi,dfp-34x-2c3"):
-        argv = [sys.executable, SCRIPT, "--board", board, "--version", version,
-                "--time", "1", kernel or self.kernel, rootfs or self.rootfs, self.out]
+    def pack(self, kernel=None, rootfs=None, version="0123456789ab", board="odi,dfp-34x-2c3",
+             time=("--time", "1")):
+        argv = [sys.executable, SCRIPT, "--board", board, "--version", version, *time,
+                kernel or self.kernel, rootfs or self.rootfs, self.out]
         return subprocess.run(argv, capture_output=True, text=True)
+
+    def test_the_time_is_the_kernel_image_s_unless_named(self):
+        kernel = self.file("timed", b"\x27\x05\x19\x56" + bytes(4) + struct.pack(">I", 1760000000))
+        done = self.pack(kernel=kernel, time=())
+        self.assertEqual(done.returncode, 0, done.stderr)
+        with open(self.out, "rb") as handle:
+            self.assertEqual(struct.unpack(">Q", handle.read(32)[24:32])[0], 1760000000)
 
     def test_a_good_pair_packs(self):
         done = self.pack()
