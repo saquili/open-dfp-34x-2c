@@ -71,9 +71,22 @@ $(BUILD)/test_password: $(BUILD)/tests/test_password.o $(BUILD)/src/password.o \
 		       $(BUILD)/src/sha256.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lcrypt
 
+# Monocypher (third_party/monocypher) checks the Ed25519 signature of a
+# release: its own code, built as it comes, without this tree's warnings, each
+# function in a section of its own, so that the link keeps only what the check
+# uses of it.
+MONOCYPHER = $(BUILD)/third_party/monocypher.o $(BUILD)/third_party/monocypher-ed25519.o
+$(BUILD)/third_party/%.o: third_party/monocypher/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -ffunction-sections -fdata-sections -w -c -o $@ $<
+
+$(BUILD)/src/update.o: override CPPFLAGS += -Ithird_party/monocypher
+$(BUILD)/tests/test_update.o: override CPPFLAGS += -Ithird_party/monocypher
+
 $(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
-		     $(BUILD)/src/update.o $(BUILD)/src/sha256.o
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
+		     $(BUILD)/src/update.o $(BUILD)/src/sha256.o $(BUILD)/src/base64.o \
+		     $(MONOCYPHER)
+	$(CC) $(LDFLAGS) -Wl,--gc-sections -o $@ $^ $(LDLIBS) -lz
 
 # onu-call asks onu-act for a method over ubus: libubus and libubox.
 $(BUILD)/onu-call: $(BUILD)/src/onu-call.o
@@ -98,7 +111,7 @@ $(BUILD)/test_svcmsg: $(BUILD)/tests/test_svcmsg.o $(BUILD)/src/svcmsg.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/test_update: $(BUILD)/tests/test_update.o $(BUILD)/src/bootenv.o \
-		      $(BUILD)/src/update.o $(BUILD)/src/sha256.o
+		      $(BUILD)/src/update.o $(BUILD)/src/sha256.o $(MONOCYPHER)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
 $(BUILD)/test_factory: $(BUILD)/tests/test_factory.o $(BUILD)/src/factory.o

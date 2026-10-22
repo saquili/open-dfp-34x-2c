@@ -331,6 +331,7 @@ by its whole path where procd starts it.
       onu-update check FILE      # check an update file, writing nothing
       onu-update write FILE      # into the bank that does not run, read back
       onu-update read [BANK]     # a bank as an update file, on the output
+      onu-update digest [BANK]   # a bank's SHA-256 and signature, each bank by default
       onu-update try [BANK]      # start a bank once, the other by default
       onu-update commit          # keep the running bank
       onu-update return [BANK]   # keep the shipped firmware, the other bank by default
@@ -346,6 +347,22 @@ by its whole path where procd starts it.
    partition in its order on the chip, which together are the whole flash:
    the copy holds the unit's credentials. The update file's layout is in
    ``src/update.h``, the environment's in ``src/bootenv.h``.
+
+   A release is signed (ADR 0022): ``check``, ``write``, ``read`` and
+   ``digest`` say ``SIGNATURE=valid`` with ``SIGNER=``, the key's name, when
+   one of the keys of ``/etc/onu-update.keys`` made it, ``none`` for a file
+   without a signature, such as one anybody built from the source, which is
+   written as any other, ``unknown`` for a key the stick does not trust, and
+   ``bad`` for a signature that does not match the file, which ``check``
+   refuses and ``write`` does not write. They say ``SHA256=`` too, that of the
+   whole file, which a release's ``SHA256SUMS`` lists: the panel shows it beside
+   each system. A bank reads in some 3 s, so ``write`` and ``read`` keep what
+   they found, and ``digest``, which the boot script runs once, in
+   ``/run/onu-update``, from where ``status`` gives each bank's
+   ``BANK<N>_SHA256=``, ``BANK<N>_SIGNATURE=`` and ``BANK<N>_SIGNER=`` while
+   the bank holds what was read, and ``KEY=``, the id, the public key and the
+   name of each key it trusts. The signature is checked with Monocypher
+   (``third_party/monocypher``, below).
 
 ``onu-trial``
    run first by the boot script: after a start of a bank on trial, it commits
@@ -935,4 +952,14 @@ tests of ``onu-apply`` run it against stand-ins for the programs it calls, in a 
 ``build/onu-config`` on a store in a file and a stand-in for BusyBox's
 ``cryptpw``. ``onu-update`` is tested on a flash
 made of files under ``ONU_ROOT``, with update files packed by the image build's
-``mkupdate.py``, which needs python3; ``onu-trial`` against stand-ins.
+``mkupdate.py``, which needs python3, and signed by its ``signupdate.py``, which
+needs openssl (the tests of signatures are skipped without it); ``onu-trial``
+against stand-ins.
+
+``onu-update`` holds Monocypher 4.0.2 by Loup Vaillant, in
+``third_party/monocypher``, as released, of which it uses Ed25519's check and
+SHA-512: it is offered under the BSD 2-clause licence or CC0, and is taken
+under the BSD 2-clause licence, whose notice goes with the binary too
+(``LICENSES/preferred/BSD-2-Clause.txt``). It is built without this tree's
+warnings, each function in a section of its own, so that the link keeps what
+the check uses.

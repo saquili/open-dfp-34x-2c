@@ -8,6 +8,7 @@
 
 #include <zlib.h>
 
+#include "monocypher-ed25519.h"
 #include "update.h"
 
 /* The header fields, as byte offsets. */
@@ -136,4 +137,30 @@ int squashfs_check(const uint8_t raw[SQUASHFS_SUPER], uint32_t *used)
 		return -EBADMSG;
 	*used = get32le(raw + 40);
 	return 0;
+}
+
+int upd_sig_parse(const uint8_t raw[UPD_SIG], struct upd_sig *s)
+{
+	size_t i;
+
+	if (get32(raw) != UPD_SIG_MAGIC)
+		return -ENOENT;
+	if (get32(raw + 4) != UPD_SIG_FORMAT)
+		return -EPROTONOSUPPORT;
+	for (i = 8 + SHA256_LEN + UPD_SIG_BYTES; i < UPD_SIG; i++)
+		if (raw[i])
+			return -EBADMSG;
+	memcpy(s->key_id, raw + 8, SHA256_LEN);
+	memcpy(s->sig, raw + 8 + SHA256_LEN, UPD_SIG_BYTES);
+	return 0;
+}
+
+int upd_sig_check(const struct upd_sig *s, const uint8_t key[UPD_KEY],
+		  const uint8_t digest[SHA256_LEN])
+{
+	uint8_t msg[sizeof(UPD_SIG_CONTEXT) + SHA256_LEN];
+
+	memcpy(msg, UPD_SIG_CONTEXT, sizeof(UPD_SIG_CONTEXT));
+	memcpy(msg + sizeof(UPD_SIG_CONTEXT), digest, SHA256_LEN);
+	return crypto_ed25519_check(s->sig, key, msg, sizeof(msg)) ? -EBADMSG : 0;
 }

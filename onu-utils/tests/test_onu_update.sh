@@ -5,14 +5,17 @@
 # Tests of onu-update, on a flash made of files under ONU_ROOT: the
 # partitions of the stick's layout, smaller, with a /proc/mtd that names them
 # and a command line, a device tree and an os-release as a boot gives them.
-# The update files are packed by the image build's mkupdate.py, so that its
-# format and onu-update's are checked against each other; python3 also makes
-# the stand-ins for a kernel image and a root filesystem.
+# The update files are packed by the image build's mkupdate.py, and signed by
+# its signupdate.py with keys that openssl makes, so that its format and
+# onu-update's are checked against each other; python3 also makes the
+# stand-ins for a kernel image and a root filesystem. The tests of signatures
+# are skipped without openssl.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 BUILD=${BUILD:-$HERE/build}
 MKUPDATE=$HERE/../br2-external/board/dfp-34x-2c3/mkupdate.py
+SIGNUPDATE=$HERE/../br2-external/board/dfp-34x-2c3/signupdate.py
 checks=0
 failures=0
 
@@ -59,6 +62,11 @@ fixture() {
 	python3 -c "$FIXTURES" "$@"
 }
 
+# The SHA-256 of a file, in hexadecimal.
+sha() {
+	python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
+}
+
 # Bytes @3 for @2 from offset @1 of a file, as hexadecimal.
 bytes_at() {
 	od -An -tx1 -j "$2" -N "$3" "$1" | tr -d ' \n'
@@ -67,7 +75,7 @@ bytes_at() {
 setup() {
 	T=$(mktemp -d)
 	export ONU_ROOT=$T/root
-	mkdir -p "$ONU_ROOT/proc/device-tree" "$ONU_ROOT/dev" "$ONU_ROOT/etc"
+	mkdir -p "$ONU_ROOT/proc/device-tree" "$ONU_ROOT/dev" "$ONU_ROOT/etc" "$ONU_ROOT/run"
 	cat >"$ONU_ROOT/proc/mtd" <<-EOF
 	dev:    size   erasesize  name
 	mtd0: 00001000 00001000 "boot"
@@ -101,7 +109,31 @@ setup() {
 	fixture uimage "$T/k-new" 2 40000 1759800000
 	fixture squashfs "$T/r-new" 2 30000
 	python3 "$MKUPDATE" --board odi,dfp-34x-2c3 --version 7c5fba548abc \
-		--time 1759800000 "$T/k-new" "$T/r-new" "$T/update.bin"
+		"$T/k-new" "$T/r-new" "$T/update.bin"
+}
+
+# A key of the stick's, "release", in its keys file, and another, "other",
+# that it does not trust; the update signed with each, and one signed and
+# changed afterwards inside its root filesystem, which carries no checksum of
+# its own, its trailer made anew, so that only the signature tells.
+sign_setup() {
+	for k in release other; do
+		openssl genpkey -algorithm ed25519 -out "$T/$k.pem" 2>/dev/null
+	done
+	{
+		echo "# The keys of the test."
+		python3 "$SIGNUPDATE" key "$T/release.pem" "the test's releases"
+		echo "ed25519 not-base64 a line that is no key"
+	} >"$ONU_ROOT/etc/onu-update.keys"
+	python3 "$SIGNUPDATE" sign "$T/release.pem" "$T/update.bin" "$T/signed.bin"
+	python3 "$SIGNUPDATE" sign "$T/other.pem" "$T/update.bin" "$T/other-signed.bin"
+	python3 - "$T/signed.bin" "$T/changed.bin" <<-'EOF'
+	import hashlib, sys
+	data = bytearray(open(sys.argv[1], "rb").read())
+	data[256 + 40064 + 1000] ^= 1
+	body = bytes(data[:-32])
+	open(sys.argv[2], "wb").write(body + hashlib.sha256(body).digest())
+	EOF
 }
 
 teardown() {
@@ -386,6 +418,77 @@ sed -i.bak '/"config"/d' "$ONU_ROOT/proc/mtd"
 rc=$?
 check '[ $rc -ne 0 ] && grep -q "no partition config" "$T/err"'
 teardown
+
+if command -v openssl >/dev/null 2>&1; then
+	echo "a release's signature: checked, written with the bank, read back"
+	setup
+	sign_setup
+	run check "$T/signed.bin"
+	check '[ $rc -eq 0 ] && echo "$out" | grep -qx SIGNATURE=valid'
+	check 'echo "$out" | grep -qx "SIGNER=the test'"'"'s releases"'
+	check 'echo "$out" | grep -qx "SHA256=$(sha "$T/signed.bin")"'
+	check 'echo "$err" | grep -q "line 3: not \"ed25519 KEY NAME\": left out"'
+	run status
+	check 'echo "$out" | grep -q "^KEY=[0-9a-f]\{64\} [A-Za-z0-9+/]\{43\}= the test'"'"'s releases$"'
+	check '[ "$(echo "$out" | grep -c ^KEY=)" -eq 1 ]'
+	run write "$T/signed.bin"
+	check '[ $rc -eq 0 ] && echo "$out" | grep -qx BANK=1'
+	check 'echo "$out" | grep -qx SIGNATURE=valid'
+	run status
+	check 'echo "$out" | grep -qx "BANK1_SHA256=$(sha "$T/signed.bin")"'
+	check 'echo "$out" | grep -qx BANK1_SIGNATURE=valid'
+	check 'echo "$out" | grep -qx "BANK1_SIGNER=the test'"'"'s releases"'
+	check 'echo "$out" | grep -qx BANK1_ROOTFS_USED=30000'
+	# The bank gives the signed file back, byte for byte.
+	"$BUILD/onu-update" read 1 >"$T/back.bin" 2>/dev/null
+	check 'cmp -s "$T/back.bin" "$T/signed.bin"'
+	# A start forgets the readings; digest reads them again, every bank.
+	rm -rf "$ONU_ROOT/run/onu-update"
+	run status
+	check '! echo "$out" | grep -q "^BANK[01]_SHA256="'
+	run digest
+	check '[ $rc -eq 0 ] && echo "$out" | grep -qx BANK1_SIGNATURE=valid'
+	check 'echo "$out" | grep -qx BANK0_SIGNATURE=none'
+	"$BUILD/onu-update" read 0 >"$T/running.bin" 2>/dev/null
+	check 'echo "$out" | grep -qx "BANK0_SHA256=$(sha "$T/running.bin")"'
+	run status
+	check 'echo "$out" | grep -qx "BANK1_SHA256=$(sha "$T/signed.bin")"'
+	check 'echo "$out" | grep -qx BANK0_SIGNATURE=none'
+	# A change of the bank that onu-update did not make: the reading is not
+	# the bank's any more, and the status leaves it out.
+	"$BUILD/onu-update" env sw_version1=another >/dev/null 2>&1
+	run status
+	check '! echo "$out" | grep -q "^BANK1_SHA256="'
+	teardown
+
+	echo "a file of no release, of an unknown key, or changed after its signature"
+	setup
+	sign_setup
+	run write "$T/update.bin"
+	check '[ $rc -eq 0 ] && echo "$out" | grep -qx SIGNATURE=none'
+	check '! echo "$out" | grep -q SIGNER='
+	run status
+	check 'echo "$out" | grep -qx "BANK1_SHA256=$(sha "$T/update.bin")"'
+	check 'echo "$out" | grep -qx BANK1_SIGNATURE=none'
+	run write "$T/other-signed.bin"
+	check '[ $rc -eq 0 ] && echo "$out" | grep -qx SIGNATURE=unknown'
+	"$BUILD/onu-update" read 1 >"$T/back.bin" 2>/dev/null
+	check 'cmp -s "$T/back.bin" "$T/other-signed.bin"'
+	run check "$T/changed.bin"
+	check '[ $rc -eq 1 ] && echo "$err" | grep -q "signature does not match"'
+	run write "$T/changed.bin"
+	check '[ $rc -eq 1 ] && echo "$err" | grep -q "signature does not match"'
+	check '[ "$(envget sw_valid1)" = 0 ]'
+	run status
+	check 'echo "$out" | grep -qx BANK1_STATE=empty && ! echo "$out" | grep -q BANK1_SHA256'
+	# Without a keys file every signature is unknown.
+	rm "$ONU_ROOT/etc/onu-update.keys"
+	run check "$T/signed.bin"
+	check '[ $rc -eq 0 ] && echo "$out" | grep -qx SIGNATURE=unknown'
+	teardown
+else
+	echo "no openssl: the tests of signatures are skipped"
+fi
 
 echo "test_onu_update: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

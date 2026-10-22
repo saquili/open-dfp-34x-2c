@@ -3,7 +3,9 @@
 
 /*
  * Tests of SHA-256, of the boot loader's environment and of the update file
- * format, on data built here.
+ * format, its signature included, on data built here. The signatures are
+ * made with Monocypher, which checks them on the stick too; the tests of
+ * onu-update check ones that OpenSSL made.
  */
 
 #include <errno.h>
@@ -15,6 +17,7 @@
 #include <zlib.h>
 
 #include "bootenv.h"
+#include "monocypher-ed25519.h"
 #include "sha256.h"
 #include "update.h"
 
@@ -248,6 +251,62 @@ static void test_images(void)
 	CHECK(squashfs_check(sq, &used) == -EBADMSG);
 }
 
+/* A signature block of update.h over @digest, made with the key of @seed. */
+static void sign_block(uint8_t raw[UPD_SIG], uint8_t pub[UPD_KEY],
+		       const uint8_t digest[SHA256_LEN], uint8_t fill)
+{
+	uint8_t seed[32], secret[64], msg[sizeof(UPD_SIG_CONTEXT) + SHA256_LEN];
+	struct sha256 s;
+
+	memset(seed, fill, sizeof(seed));
+	crypto_ed25519_key_pair(secret, pub, seed);
+	memcpy(msg, UPD_SIG_CONTEXT, sizeof(UPD_SIG_CONTEXT));
+	memcpy(msg + sizeof(UPD_SIG_CONTEXT), digest, SHA256_LEN);
+	memset(raw, 0, UPD_SIG);
+	put32(raw, UPD_SIG_MAGIC);
+	put32(raw + 4, UPD_SIG_FORMAT);
+	sha256_init(&s);
+	sha256_update(&s, pub, UPD_KEY);
+	sha256_final(&s, raw + 8);
+	crypto_ed25519_sign(raw + 8 + SHA256_LEN, secret, msg, sizeof(msg));
+}
+
+static void test_signature(void)
+{
+	uint8_t raw[UPD_SIG], pub[UPD_KEY], other[UPD_SIG], other_pub[UPD_KEY];
+	uint8_t digest[SHA256_LEN], id[SHA256_LEN];
+	struct upd_sig sig;
+	struct sha256 s;
+
+	memset(digest, 0x5a, sizeof(digest));
+	sign_block(raw, pub, digest, 1);
+	CHECK(!upd_sig_parse(raw, &sig));
+	sha256_init(&s);
+	sha256_update(&s, pub, UPD_KEY);
+	sha256_final(&s, id);
+	CHECK(!memcmp(sig.key_id, id, SHA256_LEN));
+	CHECK(!upd_sig_check(&sig, pub, digest));
+
+	/* Another digest, another key, a changed signature: no. */
+	digest[31] ^= 1;
+	CHECK(upd_sig_check(&sig, pub, digest) == -EBADMSG);
+	digest[31] ^= 1;
+	sign_block(other, other_pub, digest, 2);
+	CHECK(upd_sig_check(&sig, other_pub, digest) == -EBADMSG);
+	sig.sig[10] ^= 1;
+	CHECK(upd_sig_check(&sig, pub, digest) == -EBADMSG);
+
+	/* What is no signature, one of another format, a reserved byte set. */
+	raw[0] = 'X';
+	CHECK(upd_sig_parse(raw, &sig) == -ENOENT);
+	raw[0] = 'O';
+	put32(raw + 4, 2);
+	CHECK(upd_sig_parse(raw, &sig) == -EPROTONOSUPPORT);
+	put32(raw + 4, UPD_SIG_FORMAT);
+	raw[UPD_SIG - 1] = 1;
+	CHECK(upd_sig_parse(raw, &sig) == -EBADMSG);
+}
+
 int main(void)
 {
 	test_sha256();
@@ -255,6 +314,7 @@ int main(void)
 	test_bootenv_vars();
 	test_header();
 	test_images();
+	test_signature();
 	printf("test_update: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
