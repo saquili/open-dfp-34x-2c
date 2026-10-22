@@ -1029,6 +1029,17 @@ export const pl: Dictionary = {
     version: "Wersja",
     built: "Zbudowany",
     state: "Stan",
+    sha256: "SHA-256",
+    signature: "Podpis",
+    readingBank: "odczyt…",
+    sigValid: "wydanie",
+    sigNone: "bez podpisu",
+    sigUnknown: "nieznany klucz",
+    sigBad: "niezgodny",
+    copySha: "Kopiuj SHA-256",
+    shaCopied: "Skopiowano",
+    shaHint:
+      "SHA-256 systemu to suma jego pliku update.bin: porównaj ją z wierszem update.bin w SHA256SUMS wydania.",
     startAfter: "Po wgraniu od razu uruchom na próbę",
     startAfterHint:
       "Wkładka uruchomi się z nowego systemu raz, na próbę; jeśli nie wstanie w 5 minut, sama wróci do obecnego.",
@@ -1128,6 +1139,20 @@ export const pl: Dictionary = {
     writeFile: "Plik {name} ({size}) trafi do systemu {letter}, który teraz nie działa.",
     writeThen: "Gdy zostanie zapisany i sprawdzony, nowy system można uruchomić na próbę.",
     writeAction: "Zapisz",
+    fileReading: "Czytam {name}…",
+    fileNot: "Pliku {name} nie da się zapisać: {why}.",
+    fileVersion: "Wersja",
+    fileBuilt: "Zbudowany",
+    fileSha: "SHA-256",
+    fileSignature: "Podpis",
+    fileSigned: "Wydanie, podpisane kluczem „{signer}”.",
+    fileSignedLater:
+      "Podpisany kluczem „{signer}”. Ta przeglądarka nie umie sprawdzić podpisu; sprawdzi go wkładka przy zapisie.",
+    fileUnsigned:
+      "Bez podpisu: to nie wydanie, tylko build ze źródeł, który może zrobić każdy. Zapisz go tylko, jeśli zbudowałeś go sam albo ufasz temu, kto to zrobił.",
+    fileUnknownKey:
+      "Podpisany kluczem, któremu ta wkładka nie ufa, a nie kluczem wydań. Zapisz go tylko, jeśli ufasz temu, kto go podpisał.",
+    fileBad: "Podpis nie pasuje do pliku: ktoś go zmienił po podpisaniu. Wkładka go nie zapisze.",
     uploadHintShipped:
       "W systemie {letter} jest firmware, z którym wkładka przyszła: plik update.bin go skasuje. Jeśli możesz chcieć do niego wrócić, najpierw zrób kopię całego flasha.",
     uploadHint:

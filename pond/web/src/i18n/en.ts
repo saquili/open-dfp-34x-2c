@@ -1038,6 +1038,17 @@ export const en = {
     version: "Version",
     built: "Built",
     state: "State",
+    sha256: "SHA-256",
+    signature: "Signature",
+    readingBank: "being read…",
+    sigValid: "release",
+    sigNone: "no signature",
+    sigUnknown: "unknown key",
+    sigBad: "does not match",
+    copySha: "Copy the SHA-256",
+    shaCopied: "Copied",
+    shaHint:
+      "The SHA-256 of each system is that of its update.bin: compare it with the line of update.bin in the release's SHA256SUMS.",
     startAfter: "Start it on trial right after the upload",
     startAfterHint:
       "The stick starts the new system once, on trial; if it does not come up in 5 minutes, it goes back to the current one by itself.",
@@ -1138,6 +1149,21 @@ export const en = {
     writeFile: "The file {name} ({size}) goes into system {letter}, which is not running now.",
     writeThen: "Once it is written and checked, the new system can be started on trial.",
     writeAction: "Write",
+    fileReading: "Reading {name}…",
+    fileNot: "{name} cannot be written: {why}.",
+    fileVersion: "Version",
+    fileBuilt: "Built",
+    fileSha: "SHA-256",
+    fileSignature: "Signature",
+    fileSigned: "Release, signed with the key “{signer}”.",
+    fileSignedLater:
+      "Signed with the key “{signer}”. This browser cannot check the signature; the stick checks it as it writes.",
+    fileUnsigned:
+      "No signature: this is not a release, but a build of the source, which anyone can make. Write it only if you built it yourself or trust whoever did.",
+    fileUnknownKey:
+      "Signed with a key this stick does not trust, not with a release key. Write it only if you trust whoever signed it.",
+    fileBad:
+      "The signature does not match the file: it was changed after it was signed. The stick does not write it.",
     uploadHintShipped:
       "System {letter} holds the firmware the stick shipped with: the update.bin file erases it. Keep a copy of the whole flash first if you may want it back.",
     uploadHint:

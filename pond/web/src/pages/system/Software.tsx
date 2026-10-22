@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * System, Software: the two systems of the flash, A and B, with the version
- * and build of each, which runs and which starts next, the one place of
- * these; a trial start of the other one and the way back to the shipped
+ * System, Software: the two systems of the flash, A and B, with the version,
+ * build, SHA-256 and signature of each, which runs and which starts next, the
+ * one place of these; a trial start of the other one and the way back to the shipped
  * firmware; the update of the one that does not run, which a start of it on
  * trial may follow at once; the download of the running system and the copy
  * of the whole flash; and how an update goes. What needs root's password
@@ -13,7 +13,16 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, Download, HardDrive, RotateCw, Undo2, Upload } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  Copy,
+  Download,
+  HardDrive,
+  RotateCw,
+  Undo2,
+  Upload,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { ApiError } from "../../api/client";
 import {
@@ -24,11 +33,12 @@ import {
   useReturnBank,
   useTryBank,
 } from "../../api/config";
+import type { FirmwareBankSignature } from "../../api/types";
 import { useConfirm } from "../../components/Confirm";
 import { SaveState } from "../../components/Field";
 import { Page } from "../../components/Page";
 import { QueryNote, QueryState } from "../../components/Read";
-import { Badge, Card, Cell, Meter, Row, Table } from "../../components/ui";
+import { Badge, Card, Cell, Detail, Facts, Meter, Row, Table } from "../../components/ui";
 import { type Key, useI18n } from "../../i18n";
 import {
   type BankTag,
@@ -42,7 +52,8 @@ import {
 } from "../../lib/firmware";
 import { bytes, day, percent } from "../../lib/format";
 import type { Tone } from "../../lib/state";
-import { Columns, Hint, Stack } from "./shared";
+import { NotUpdate, readUpdate, type UpdateFile } from "../../lib/updatefile";
+import { Columns, Hint, Mono, Stack } from "./shared";
 
 const TAG: Record<BankTag, [Key, Tone]> = {
   running: ["system.tagRunning", "good"],
@@ -54,6 +65,50 @@ const TAG: Record<BankTag, [Key, Tone]> = {
   incomplete: ["system.tagIncomplete", "bad"],
   shipped: ["system.tagShipped", "warn"],
 };
+
+const SIGNATURE: Record<Exclude<FirmwareBankSignature, null>, [Key, Tone]> = {
+  valid: ["system.sigValid", "good"],
+  none: ["system.sigNone", "warn"],
+  unknown: ["system.sigUnknown", "warn"],
+  bad: ["system.sigBad", "bad"],
+};
+
+/* A signature as a pill, and the name of its key under a valid one. */
+function SignatureBadge({ sig, signer }: { sig: FirmwareBankSignature; signer: string | null }) {
+  const { t } = useI18n();
+  if (sig === null) return <>–</>;
+  return (
+    <span className="grid justify-items-start gap-1">
+      <Badge tone={SIGNATURE[sig][1]}>{t(SIGNATURE[sig][0])}</Badge>
+      {signer && <Detail>{signer}</Detail>}
+    </span>
+  );
+}
+
+/* A SHA-256 whole, to be read or compared, and a button that copies it. */
+function Sha({ hex }: { hex: string }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="flex items-start gap-1">
+      <Mono>{hex}</Mono>
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs btn-square shrink-0"
+        title={t(copied ? "system.shaCopied" : "system.copySha")}
+        aria-label={t("system.copySha")}
+        onClick={() =>
+          void navigator.clipboard.writeText(hex).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+        }
+      >
+        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+      </button>
+    </span>
+  );
+}
 
 /* The two systems, what each holds, which runs and which starts next. */
 function Systems() {
@@ -67,7 +122,14 @@ function Systems() {
   const shipped = f ? shippedBank(f) : null;
   const back = bankLetter(f?.running ?? 0);
   const busy = uploading(f) || tryBank.isSuccess || returnBank.isSuccess;
-  const head = [t("system.system"), t("system.version"), t("system.built"), t("system.state")];
+  const head = [
+    t("system.system"),
+    t("system.version"),
+    t("system.built"),
+    t("system.sha256"),
+    t("system.signature"),
+    t("system.state"),
+  ];
 
   return (
     <Card title={t("system.systems")}>
@@ -87,6 +149,21 @@ function Systems() {
                   </Cell>
                   <Cell head={head[2]}>{b.time != null ? day(b.time, lang) : "–"}</Cell>
                   <Cell head={head[3]}>
+                    {b.reading ? (
+                      <span className="flex items-center gap-2 text-sm">
+                        <span className="loading loading-spinner loading-xs" />
+                        {t("system.readingBank")}
+                      </span>
+                    ) : b.sha256 ? (
+                      <Sha hex={b.sha256} />
+                    ) : (
+                      "–"
+                    )}
+                  </Cell>
+                  <Cell head={head[4]}>
+                    {b.reading ? "–" : <SignatureBadge sig={b.signature} signer={b.signer} />}
+                  </Cell>
+                  <Cell head={head[5]}>
                     {b.tags.length ? (
                       <span className="flex flex-wrap gap-1">
                         {b.tags.map((tag) => (
@@ -102,6 +179,7 @@ function Systems() {
                 </Row>
               ))}
             </Table>
+            <Hint>{t("system.shaHint")}</Hint>
             {f?.trial != null && (
               <p className="flex items-start gap-2 text-sm">
                 <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
@@ -189,6 +267,8 @@ function Update() {
   const [share, setShare] = useState(0);
   const [version, setVersion] = useState("");
   const [startAfter, setStartAfter] = useState(false);
+  const [reading, setReading] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const f = firmware.data;
   const target = f ? updateTarget(f) : null;
   const letter = target !== null ? bankLetter(target) : "";
@@ -233,8 +313,65 @@ function Update() {
     if (start && target !== null) await tryBank.mutateAsync({ bank: target, secret });
   }
 
-  function chosen(file: File) {
+  /* What the file is, read here before it goes: version, build, SHA-256, signature. */
+  function about(u: UpdateFile) {
+    const signer = u.signer ?? "";
+    const words =
+      u.signature === "valid"
+        ? t("system.fileSigned", { signer })
+        : u.signature === "none"
+          ? t("system.fileUnsigned")
+          : u.signature === "unknown"
+            ? t("system.fileUnknownKey")
+            : t("system.fileSignedLater", { signer });
+    return (
+      <>
+        <Facts
+          rows={[
+            [
+              t("system.fileVersion"),
+              <span key="version" className="tabular">
+                {u.version}
+              </span>,
+            ],
+            [t("system.fileBuilt"), day(u.time, lang)],
+            [t("system.fileSha"), <Mono key="sha">{u.sha256}</Mono>],
+            [
+              t("system.fileSignature"),
+              <SignatureBadge key="signature" sig={u.signature} signer={null} />,
+            ],
+          ]}
+        />
+        {u.signature === "valid" ? (
+          <p>{words}</p>
+        ) : (
+          <p className="flex items-start gap-2">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+            {words}
+          </p>
+        )}
+      </>
+    );
+  }
+
+  async function chosen(file: File) {
     if (target === null) return;
+    setRefused(null);
+    setReading(file.name);
+    let u: UpdateFile;
+    try {
+      u = await readUpdate(new Uint8Array(await file.arrayBuffer()), f?.keys ?? []);
+    } catch (e) {
+      const why = e instanceof NotUpdate ? e.message : String(e);
+      setRefused(t("system.fileNot", { name: file.name, why }));
+      return;
+    } finally {
+      setReading(null);
+    }
+    if (u.signature === "bad") {
+      setRefused(t("system.fileBad"));
+      return;
+    }
     const shipped = f ? overShipped(f, target) : false;
     const start = startAfter;
     confirm.open({
@@ -242,6 +379,7 @@ function Update() {
       body: (
         <>
           <p>{t("system.writeFile", { name: file.name, size: bytes(file.size, lang), letter })}</p>
+          {about(u)}
           {shipped && (
             <p className="flex items-start gap-2">
               <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
@@ -256,7 +394,7 @@ function Update() {
         </>
       ),
       action: t("system.writeAction"),
-      danger: shipped,
+      danger: shipped || (u.signature !== "valid" && u.signature !== null),
       run: (secret) => write(file, secret, start),
     });
   }
@@ -299,20 +437,24 @@ function Update() {
             onChange={(e) => {
               const file = e.currentTarget.files?.[0];
               e.currentTarget.value = "";
-              if (file) chosen(file);
+              if (file) void chosen(file);
             }}
           />
           <div>
             <button
               type="button"
               className="btn btn-sm btn-primary"
-              disabled={going || elsewhere || tryBank.isSuccess}
+              disabled={going || elsewhere || tryBank.isSuccess || reading !== null}
               onClick={() => input.current?.click()}
             >
               <Upload className="size-4" />
               {t("system.upload")}
             </button>
           </div>
+          {reading !== null && (
+            <SaveState state="busy" message={t("system.fileReading", { name: reading })} />
+          )}
+          {refused && <SaveState state="bad" message={refused} />}
           {elsewhere && <p className="text-sm">{t("system.busy")}</p>}
           {/* The new system is started where both are, under Systems, unless at once. */}
           {phase === "done" && (
@@ -395,16 +537,18 @@ export function SoftwarePage() {
   const { t } = useI18n();
   return (
     <Page title={t("nav.software")} hint={t("system.softwareHint")}>
-      <Columns>
-        <Stack>
-          <Systems />
-          <Copies />
-        </Stack>
-        <Stack>
-          <Update />
-          <HowUpdate />
-        </Stack>
-      </Columns>
+      <Stack>
+        <Systems />
+        <Columns>
+          <Stack>
+            <Update />
+            <Copies />
+          </Stack>
+          <Stack>
+            <HowUpdate />
+          </Stack>
+        </Columns>
+      </Stack>
     </Page>
   );
 }

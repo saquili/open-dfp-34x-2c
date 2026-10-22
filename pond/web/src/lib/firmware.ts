@@ -7,7 +7,7 @@
  * done with them.
  */
 
-import type { Firmware } from "../api/types";
+import type { Firmware, FirmwareBankSignature } from "../api/types";
 
 export type BankTag =
   | "running" /* the stick runs it now */
@@ -27,6 +27,12 @@ export interface BankView {
   tags: BankTag[];
   /** it holds a whole system, which can be started */
   usable: boolean;
+  /** the SHA-256 of the bank as an update file, as a release's SHA256SUMS lists it */
+  sha256: string | null;
+  signature: FirmwareBankSignature;
+  signer: string | null;
+  /** the stick has not read the bank since its start or the last write */
+  reading: boolean;
 }
 
 export function bankLetter(bank: number): "A" | "B" {
@@ -53,6 +59,10 @@ export function bankViews(f: Firmware): BankView[] {
       time: known ? b.time : null,
       tags,
       usable,
+      sha256: usable ? (b.sha256 ?? null) : null,
+      signature: usable ? (b.signature ?? null) : null,
+      signer: usable && b.signature === "valid" ? (b.signer ?? null) : null,
+      reading: usable && b.sha256 == null,
     };
   });
 }

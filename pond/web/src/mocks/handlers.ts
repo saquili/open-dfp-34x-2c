@@ -29,6 +29,7 @@ import { checkKey, checkPem, fingerprint, type KeyProblem, type PemProblem } fro
 import { MAX_MOVED, moved } from "../lib/ports";
 import { DEFAULT_PRODUCT, productNameOk, productSlug } from "../lib/product";
 import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
+import { NotUpdate, readUpdate, type UpdateFile } from "../lib/updatefile";
 import { conversation } from "./conversation";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, SSH, TC_RULES, TLS } from "./fixture";
 import { delay, type Handler, HttpResponse, http } from "./http";
@@ -104,6 +105,9 @@ if (SCENARIO === "stick") {
     state: "shipped",
     version: "1.2.0",
     rootfs_used_b: null,
+    sha256: null,
+    signature: null,
+    signer: null,
   });
 }
 
@@ -1847,7 +1851,11 @@ const stick = [
     );
   }),
 
-  /* An upload: a file of the update's magic is written into the other bank. */
+  /*
+   * An upload: the file is read as onu-update reads it (lib/updatefile.ts)
+   * and written into the other bank, unless it is no update file or its
+   * signature does not match it.
+   */
   http.post("*/api/firmware/upload", async ({ request }) => {
     if (!signedIn) return unauthorized();
     const no = passwordRefused(request);
@@ -1859,24 +1867,45 @@ const stick = [
       state: "writing",
       received_b: body.length,
       expected_b: body.length,
+      sha256: null,
+      signature: null,
+      signer: null,
     };
     await delay(3000);
-    if (String.fromCharCode(...body.slice(0, 4)) !== "ONUF") {
-      firmware.update = {
-        ...firmware.update,
-        state: "failed",
-        message: "not an update file, or a damaged one",
-      };
-      return HttpResponse.json(
-        { error: "not written", detail: firmware.update.message },
-        { status: 400 },
-      );
+    const refuse = (message: string) => {
+      firmware.update = { ...firmware.update, state: "failed", message };
+      return HttpResponse.json({ error: "not written", detail: message }, { status: 400 });
+    };
+    let file: UpdateFile;
+    try {
+      file = await readUpdate(body, firmware.keys);
+    } catch (e) {
+      return refuse(e instanceof NotUpdate ? e.message : "not an update file");
     }
-    const version = new TextDecoder().decode(body.slice(96, 160)).replace(/\0+$/, "") || "unknown";
+    if (file.signature === "bad")
+      return refuse("the signature does not match the file: it is not written");
     const written = firmware.banks[target];
-    if (written) Object.assign(written, { state: "valid", version, time: Date.now() / 1000 });
-    firmware.update = { ...firmware.update, state: "done", bank: target, version, message: null };
-    return HttpResponse.json({ ok: true, detail: version });
+    const signature = file.signature ?? "valid";
+    if (written)
+      Object.assign(written, {
+        state: "valid",
+        version: file.version,
+        time: file.time,
+        sha256: file.sha256,
+        signature,
+        signer: file.signer,
+      });
+    firmware.update = {
+      ...firmware.update,
+      state: "done",
+      bank: target,
+      version: file.version,
+      message: null,
+      sha256: file.sha256,
+      signature,
+      signer: file.signer,
+    };
+    return HttpResponse.json({ ok: true, detail: file.version });
   }),
 
   http.post("*/api/firmware/try", async ({ request }) => {
