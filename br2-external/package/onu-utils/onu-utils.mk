@@ -4,13 +4,14 @@
 # onu-utils, built from the onu-utils/ directory of this repository. ubusd's
 # access list for the account dhcpc, acl/dhcpc.json, lets the script of the
 # IPoE connections' DHCP client, onu-dhcpc, tell onu-apply of a lease, and
-# nothing else.
+# nothing else. onu-update holds Monocypher, which checks a release's
+# signature, under BSD-2-Clause.
 
 ONU_UTILS_VERSION = local
 ONU_UTILS_SITE = $(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/../onu-utils
 ONU_UTILS_SITE_METHOD = local
-ONU_UTILS_LICENSE = GPL-2.0-only
-ONU_UTILS_LICENSE_FILES = LICENSES/preferred/GPL-2.0-only.txt
+ONU_UTILS_LICENSE = GPL-2.0-only, BSD-2-Clause (Monocypher in onu-update)
+ONU_UTILS_LICENSE_FILES = LICENSES/preferred/GPL-2.0-only.txt LICENSES/preferred/BSD-2-Clause.txt
 ONU_UTILS_POST_RSYNC_HOOKS += OPEN_DFP_34X_2C_COPY_LICENSES
 ONU_UTILS_DEPENDENCIES = json-c libmnl libubox ubus zlib
 

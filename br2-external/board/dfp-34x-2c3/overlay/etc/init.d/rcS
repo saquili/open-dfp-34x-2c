@@ -323,6 +323,12 @@ else
 	warn "no omcid: nothing answers the OLT"
 fi
 
+# The SHA-256 and the signature of each bank, which the panel shows beside
+# each system (onu-update status): a bank takes some 3 s to read, so
+# onu-update reads them once, now that the rest has started, in the
+# background and at the lowest priority (onu-update digest).
+onu-update digest >/dev/null 2>&1 &
+
 # The bench waits for the last line on the console. Before it, the panel's
 # address and the fingerprint of the certificate a browser is shown there,
 # which no authority signed, or the own one, for a person to compare with the

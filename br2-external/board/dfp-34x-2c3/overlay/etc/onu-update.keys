@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The keys whose signatures onu-update trusts (ADR 0022), one a line: the word
+# ed25519, the raw public key in base64 and the key's name. The release
+# workflow signs every release with the private half of the key below, which
+# only it holds. A build of one's own may add a key of its own here; a file
+# signed with no key of these still installs, and the panel says that it is
+# no release.
+ed25519 ymQRzCIep8hRSylvaFxCgLjX9aMRXjZlDMo6Qa4FQjs= open-dfp-34x-2c releases, key 1
