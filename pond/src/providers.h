@@ -114,6 +114,7 @@ int prov_service_rules(struct prov_buf *out);
 int prov_omci_frames_from(struct prov_buf *out, unsigned long since);
 int prov_onu(struct prov_buf *out);
 int prov_optics(struct prov_buf *out);
+int prov_thermal(struct prov_buf *out);
 int prov_port_counters(struct prov_buf *out);
 int prov_ports(struct prov_buf *out);
 int prov_root_mtd(const char *cmdline);

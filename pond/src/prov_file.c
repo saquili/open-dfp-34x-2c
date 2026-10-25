@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-/* The providers read from files: the system, the image, the log, the optics. */
+/*
+ * The providers read from files: the system, the image, the log, the optics
+ * and the temperatures.
+ */
 
 #define _GNU_SOURCE
 
@@ -322,7 +325,8 @@ int prov_health(struct prov_buf *out)
 	return 0;
 }
 
-static int optics_hwmon_dir(char *out, size_t cap)
+/* The directory of the hwmon device called @want. */
+static int hwmon_dir(const char *want, char *out, size_t cap)
 {
 	static const char *const base = "/sys/class/hwmon";
 	char rooted[512];
@@ -341,7 +345,7 @@ static int optics_hwmon_dir(char *out, size_t cap)
 		snprintf(path, sizeof(path), "%s/%s/name", base, de->d_name);
 		if (prov_read_line(path, name, sizeof(name)))
 			continue;
-		if (strcmp(name, "gn25l95"))
+		if (strcmp(name, want))
 			continue;
 		snprintf(out, cap, "%s/%s", base, de->d_name);
 		err = 0;
@@ -352,7 +356,7 @@ static int optics_hwmon_dir(char *out, size_t cap)
 	return err;
 }
 
-static int optics_value(const char *dir, const char *file, long long *val)
+static int hwmon_value(const char *dir, const char *file, long long *val)
 {
 	char path[640], t[64];
 	int err;
@@ -381,7 +385,7 @@ int prov_optics(struct prov_buf *out)
 	};
 	char dir[512];
 	unsigned int i;
-	int err = optics_hwmon_dir(dir, sizeof(dir));
+	int err = hwmon_dir("gn25l95", dir, sizeof(dir));
 
 	if (err)
 		return err;
@@ -394,12 +398,58 @@ int prov_optics(struct prov_buf *out)
 			pv_comma(out);
 		pv_key(out, fields[i].key);
 
-		if (optics_value(dir, fields[i].file, &v))
+		if (hwmon_value(dir, fields[i].file, &v))
 			pv_null(out);
 		else if (fields[i].decimals)
 			pv_fixed(out, v, fields[i].decimals);
 		else
 			pv_num(out, v);
+	}
+	pv_close(out, '}');
+	return 0;
+}
+
+/*
+ * The temperatures, in degrees: the die of the SoC, with the levels at which
+ * the kernel warns and stops the stick when it says them, and the module's.
+ * A sensor, or a level, that is not there reads null; with no sensor at all
+ * the value is absent.
+ */
+int prov_thermal(struct prov_buf *out)
+{
+	static const struct {
+		const char *key;
+		const char *device;
+		const char *file;
+	} fields[] = {
+		{ "die_c", "rtl9602c", "temp1_input" },
+		{ "die_warn_c", "rtl9602c", "temp1_max" },
+		{ "die_crit_c", "rtl9602c", "temp1_crit" },
+		{ "module_c", "gn25l95", "temp1_input" },
+	};
+	unsigned int i, found = 0;
+	long long v[ARRAY_SIZE(fields)];
+	bool have[ARRAY_SIZE(fields)];
+
+	for (i = 0; i < ARRAY_SIZE(fields); i++) {
+		char dir[512];
+
+		have[i] = !hwmon_dir(fields[i].device, dir, sizeof(dir)) &&
+			  !hwmon_value(dir, fields[i].file, &v[i]);
+		found += have[i];
+	}
+	if (!found)
+		return -ENODEV;
+
+	pv_open(out, '{');
+	for (i = 0; i < ARRAY_SIZE(fields); i++) {
+		if (i)
+			pv_comma(out);
+		pv_key(out, fields[i].key);
+		if (have[i])
+			pv_fixed(out, v[i], 3);
+		else
+			pv_null(out);
 	}
 	pv_close(out, '}');
 	return 0;

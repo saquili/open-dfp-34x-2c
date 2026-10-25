@@ -108,6 +108,10 @@ const struct prov pond_provs[] = {
 	{ "optics", "Optics",
 	  "Temperature, supply, laser bias, Tx and Rx power", prov_optics, NULL,
 	  0 },
+	{ "thermal", "System",
+	  "The temperature of the SoC and of the optical module, and the levels "
+	  "at which the kernel warns and stops the stick",
+	  prov_thermal, NULL, PROV_VOLATILE },
 
 	{ "gem_counters", "Data path", "Per-GEM-port counters from the PON MAC",
 	  prov_gem_counters, NULL, 0 },

@@ -61,6 +61,7 @@ import type {
   GetSsh200,
   GetTcRules200,
   GetTconts200,
+  GetThermal200,
   GetTls200,
   GetUptime200,
   Getm200,
@@ -5135,6 +5136,120 @@ export function useGetOptics<
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
   const queryOptions = getGetOpticsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getGetThermalUrl = () => {
+  return `/api/get/thermal`;
+};
+
+/**
+ * The temperature of the SoC and of the optical module, and the levels at which the kernel warns and stops the stick
+ * @summary The value thermal
+ */
+export const getThermal = async (
+  options?: Parameters<typeof pondFetch>[1],
+): Promise<GetThermal200> => {
+  return pondFetch<GetThermal200>(getGetThermalUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetThermalQueryKey = () => {
+  return [`/api/get/thermal`] as const;
+};
+
+export const getGetThermalQueryOptions = <
+  TData = Awaited<ReturnType<typeof getThermal>>,
+  TError = UnauthorisedResponse | Error,
+>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getThermal>>, TError, TData>>;
+  request?: SecondParameter<typeof pondFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetThermalQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getThermal>>> = ({ signal }) =>
+    getThermal({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getThermal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetThermalQueryResult = NonNullable<Awaited<ReturnType<typeof getThermal>>>;
+export type GetThermalQueryError = UnauthorisedResponse | Error;
+
+export function useGetThermal<
+  TData = Awaited<ReturnType<typeof getThermal>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof getThermal>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getThermal>>,
+          TError,
+          Awaited<ReturnType<typeof getThermal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetThermal<
+  TData = Awaited<ReturnType<typeof getThermal>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getThermal>>, TError, TData>> &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getThermal>>,
+          TError,
+          Awaited<ReturnType<typeof getThermal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetThermal<
+  TData = Awaited<ReturnType<typeof getThermal>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getThermal>>, TError, TData>>;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary The value thermal
+ */
+
+export function useGetThermal<
+  TData = Awaited<ReturnType<typeof getThermal>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getThermal>>, TError, TData>>;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetThermalQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;

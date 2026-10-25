@@ -1522,6 +1522,23 @@
                         }
                       ]
                     },
+                    "thermal": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Thermal"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      ]
+                    },
                     "gem_counters": {
                       "anyOf": [
                         {
@@ -2958,6 +2975,60 @@
           }
         },
         "operationId": "getOptics"
+      }
+    },
+    "/api/get/thermal": {
+      "get": {
+        "tags": [
+          "values"
+        ],
+        "summary": "The value thermal",
+        "description": "The temperature of the SoC and of the optical module, and the levels at which the kernel warns and stops the stick",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "thermal"
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Thermal"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "value"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "500": {
+            "description": "The value cannot be read, or is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getThermal"
       }
     },
     "/api/get/gem_counters": {
@@ -5968,6 +6039,42 @@
           "bias_ma",
           "tx_power_uw",
           "rx_power_uw"
+        ]
+      },
+      "Thermal": {
+        "description": "Temperatures in degrees. A sensor, or a level, the kernel does not have reads null.",
+        "type": "object",
+        "properties": {
+          "die_c": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "die_warn_c": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "die_crit_c": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "module_c": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "die_c",
+          "die_warn_c",
+          "die_crit_c",
+          "module_c"
         ]
       },
       "Family": {

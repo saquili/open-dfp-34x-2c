@@ -30,6 +30,7 @@ import type { SfpLane } from "./sfpLane.ts";
 import type { Ssh } from "./ssh.ts";
 import type { Tcont } from "./tcont.ts";
 import type { TcRules } from "./tcRules.ts";
+import type { Thermal } from "./thermal.ts";
 import type { Tls } from "./tls.ts";
 import type { Uptime } from "./uptime.ts";
 
@@ -63,6 +64,7 @@ export type Getm200 = {
   onu?: Onu | null | Error;
   tconts?: Tcont[] | Error;
   optics?: Optics | null | Error;
+  thermal?: Thermal | null | Error;
   gem_counters?: Getm200GemCounters;
   service_rules?: ServiceRules | Error;
   iptv?: Iptv | Error;

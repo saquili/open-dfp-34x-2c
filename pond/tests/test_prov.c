@@ -1456,6 +1456,38 @@ static void test_optics(void)
 	check(well_formed(buf), "the object is balanced");
 }
 
+static void test_thermal(void)
+{
+	struct prov_buf b;
+	char buf[512];
+	char *root = getenv("POND_ROOT");
+	char *saved = root ? strdup(root) : NULL;
+
+	puts("the temperatures, the die of the SoC and the module, by name");
+
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
+	check(prov_thermal(&b) == 0, "the row reads");
+	check(strstr(buf, "\"die_c\":73.000") != NULL,
+	      "the die's temperature, in degrees rather than millidegrees");
+	check(strstr(buf, "\"die_warn_c\":95.000") != NULL,
+	      "the level at which the kernel warns");
+	check(strstr(buf, "\"die_crit_c\":110.000") != NULL,
+	      "and the one at which it stops the stick");
+	check(strstr(buf, "\"module_c\":44.050") != NULL, "the module's");
+	check(strstr(buf, ":39") == NULL,
+	      "and not the temperature of another hwmon device");
+	check(well_formed(buf), "the object is balanced");
+
+	/* A stick whose kernel has neither sensor has no such value. */
+	setenv("POND_ROOT", "/nonexistent", 1);
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
+	check(prov_thermal(&b) < 0, "with no sensor there is no value");
+	if (saved) {
+		setenv("POND_ROOT", saved, 1);
+		free(saved);
+	}
+}
+
 static void test_writers(void)
 {
 	char small[8];
@@ -3675,6 +3707,9 @@ static void test_table(void)
 	p = prov_find("optics");
 	check(p && prov_present(p),
 	      "the optics are served, now that the driver publishes them as hwmon");
+	p = prov_find("thermal");
+	check(p && prov_present(p) && (p->flags & PROV_VOLATILE),
+	      "the temperatures are served, and change from one read to the next");
 	p = prov_find("omci");
 	check(p && prov_present(p) && (p->flags & PROV_SLOW),
 	      "the OLT's provisioning is served, and slow: the whole MIB of omcid");
@@ -3740,6 +3775,7 @@ int main(void)
 	test_netlink_malformed();
 	test_netlink_onu();
 	test_optics();
+	test_thermal();
 	test_writers();
 	test_growth();
 	test_value_replies();
