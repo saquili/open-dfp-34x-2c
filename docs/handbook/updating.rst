@@ -466,6 +466,36 @@ keeps for this stick, the one the stick shipped with among them.
   can change how the stick introduces itself to an OLT. Going back, take the
   package the stick shipped with.
 
+The page of each of those builds took this system's package too (M: a stick
+of the bench, 2026-10-25, the file ``web-install.tar`` of the release
+2026.10.22-1523, 3430400 bytes, which is under the 3932160 bytes that every
+page takes). Seven of the eight did; the build of 2021-07-02 was not tried
+through its page, since once started from the flash it sends no frame on the
+bench's host link: not at 2500BASE-X, and at 1000BASE-X it has no link, with
+or without autonegotiation.
+
+* On each of the seven the page took the file and ``fwu.sh`` wrote it into the
+  bank that the build did not run, ``1 - sw_active``. The boot loader started
+  that bank once, this system reached O5 between 9.4 and 10.2 seconds after
+  its kernel started and committed its bank, and the shipped build's bank
+  read back byte for byte as before (the MD5 of both partitions). "Go back to
+  the shipped firmware" (``onu-update return``) started the build again, and
+  a second upload through its page did the same.
+* The page's button asks "Do you really want to upgrade the firmware?" in a
+  dialog of the browser, which a program that drives the browser has to
+  answer. A build's page asks its owner to sign in again after each restart.
+* The page writes ``1 - sw_active``. A stick that the boot loader started once
+  with ``bootm``, as the bench does for a trial, may have ``sw_active`` at the
+  other bank, and its page would then write the bank that it runs. Start the
+  shipped build with ``run boot_by_commit`` after ``sw_commit`` is set, which
+  sets ``sw_active`` too.
+* ``tools/shipped-fw-check/check-shipped-fw.sh`` is a read-only check of such
+  a stick before an update: its optics, processor, memory, banks and boot
+  environment, and that line of ``sw_active``. It gave no failure on seven of
+  the eight builds, but for a stick started with ``bootm``, and a warning on
+  the four hybrid builds, which pick the PON mode themselves and said that
+  the GPON device was not activated at the bench's weak light.
+
 Measured on the board
 =====================
 
