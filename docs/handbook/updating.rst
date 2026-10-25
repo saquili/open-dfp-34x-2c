@@ -496,6 +496,50 @@ or without autonegotiation.
   the four hybrid builds, which pick the PON mode themselves and said that
   the GPON device was not activated at the bench's weak light.
 
+Which builds took a package through their page, as the repository names them
+(M: a stick of the bench, 2026-10-25; release 2026.10.22-1523 with its
+``web-install.tar`` of 3430400 bytes, and release 2026.10.25-1318 with one of
+3440640 bytes, both under the 3932160 that every page takes):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Build
+     - 2026.10.22-1523
+     - 2026.10.25-1318
+   * - ``M110_sfp_ODI_210702``
+     - not tried through its page
+     - not tried
+   * - ``M110_sfp_ODI_220304``
+     - taken and kept
+     - not tried
+   * - ``M110_sfp_ODI_220817``
+     - taken and kept
+     - not tried
+   * - ``M110_sfp_ODI_220923``
+     - taken and kept
+     - taken and kept
+   * - ``M114_sfp_ODI_Vlan_220414``
+     - taken and kept
+     - not tried
+   * - ``M114_sfp_ODI_hybrid_220527``
+     - taken and kept
+     - not tried
+   * - ``M114_sfp_ODI_hybrid_220916``
+     - taken and kept
+     - not tried
+   * - ``M114_sfp_ODI_hybrid_221209``
+     - taken and kept
+     - taken and kept
+
+"Taken and kept" is what the seven did above: the page took the file, this
+system started on trial from the bank the build did not run, reached O5 in
+about 10 seconds, committed its bank, and left the shipped build's bank as it
+was. Start from one of the seven. A build that is not on the list was not
+tried, which does not say that it fails; the build of 2021-07-02 is the one
+that needs a bench with a host that talks to it.
+
 Measured on the board
 =====================
 
