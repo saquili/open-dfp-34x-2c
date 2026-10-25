@@ -384,6 +384,21 @@ Before you install
   <docs/handbook/install-guide.rst>`__ takes a stick through the install, the
   first sign-in, an update and the ways back, step by step, with what to do
   when a step fails.
+* **Check the stick first, and be ready for a console.** While it still runs
+  the shipped firmware, `tools/shipped-fw-check
+  <tools/shipped-fw-check/README.rst>`__ reads its laser, processor, memory,
+  flash banks and boot environment and changes nothing; a ``FAIL`` is a reason
+  to stop and ask before you install. The install is made through the shipped
+  firmware's page, did not need the serial console on the sticks it was tried
+  on, and is not expected to. Be prepared for one all the same: these are test
+  builds, and a step may fail in a way nobody has met. Have a serial console
+  ready before you start (`recovery.rst <docs/handbook/recovery.rst>`__, and
+  ``board.rst``, "The console").
+* **Start from a build that was tried.** The update through the shipped
+  firmware's page was tried from seven of the eight builds that the
+  repository Anime4000/RTL960x keeps for this stick, and `updating.rst
+  <docs/handbook/updating.rst>`__ ("The shipped firmware's packages beside
+  this system") names them, and says which release each took.
 * **Take great care, and keep a backup.** The install is not expected to
   remove data or settings: the shipped firmware stays in its bank with its
   settings ("Two ways in", below). But these are test builds, tried on few
