@@ -25,14 +25,38 @@ What you need
 * The stick, a DFP-34X-2C2 or DFP-34X-2C3 that runs its shipped firmware, in
   the SFP cage of a router or a computer whose port you can set up. One image
   is for both, but only a 2C3 has run it: on a 2C2 it has not been tried yet.
+  Start from a build of the shipped firmware that was tried: ``updating.rst``,
+  "The shipped firmware's packages beside this system", names them.
 * The address of the shipped firmware's page, ``192.168.1.1`` as the stick is
   sold, and the password of its administrator.
 * From a release, on the repository's Releases page: ``web-install.tar``,
   ``update.bin`` and ``SHA256SUMS``.
 
-No console is needed. The serial console is the way out when the stick
-answers nothing at all (``recovery.rst``), and the bench of ``flashing.rst``
-is another way in, for a stick on a bench.
+No console is needed: the install goes through the shipped firmware's page,
+and on the sticks it was tried on it did not need one. Be prepared for one all
+the same. These are test builds, and a step may fail in a way that the table
+at the end of this page does not cover; the serial console is then the way out,
+and the only one when the stick answers nothing at all (``recovery.rst``). Have
+it ready before you start, not after (``board.rst``, "The console"). The bench
+of ``flashing.rst`` is another way in, for a stick on a bench.
+
+Before step 1, while the stick still runs the shipped firmware, you can have it
+checked. ``tools/shipped-fw-check/check-shipped-fw.sh`` reads the stick's laser
+and optics, processor, memory, flash banks and boot environment, and writes
+nothing. Run it in the shipped firmware's shell, over ssh or telnet if the
+build offers one (both want the shipped firmware's administrator password),
+or on the serial console::
+
+    ssh root@192.168.1.1 'sh -s' < tools/shipped-fw-check/check-shipped-fw.sh
+
+Each line starts with ``PASS``, ``WARN``, ``FAIL`` or ``INFO``. A ``FAIL`` is a
+reason not to install until you know why. A ``WARN`` needs a look, and is not
+always a fault: a build that picks the PON mode itself warns that the GPON
+device is not activated until it has light of the right kind. The check was
+run from the shell on the serial console, on seven of the eight builds of the
+shipped firmware that the project knows; over ssh or telnet it has not been
+tried. It is optional. ``tools/shipped-fw-check/README.rst`` says what each
+line checks.
 
 Read "Before you install" in the README first. The fibre may stay out of the
 stick for the whole of this page: without light the trial start does not wait
