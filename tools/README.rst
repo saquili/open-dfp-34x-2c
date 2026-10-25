@@ -31,6 +31,9 @@ subdirectory has a README of its own, and ``make check`` runs their tests:
   use, with the check that every program finds what it needs.
 * ``docs/`` -- the rendering of the repository's pages to HTML, which fails on
   any warning of docutils.
+* ``shipped-fw-check/`` -- a quick, read-only check that a stick which runs its
+  shipped firmware is fit for an update: laser, processor, memory, flash banks
+  and boot environment.
 * ``lab/`` -- small tools for the lab host that stands on the other side of the
   stick: a steady broadcast sender.
 * ``kexec/`` -- the files for starting a trial kernel on the stick from the
