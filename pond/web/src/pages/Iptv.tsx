@@ -14,6 +14,7 @@
 import { Play } from "lucide-react";
 import { useState } from "react";
 import { useIptv, useIptvChange, useIptvTest } from "../api/config";
+import { useLive, useTraffic } from "../api/live";
 import type { Iptv, IptvTest } from "../api/types";
 import { SaveState, useChangeState } from "../components/Field";
 import { Page } from "../components/Page";
@@ -21,6 +22,15 @@ import { QueryState } from "../components/Read";
 import { Badge, Card, Cell, Detail, Facts, Row, Table } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { bitrate, duration, integer } from "../lib/format";
+import {
+  eventRows,
+  knownRows,
+  type LinkKind,
+  linkLocal,
+  refusedRows,
+  shortAddr,
+  withoutLinkLocal,
+} from "../lib/iptv";
 import { FibreState } from "./Fibre";
 import { Columns, Hint, Stack } from "./system/shared";
 
@@ -37,6 +47,17 @@ const REASON: Record<Iptv["rejected"][number]["reason"], Key> = {
   preview_over: "tv.reasonPreview",
 };
 
+const KIND: Record<LinkKind, Key> = {
+  neighbours: "tv.linkNeighbours",
+  all_nodes: "tv.linkAllNodes",
+  all_routers: "tv.linkAllRouters",
+  reports: "tv.linkReports",
+  discovery: "tv.linkDiscovery",
+  routing: "tv.linkRouting",
+  dhcp: "tv.linkDhcp",
+  other: "tv.linkOther",
+};
+
 const EVENT: Record<Iptv["log"][number]["event"], Key> = {
   join: "tv.evJoin",
   leave: "tv.evLeave",
@@ -46,8 +67,20 @@ const EVENT: Record<Iptv["log"][number]["event"], Key> = {
   back: "tv.evBack",
 };
 
+/* What the OLT sends on the multicast GEM ports now, bits a second, or null without them. */
+function useMulticastNow(): number | null {
+  const { data: live } = useLive();
+  const now = useTraffic().at(-1);
+  const names = (live?.gem_ports ?? []).filter((g) => g.multicast).map((g) => g.name);
+  if (!now || names.length === 0) return null;
+  return names.reduce((sum, n) => sum + (now.gems[n]?.down ?? 0), 0);
+}
+
 function Watched({ tv }: { tv: Iptv }) {
   const { t, lang } = useI18n();
+  const total = useMulticastNow();
+  const counted = tv.groups.reduce((sum, g) => sum + (g.rate_bps ?? 0), 0);
+  const low = total != null && total > 100_000 && tv.groups.length > 0 && counted * 10 < total;
   return (
     <Card title={t("tv.watched", { n: tv.groups.length })}>
       {tv.groups.length === 0 ? (
@@ -57,12 +90,12 @@ function Watched({ tv }: { tv: Iptv }) {
           {tv.groups.map((g) => (
             <Row key={`${g.group}/${g.source ?? ""}/${g.client ?? ""}`}>
               <Cell head={t("tv.group")}>
-                <span className="font-mono">{g.group}</span>
-                {g.source && <Detail>{t("tv.source", { source: g.source })}</Detail>}
+                <span className="font-mono">{shortAddr(g.group)}</span>
+                {g.source && <Detail>{t("tv.source", { source: shortAddr(g.source) })}</Detail>}
               </Cell>
               <Cell head="VLAN">{g.vlan ?? "–"}</Cell>
               <Cell head={t("tv.client")}>
-                <span className="font-mono">{g.client ?? "–"}</span>
+                <span className="font-mono">{g.client ? shortAddr(g.client) : "–"}</span>
               </Cell>
               <Cell head={t("tv.since")}>{duration(tv.now_s - g.since_s, lang)}</Cell>
               <Cell head={t("tv.rate")}>
@@ -72,17 +105,27 @@ function Watched({ tv }: { tv: Iptv }) {
           ))}
         </Table>
       )}
+      {total != null && (
+        <p className="flex flex-wrap items-baseline gap-x-2 text-sm text-base-content/70">
+          <span>{t("tv.multicastNow")}</span>
+          <span className="tabular font-medium text-base-content">{bitrate(total, lang)}</span>
+        </p>
+      )}
+      {low && <Hint>{t("tv.rateLow")}</Hint>}
     </Card>
   );
 }
 
 function Refused({ tv }: { tv: Iptv }) {
   const { t, lang } = useI18n();
-  const none = tv.rejected.length === 0 && tv.lost.length === 0;
+  const asked = tv.rejected.filter((r) => !linkLocal(r.group));
+  const known = knownRows(tv.rejected);
+  const none = asked.length === 0 && tv.lost.length === 0;
+  const rows = refusedRows(asked);
   return (
     <Card title={t("tv.refused")}>
       {none ? (
-        <p className="text-sm">{t("tv.refusedNone")}</p>
+        <p className="text-sm">{t(known.length > 0 ? "tv.refusedOnlyKnown" : "tv.refusedNone")}</p>
       ) : (
         <Table head={[t("tv.when"), t("tv.group"), t("tv.why")]}>
           {tv.lost.map((l) => (
@@ -91,21 +134,30 @@ function Refused({ tv }: { tv: Iptv }) {
                 {t("tv.ago", { t: duration(tv.now_s - l.since_s, lang) })}
               </Cell>
               <Cell head={t("tv.group")}>
-                <span className="font-mono">{l.group}</span>
+                <span className="font-mono">{shortAddr(l.group)}</span>
               </Cell>
               <Cell head={t("tv.why")}>
                 <Badge tone="bad">{t("tv.lost")}</Badge>
               </Cell>
             </Row>
           ))}
-          {tv.rejected.map((r) => (
-            <Row key={`${r.at_s}/${r.group}`}>
+          {rows.map((r) => (
+            <Row key={`${r.group}/${r.vlan ?? ""}/${r.reason}`}>
               <Cell head={t("tv.when")}>
-                {t("tv.ago", { t: duration(tv.now_s - r.at_s, lang) })}
+                {r.count > 1
+                  ? t("tv.repeat", { n: r.count, t: duration(tv.now_s - r.lastAt, lang) })
+                  : t("tv.ago", { t: duration(tv.now_s - r.lastAt, lang) })}
               </Cell>
               <Cell head={t("tv.group")}>
-                <span className="font-mono">{r.group}</span>
-                {r.client && <Detail>{r.client}</Detail>}
+                <span className="font-mono">{shortAddr(r.group)}</span>
+                {(r.vlan != null || r.clients.length > 0) && (
+                  <Detail>
+                    {r.vlan != null && `VLAN ${r.vlan}`}
+                    {r.vlan != null && r.clients.length > 0 && " · "}
+                    <span className="font-mono">{r.clients.slice(0, 2).join(", ")}</span>
+                    {r.clients.length > 2 && ` +${r.clients.length - 2}`}
+                  </Detail>
+                )}
               </Cell>
               <Cell head={t("tv.why")}>
                 <Badge tone="warn">{t(REASON[r.reason])}</Badge>
@@ -114,6 +166,36 @@ function Refused({ tv }: { tv: Iptv }) {
           ))}
         </Table>
       )}
+      {known.length > 0 && (
+        <>
+          <div className="grid gap-0.5 pt-1">
+            <h3 className="text-sm font-medium">{t("tv.known")}</h3>
+            <Detail>{t("tv.knownHint")}</Detail>
+          </div>
+          <Table head={[t("tv.when"), t("tv.kind"), t("tv.why")]}>
+            {known.map((k) => (
+              <Row key={k.kind}>
+                <Cell head={t("tv.when")}>
+                  {k.count > 1
+                    ? t("tv.repeat", { n: k.count, t: duration(tv.now_s - k.lastAt, lang) })
+                    : t("tv.ago", { t: duration(tv.now_s - k.lastAt, lang) })}
+                </Cell>
+                <Cell head={t("tv.kind")}>
+                  {t(KIND[k.kind])}
+                  <Detail>
+                    {t("tv.knownDetail", { groups: k.groups, clients: k.clients })}
+                    {" · "}
+                    <span className="font-mono">{k.example}</span>
+                  </Detail>
+                </Cell>
+                <Cell head={t("tv.why")}>
+                  <Badge tone="neutral">{t("tv.knownBadge")}</Badge>
+                </Cell>
+              </Row>
+            ))}
+          </Table>
+        </>
+      )}
     </Card>
   );
 }
@@ -121,6 +203,7 @@ function Refused({ tv }: { tv: Iptv }) {
 function Events({ tv }: { tv: Iptv }) {
   const { t, lang } = useI18n();
   const c = tv.counters;
+  const rows = eventRows(tv.log);
   return (
     <Card title={t("tv.events")}>
       <p className="text-sm text-base-content/70">
@@ -136,17 +219,18 @@ function Events({ tv }: { tv: Iptv }) {
         <p className="text-sm">{t("tv.eventsNone")}</p>
       ) : (
         <ul className="-mx-2 grid max-h-44 gap-1 overflow-auto px-2 text-sm">
-          {tv.log.map((e) => (
+          {rows.map((e) => (
             <li
-              key={`${e.at_s}/${e.event}/${e.group ?? ""}`}
+              key={`${e.event}/${e.group ?? ""}/${e.vlan ?? ""}`}
               className="flex gap-x-2 whitespace-nowrap"
             >
               <span className="tabular w-32 shrink-0 whitespace-nowrap text-base-content/70">
-                {t("tv.ago", { t: duration(tv.now_s - e.at_s, lang) })}
+                {t("tv.ago", { t: duration(tv.now_s - e.lastAt, lang) })}
               </span>
               <span className="font-medium">{t(EVENT[e.event])}</span>
-              {e.group && <span className="font-mono">{e.group}</span>}
+              {e.group && <span className="font-mono">{shortAddr(e.group)}</span>}
               {e.vlan != null && <span className="text-base-content/70">VLAN {e.vlan}</span>}
+              {e.count > 1 && <span className="tabular text-base-content/70">×{e.count}</span>}
             </li>
           ))}
         </ul>
@@ -329,19 +413,55 @@ function Test({ tv }: { tv: Iptv }) {
   );
 }
 
+/* Whether the groups of the link are shown, as the reader last chose. */
+function LinkLocal({
+  hidden,
+  show,
+  onChange,
+}: {
+  hidden: number;
+  show: boolean;
+  onChange: (show: boolean) => void;
+}) {
+  const { t } = useI18n();
+  if (hidden === 0 && !show) return null;
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        className="toggle toggle-sm mt-0.5"
+        checked={show}
+        onChange={(e) => onChange(e.currentTarget.checked)}
+      />
+      <span className="grid gap-0.5">
+        <span className="text-sm font-medium">{t("tv.localShow", { n: hidden })}</span>
+        <Detail>{t("tv.localHint")}</Detail>
+      </span>
+    </label>
+  );
+}
+
 export function IptvPage() {
   const { t } = useI18n();
   const tv = useIptv();
+  const [showLocal, setShowLocal] = useState(false);
+  const view = tv.data ? withoutLinkLocal(tv.data, showLocal) : null;
   return (
     <Page title={t("nav.tv")} hint={t("tv.hint")} actions={<FibreState />}>
       <QueryState reads={tv}>
         {() =>
-          tv.data && (
+          tv.data &&
+          view && (
             <Columns wide="left">
               <Stack>
-                <Watched tv={tv.data} />
-                <Refused tv={tv.data} />
-                <Events tv={tv.data} />
+                <LinkLocal
+                  hidden={view.hidden.events + view.hidden.watched}
+                  show={showLocal}
+                  onChange={setShowLocal}
+                />
+                <Watched tv={view.tv} />
+                <Refused tv={view.tv} />
+                <Events tv={view.tv} />
               </Stack>
               <Stack>
                 <Policy tv={tv.data} />

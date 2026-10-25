@@ -421,6 +421,45 @@ export function memory(live: Live | undefined): MemoryView | null {
   return { totalBytes: m.total_kb * 1024, usedBytes: used * 1024, share: used / m.total_kb };
 }
 
+/*
+ * The temperature scale of the panel runs from SCALE_FROM to the level at
+ * which the kernel stops the stick, or SCALE_TO where the kernel names none.
+ */
+const SCALE_FROM = 30;
+const SCALE_TO = 110;
+
+export interface ThermalView {
+  dieC: number | null;
+  moduleC: number | null;
+  /** The levels the kernel warns and stops at; null where it names none. */
+  warnC: number | null;
+  critC: number | null;
+  /** Where the chip stands on the scale, 0 to 1. */
+  share: number | null;
+  tone: Tone;
+}
+
+export function thermal(live: Live | undefined): ThermalView | null {
+  const th = live?.thermal;
+  if (!th) return null;
+  const top = th.die_crit_c ?? SCALE_TO;
+  const share =
+    th.die_c == null
+      ? null
+      : Math.max(0, Math.min(1, (th.die_c - SCALE_FROM) / (top - SCALE_FROM)));
+  let tone: Tone = th.die_c == null ? "neutral" : "good";
+  if (th.die_c != null && th.die_warn_c != null && th.die_c >= th.die_warn_c) tone = "warn";
+  if (th.die_c != null && th.die_crit_c != null && th.die_c >= th.die_crit_c) tone = "bad";
+  return {
+    dieC: th.die_c,
+    moduleC: th.module_c,
+    warnC: th.die_warn_c,
+    critC: th.die_crit_c,
+    share,
+    tone,
+  };
+}
+
 /** A network of the stick's towards the devices behind it, out through one connection. */
 export interface LanView {
   id: number;

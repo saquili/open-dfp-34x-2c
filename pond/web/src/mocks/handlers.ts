@@ -67,7 +67,8 @@ let mine = Math.floor(Date.now() / 1000);
 let token: string | null = null;
 
 /*
- * POND_MOCK_SCENARIO=sessions: the stick's own connections in the shapes
+ * POND_MOCK_SCENARIO=sessions (or production, which is the same with the
+ * television of a real line): the stick's own connections in the shapes
  * the internet page shows (PPPoE with IPv4, IPv6 and both, up and dialling,
  * a static address and one from DHCP, one place of the seven free), and a
  * person signed in already with a password of their own, for a look at the
@@ -192,7 +193,7 @@ function ipoe(id: number, kind: IpoeInfo["kind"], vlan: string): IpoeInfo {
     lease: null,
   };
 }
-if (SCENARIO === "sessions" || SCENARIO === "demo") {
+if (SCENARIO === "sessions" || SCENARIO === "demo" || SCENARIO === "production") {
   const one = (id: number, family: SessionInfo["family"], up: boolean): SessionInfo => ({
     id,
     user: family === "ipv6" ? `user${id}@example.net/ipv6` : `user${id}@example.net`,
@@ -583,6 +584,90 @@ const iptv: Omit<Iptv, "now_s"> = {
     { at_s: iptvBase - 1830, event: "join", group: "239.10.0.1", vlan: 421 },
   ],
 };
+/*
+ * POND_MOCK_SCENARIO=production: the television of a stick on a real line, as
+ * REF's showed it: one channel watched, whose rate the agent counts at a few
+ * kilobits while the multicast GEM port carries megabits, the router's own
+ * IGMP groups joined every half minute, and the IPv6 groups its stack
+ * reported when it started, refused, in the long form the agent gives them.
+ */
+function productionTv(now: number): Omit<Iptv, "now_s"> {
+  const routers = ["224.0.0.2", "224.0.0.13", "224.0.0.22"];
+  const log: Iptv["log"] = [];
+  for (let at = now - 2; at > now - 1200; at -= 10) {
+    if ((now - at) % 30 < 10) log.push({ at_s: at, event: "query", group: null, vlan: 2600 });
+    log.push({
+      at_s: at - 3,
+      event: "join",
+      group: routers[Math.floor((now - at) / 10) % 3] ?? "224.0.0.2",
+      vlan: 839,
+    });
+  }
+  const llGroups = [
+    "ff02:0000:0000:0000:0000:0000:0000:0002",
+    "ff02:0000:0000:0000:0000:0001:ffd0:609b",
+    "ff02:0000:0000:0000:0000:0001:ff00:0000",
+    "ff02:0000:0000:0000:0000:0000:0000:00fb",
+    "224.0.0.251",
+  ];
+  const rejected: Iptv["rejected"] = [];
+  for (let i = 0; i < 16; i++)
+    rejected.push({
+      at_s: now - 8400 + (i % 3),
+      group: llGroups[i % 5] ?? "",
+      vlan: i === 13 ? 839 : i === 14 ? 35 : 4094,
+      client: i < 8 ? "2001:0db8:0000:0000:0000:0000:00d0:609b" : null,
+      reason: "not_allowed",
+    });
+  for (let i = 0; i < 2; i++)
+    rejected.push({
+      at_s: now - 300 + i * 40,
+      group: "232.0.18.104",
+      vlan: 839,
+      client: "198.51.100.1",
+      reason: "max_groups",
+    });
+  return {
+    policy: {
+      igmp_version: 2,
+      mode: "snoop",
+      fast_leave: true,
+      max_groups: 13,
+      max_bandwidth_bps: null,
+      robustness: 2,
+      query_interval_s: 30,
+      query_response_ms: 10000,
+      last_member_ms: 1000,
+      host_vlan: 839,
+      allowed: [
+        {
+          from: "224.0.0.0",
+          to: "239.255.255.255",
+          vlan: 2600,
+          bandwidth_bps: null,
+          preview: false,
+        },
+      ],
+      static: [],
+    },
+    groups: [
+      {
+        group: "232.0.18.103",
+        source: null,
+        vlan: 839,
+        client: "198.51.100.1",
+        since_s: now - 4800,
+        rate_bps: Math.round(1000 + Math.random() * 6400),
+      },
+    ],
+    rejected,
+    lost: [],
+    counters: { joins: 1663, leaves: 13, rejected: 24, queries: 474, reports: 540 },
+    querier: { last_s: now - 5, version: 2 },
+    priority: { control: 0, by: "stick", pcp: 4, auto: true, dropped: 0 },
+    log,
+  };
+}
 /* The phone the OLT set up, and the SIP passwords, which root's password shows. */
 const phone: Phone = {
   method: "none",
@@ -596,7 +681,7 @@ let phonePasswords: Record<number, string> = {};
 /* The PPPoE password the OLT sent with olt_login, which root's password shows. */
 let oltPassword = "";
 /* The scenarios' OLT sent a PPPoE login. */
-if (SCENARIO === "sessions" || SCENARIO === "demo") {
+if (SCENARIO === "sessions" || SCENARIO === "demo" || SCENARIO === "production") {
   identity.olt_login = { user: "abc12345@operator.example", password_set: true };
   oltPassword = "example-secret";
   /* The service the OLT set up on the VEIP clashes with internet: the stick moved it. */
@@ -719,6 +804,14 @@ function live() {
     port_counters: structuredClone(counters),
     gem_counters: structuredClone(gemCounters),
     cpu: LIVE.cpu ? { ...LIVE.cpu, ticks: { ...ticks } } : null,
+    /* The chip drifts a few degrees over minutes, as a real one does. */
+    thermal: LIVE.thermal && {
+      ...LIVE.thermal,
+      die_c:
+        LIVE.thermal.die_c == null
+          ? null
+          : LIVE.thermal.die_c + Math.round(2 * Math.sin(Date.now() / 90000)),
+    },
     hostname,
     product,
     settings,
@@ -1763,7 +1856,13 @@ const stick = [
     return (
       away() ??
       (signedIn
-        ? HttpResponse.json({ id: "iptv", value: { ...iptv, now_s: iptvAt() } })
+        ? HttpResponse.json({
+            id: "iptv",
+            value:
+              SCENARIO === "production"
+                ? { ...productionTv(iptvAt()), now_s: iptvAt() }
+                : { ...iptv, now_s: iptvAt() },
+          })
         : unauthorized())
     );
   }),

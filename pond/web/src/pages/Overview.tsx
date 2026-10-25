@@ -12,7 +12,7 @@ import { Page } from "../components/Page";
 import { HistoryNote, TrafficChart } from "../components/TrafficChart";
 import { Badge, Card, Figure } from "../components/ui";
 import { useI18n } from "../i18n";
-import { bitrate, dbmText, duration, integer, percent } from "../lib/format";
+import { bitrate, dbmText, decimal, duration, integer, percent } from "../lib/format";
 import {
   fibre,
   hostLink,
@@ -22,6 +22,7 @@ import {
   memory,
   session,
   type Tone,
+  thermal,
 } from "../lib/state";
 
 function Tile({
@@ -55,8 +56,18 @@ function Tile({
   );
 }
 
-/** A thin bar for a share, with its words on one line. */
-function Bar({ label, share, tone }: { label: string; share: number | null; tone: Tone }) {
+/** A thin bar for a share, with its words on one line; @text replaces the share's percentage. */
+function Bar({
+  label,
+  share,
+  tone,
+  text,
+}: {
+  label: string;
+  share: number | null;
+  tone: Tone;
+  text?: string;
+}) {
   const { lang } = useI18n();
   const cls = {
     good: "bg-success",
@@ -66,7 +77,7 @@ function Bar({ label, share, tone }: { label: string; share: number | null; tone
     neutral: "bg-base-content/40",
   }[tone];
   return (
-    <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_2.75rem] items-center gap-2 text-xs">
+    <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_3rem] items-center gap-2 text-xs">
       <span className="text-base-content/70">{label}</span>
       <span className="h-1.5 overflow-hidden rounded-full bg-base-300">
         <span
@@ -74,7 +85,9 @@ function Bar({ label, share, tone }: { label: string; share: number | null; tone
           style={{ width: `${Math.round((share ?? 0) * 100)}%` }}
         />
       </span>
-      <span className="tabular text-right">{share == null ? "–" : percent(share, lang)}</span>
+      <span className="tabular text-right">
+        {share == null ? "–" : (text ?? percent(share, lang))}
+      </span>
     </div>
   );
 }
@@ -92,6 +105,7 @@ export function Overview() {
   const s = session(live);
   const link = hostLink(live);
   const mem = memory(live);
+  const th = thermal(live);
   const lane = laneMode(live);
 
   const hardware = now && now.wanDown + now.wanUp > 20e6 && now.cpuFrames < 200;
@@ -182,6 +196,14 @@ export function Overview() {
                 share={mem?.share ?? null}
                 tone={shareTone(mem?.share ?? null)}
               />
+              {th && (
+                <Bar
+                  label={t("overview.temp")}
+                  share={th.share}
+                  tone={th.tone}
+                  text={th.dieC != null ? `${decimal(th.dieC, 0, lang)} °C` : undefined}
+                />
+              )}
             </div>
           </Tile>
         </div>

@@ -18,7 +18,7 @@ import { Card, Gauge, Stat } from "../../components/ui";
 import { type Key, useI18n } from "../../i18n";
 import { bankLetter } from "../../lib/firmware";
 import { bytes, decimal, percent } from "../../lib/format";
-import { memory, type Tone } from "../../lib/state";
+import { memory, type Tone, thermal } from "../../lib/state";
 
 /* What each partition of the flash is, in words. */
 const PARTITION: Record<string, Key> = {
@@ -143,13 +143,14 @@ export function ResourcesPage() {
     ? sys.reduce((a, p) => a + (p.used ?? 0), 0)
     : null;
   const cpu = live?.cpu;
+  const th = thermal(live);
   const m = live?.memory;
   const cache = m?.cached_kb != null ? (m.cached_kb + (m.buffers_kb ?? 0)) * 1024 : null;
 
   return (
     <Page title={t("nav.resources")} hint={t("system.resourcesHint")}>
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(0,1fr)]">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card title={t("system.cpu")} action={<HistoryNote />}>
             <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
               <Gauge
@@ -213,6 +214,43 @@ export function ResourcesPage() {
                 format={(v) => `${decimal(v, 0, lang)} %`}
                 tone="var(--color-secondary)"
                 label={t("system.memInUse")}
+              />
+            </div>
+          </Card>
+          <Card title={t("system.temperature")} action={<HistoryNote />}>
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
+              <Gauge
+                share={th?.share ?? null}
+                value={th?.dieC != null ? `${decimal(th.dieC, 0, lang)} °C` : "–"}
+                label={t("system.tempChip")}
+                tone={th?.tone ?? "neutral"}
+              />
+              <div className="grid gap-2">
+                <Stat
+                  label={t("system.tempModule")}
+                  value={th?.moduleC != null ? `${decimal(th.moduleC, 1, lang)} °C` : "–"}
+                  sub={t("system.tempModuleHint")}
+                />
+                <Stat
+                  label={t("system.tempLevels")}
+                  value={
+                    th?.warnC != null && th.critC != null
+                      ? `${decimal(th.warnC, 0, lang)} / ${decimal(th.critC, 0, lang)} °C`
+                      : "–"
+                  }
+                  sub={th?.warnC != null ? t("system.tempLevelsHint") : t("system.tempNoLevels")}
+                />
+              </div>
+            </div>
+            <div className="h-20">
+              <Sparkline
+                data={traffic}
+                value={(r) => r.dieC}
+                min={30}
+                max={th?.critC ?? 110}
+                format={(v) => `${decimal(v, 0, lang)} °C`}
+                tone="var(--color-warning)"
+                label={t("system.tempChip")}
               />
             </div>
           </Card>

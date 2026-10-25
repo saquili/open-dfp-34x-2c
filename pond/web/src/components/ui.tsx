@@ -92,7 +92,7 @@ export function Card({
   scroll?: boolean;
 }) {
   return (
-    <section className={`card min-h-0 border border-base-300 bg-base-100 ${className}`}>
+    <section className={`card min-h-0 min-w-0 border border-base-300 bg-base-100 ${className}`}>
       <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
         {(title || action) && (
           <div className="flex min-h-8 items-center justify-between gap-3">
@@ -128,9 +128,9 @@ export function PageTitle({ children, hint }: { children: ReactNode; hint?: Reac
  */
 export function Table({ head, children }: { head: ReactNode[]; children: ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-box border border-base-300 bg-base-100">
-      <table className="w-full border-collapse text-sm max-md:block">
-        <thead className="max-md:hidden">
+    <div className="@container overflow-hidden rounded-box border border-base-300 bg-base-100">
+      <table className="w-full border-collapse text-sm @max-xl:block">
+        <thead className="@max-xl:hidden">
           <tr>
             {head.map((h, i) => (
               <th
@@ -143,7 +143,7 @@ export function Table({ head, children }: { head: ReactNode[]; children: ReactNo
             ))}
           </tr>
         </thead>
-        <tbody className="max-md:block [&>tr:last-child>td]:border-b-0">{children}</tbody>
+        <tbody className="@max-xl:block [&>tr:last-child>td]:border-b-0">{children}</tbody>
       </table>
     </div>
   );
@@ -151,7 +151,7 @@ export function Table({ head, children }: { head: ReactNode[]; children: ReactNo
 
 export function Row({ children }: { children: ReactNode }) {
   return (
-    <tr className="hover:bg-base-200/40 max-md:block max-md:border-b max-md:border-base-300 max-md:py-2 max-md:last:border-b-0">
+    <tr className="hover:bg-base-200/40 @max-xl:block @max-xl:border-b @max-xl:border-base-300 @max-xl:py-2 @max-xl:last:border-b-0">
       {children}
     </tr>
   );
@@ -176,9 +176,9 @@ export function Cell({
     <td
       colSpan={span}
       data-h={head}
-      className={`border-b border-base-300 px-4 align-top max-md:block max-md:border-0 max-md:py-1 ${
-        actions ? "w-px whitespace-nowrap py-2 text-right max-md:w-auto max-md:text-left" : "py-3"
-      } ${head ? "max-md:before:block max-md:before:text-xs max-md:before:text-base-content/70 max-md:before:content-[attr(data-h)]" : ""}`}
+      className={`border-b border-base-300 px-4 align-top @max-xl:block @max-xl:border-0 @max-xl:py-1 ${
+        actions ? "w-px whitespace-nowrap py-2 text-right @max-xl:w-auto @max-xl:text-left" : "py-3"
+      } ${head ? "@max-xl:before:block @max-xl:before:text-xs @max-xl:before:text-base-content/70 @max-xl:before:content-[attr(data-h)]" : ""}`}
     >
       {actions ? children : <div className="grid gap-1">{children}</div>}
     </td>

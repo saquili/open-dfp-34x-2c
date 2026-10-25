@@ -17,6 +17,7 @@ import {
   served,
   session,
   sessions,
+  thermal,
 } from "./state";
 
 describe("what the figures mean", () => {
@@ -199,5 +200,44 @@ describe("how far the stick got in registering on the OLT", () => {
 
   it("waits at every step without a PON interface", () => {
     expect(Object.values(at("noPon")).every((s) => s === "wait")).toBe(true);
+  });
+});
+
+describe("the temperature of the chip", () => {
+  const at = (die: number | null, warn: number | null = 95, crit: number | null = 110) =>
+    thermal({
+      ...LIVE,
+      thermal: { die_c: die, die_warn_c: warn, die_crit_c: crit, module_c: 48 },
+    });
+
+  it("is normal below the level the kernel warns at", () => {
+    expect(at(73)?.tone).toBe("good");
+    expect(at(94.9)?.tone).toBe("good");
+  });
+
+  it("warns from that level and calls the stopping level bad", () => {
+    expect(at(95)?.tone).toBe("warn");
+    expect(at(109)?.tone).toBe("warn");
+    expect(at(110)?.tone).toBe("bad");
+  });
+
+  it("keeps its place on the scale between 30 °C and the stopping level", () => {
+    expect(at(30)?.share).toBe(0);
+    expect(at(70)?.share).toBe(0.5);
+    expect(at(110)?.share).toBe(1);
+    expect(at(140)?.share).toBe(1);
+    expect(at(10)?.share).toBe(0);
+  });
+
+  it("uses 110 °C for the scale and no tone of its own where the kernel names no levels", () => {
+    expect(at(70, null, null)?.share).toBe(0.5);
+    expect(at(120, null, null)?.tone).toBe("good");
+  });
+
+  it("is neutral without a reading, and absent from a pond that does not serve it", () => {
+    expect(at(null)?.tone).toBe("neutral");
+    expect(at(null)?.share).toBeNull();
+    expect(thermal({ ...LIVE, thermal: null })).toBeNull();
+    expect(thermal(undefined)).toBeNull();
   });
 });

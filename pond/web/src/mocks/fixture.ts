@@ -517,6 +517,12 @@ export const LIVE: Live = {
     tx_power_uw: 1682,
     rx_power_uw: 2,
   },
+  thermal: {
+    die_c: 73,
+    die_warn_c: 95,
+    die_crit_c: 110,
+    module_c: 48.1,
+  },
   gem_counters: {
     gem278: {
       pon_rx_octets: 12095584546,

@@ -15,6 +15,12 @@ import { LIVE_IDS, type Live } from "./types";
 
 export const POLL_MS = 5_000;
 const HISTORY = 120; /* ten minutes at one sample every five seconds */
+/*
+ * Two reads closer than this are one moment to the history: the counters of
+ * the processor tick every 10 ms, and what the stick does between two close
+ * reads is mostly to answer them, which a gauge would show as a busy stick.
+ */
+const MIN_GAP_MS = 2_000;
 
 export interface Rates {
   t: number;
@@ -32,6 +38,8 @@ export interface Rates {
   cpuBusy: number | null;
   /** The share of memory in use, 0 to 1. */
   memUsed: number | null;
+  /** The chip's temperature, degrees; null without a sensor. */
+  dieC: number | null;
   /** Each GEM port's traffic, by interface name: down from the OLT, up to it. */
   gems: Record<string, { down: number; up: number }>;
   /** The light received, dBm; null without light. */
@@ -54,6 +62,7 @@ interface Reading {
   gems: Record<string, { rx: number; tx: number }>;
   rxUw: number | null;
   mem: number | null;
+  die: number | null;
   bip: number;
   fecCorrected: number;
   fecLost: number;
@@ -83,16 +92,19 @@ function reading(live: Live, t: number): Reading | null {
     gems,
     rxUw: live.optics?.rx_power_uw ?? null,
     mem: live.memory?.total_kb ? 1 - live.memory.available_kb / live.memory.total_kb : null,
+    die: live.thermal?.die_c ?? null,
     bip: live.onu?.counters.bip_errors ?? 0,
     fecCorrected: live.onu?.counters.fec_corrected_codewords ?? 0,
     fecLost: live.onu?.counters.fec_uncorrectable_codewords ?? 0,
   };
 }
 
-function record(live: Live, t: number) {
+/** Take a read of the stick into the history; exported for the tests, fetchLive() does it. */
+export function record(live: Live, t: number) {
   const cur = reading(live, t);
   if (!cur) return;
   const prev = previous;
+  if (prev && cur.t > prev.t && cur.t - prev.t < MIN_GAP_MS) return;
   previous = cur;
   if (!prev || cur.t <= prev.t) return;
   const dt = (cur.t - prev.t) / 1000;
@@ -113,6 +125,7 @@ function record(live: Live, t: number) {
       cpuFrames: Math.max(0, (cur.cpu - prev.cpu) / dt),
       cpuBusy: busyShare(prev, cur),
       memUsed: cur.mem,
+      dieC: cur.die,
       rxDbm: cur.rxUw != null && cur.rxUw > 0 ? 10 * Math.log10(cur.rxUw / 1000) : null,
       bip: Math.max(0, (cur.bip - prev.bip) / dt),
       fecCorrected: Math.max(0, (cur.fecCorrected - prev.fecCorrected) / dt),
@@ -176,3 +189,6 @@ export function resetTraffic() {
   previous = null;
   history = [];
 }
+
+/** For the tests: the history as it is. */
+export const readTraffic = () => history;

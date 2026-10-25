@@ -22,6 +22,7 @@ import type {
   PortCounters,
   Settings,
   Tcont,
+  Thermal,
   Uptime,
 } from "./gen/model";
 
@@ -88,6 +89,7 @@ export type {
   Tcont,
   TcRule,
   TcRules,
+  Thermal,
   Tls,
   TokenState,
   Trial,
@@ -110,6 +112,8 @@ export interface Live {
   onu: Onu | null;
   tconts: Tcont[];
   optics: Optics | null;
+  /** null from a stick whose pond does not serve them yet. */
+  thermal: Thermal | null;
   settings: Settings;
   /** null from a stick whose pond does not serve them yet. */
   cpu: Cpu | null;
@@ -131,6 +135,7 @@ export const LIVE_IDS: (keyof Live)[] = [
   "onu",
   "tconts",
   "optics",
+  "thermal",
   "settings",
   "cpu",
   "hostname",
