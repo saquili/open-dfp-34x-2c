@@ -63,6 +63,7 @@
 #include "mongoose.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -709,12 +710,155 @@ static bool upload_admitted(struct mg_connection *c, struct mg_http_message *hm)
 	return false;
 }
 
+/*
+ * What a client may hold of the daemon. The panel asks over a few
+ * connections at a time, with bodies of a few kilobytes at most, but for an
+ * update file, which an upload takes past these (firmware.c). A client that
+ * holds connections open, sends its request slowly, or sends a long body
+ * before it signed in would otherwise hold the stick's memory, which the
+ * daemon shares with omcid:
+ * - CONN_MAX connections in all, CONN_PER_SOURCE from one address: one past
+ *   them is closed as it comes, before its TLS handshake;
+ * - a request's headers and body within REQUEST_MS of its first byte, and the
+ *   first request within REQUEST_MS of the connection; a connection kept
+ *   alive with nothing asked closes IDLE_MS after its last answer;
+ * - a body of at most BODY_ANON bytes without a session or the token, and
+ *   BODY_MAX with one; none sent in chunks, which the panel never does.
+ */
+#define CONN_MAX 32
+#define CONN_PER_SOURCE 8
+#define REQUEST_MS 10000
+#define IDLE_MS 60000
+#define BODY_ANON 1024
+#define BODY_MAX (48u * 1024u)
+
+/*
+ * A connection's clock, kept at the start of its data, by memcpy, as the
+ * data has no alignment of its own and Mongoose keeps a size at its end
+ * while it serves a file.
+ */
+struct conn_clock {
+	uint64_t since;		/* its start, or its last answer */
+	uint64_t asking;	/* the first byte of the request coming; 0 for none */
+	uint8_t answered;	/* a request of it has had its answer */
+};
+
+#define CLOCK_BYTES (2 * sizeof(uint64_t) + 1)
+
+static void clock_get(const struct mg_connection *c, struct conn_clock *k)
+{
+	memcpy(&k->since, c->data, sizeof(k->since));
+	memcpy(&k->asking, c->data + 8, sizeof(k->asking));
+	k->answered = (uint8_t)c->data[16];
+}
+
+static void clock_put(struct mg_connection *c, const struct conn_clock *k)
+{
+	memcpy(c->data, &k->since, sizeof(k->since));
+	memcpy(c->data + 8, &k->asking, sizeof(k->asking));
+	c->data[16] = (char)k->answered;
+}
+
+/*
+ * Whether @c is one more than may be open: all served connections, and those
+ * of its address. A listener and an outgoing connection are not counted.
+ */
+static bool too_many_conns(struct mg_connection *c)
+{
+	struct mg_connection *o;
+	unsigned int all = 0, same = 0;
+
+	for (o = c->mgr->conns; o; o = o->next) {
+		if (o->is_listening || o->is_client || o->is_closing)
+			continue;
+		all++;
+		if (o->rem.is_ip6 == c->rem.is_ip6 &&
+		    !memcmp(o->rem.addr.ip, c->rem.addr.ip, sizeof(o->rem.addr.ip)))
+			same++;
+	}
+	return all > CONN_MAX || same > CONN_PER_SOURCE;
+}
+
+/* A connection's request, or its silence, that has gone on too long. */
+static bool overdue(struct mg_connection *c, uint64_t now)
+{
+	struct conn_clock k;
+
+	clock_get(c, &k);
+	if (k.asking)
+		return now - k.asking > REQUEST_MS;
+	if (!k.answered)
+		return now - k.since > REQUEST_MS;
+	return !c->send.len && now - k.since > IDLE_MS;
+}
+
+/*
+ * Whether the Host of a request is an address, as a browser sends it for a
+ * page of the stick's own; a name in it reaches the stick by DNS, as a page
+ * of another site does that sets its name to the stick's address (DNS
+ * rebinding). A request without a Host, from a script, passes.
+ */
+static bool host_is_address(struct mg_http_message *hm)
+{
+	struct mg_str *h = mg_http_get_header(hm, "Host");
+	struct mg_addr a;
+	struct mg_str ip;
+	const char *end;
+
+	if (!h || !h->len)
+		return true;
+	if (h->buf[0] == '[') {
+		end = memchr(h->buf, ']', h->len);
+		if (!end)
+			return false;
+		ip = mg_str_n(h->buf + 1, (size_t)(end - h->buf - 1));
+	} else {
+		end = memchr(h->buf, ':', h->len);
+		ip = mg_str_n(h->buf, end ? (size_t)(end - h->buf) : h->len);
+	}
+	return ip.len && mg_aton(ip, &a);
+}
+
+/*
+ * Whether a request whose headers are in may send its body: of a length
+ * given, not in chunks, of at most BODY_ANON bytes without a session or the
+ * token and BODY_MAX with one. Otherwise it answers 413 or 411, and the
+ * connection closes rather than take the body.
+ */
+static bool body_admitted(struct mg_connection *c, struct mg_http_message *hm)
+{
+	char sid[AUTH_ID_LEN + 1];
+	size_t cap;
+
+	if (mg_http_get_header(hm, "Transfer-Encoding")) {
+		reply_err(c, 411, "length required", "send the body with a Content-Length");
+		c->is_draining = 1;
+		return false;
+	}
+	if (hm->body.len <= BODY_ANON)
+		return true;
+	cookie_session(hm, sid);
+	cap = auth_session(sid, time(NULL)) || authorised(hm) ? BODY_MAX : BODY_ANON;
+	if (hm->body.len <= cap)
+		return true;
+	reply_err(c, 413, "too large", "the body is longer than the stick takes");
+	c->is_draining = 1;
+	return false;
+}
+
 static void handler(struct mg_connection *c, int ev, void *ev_data)
 {
 	struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 	struct mg_str caps[2];
 
 	if (ev == MG_EV_ACCEPT) {
+		struct conn_clock k = { .since = mg_millis() };
+
+		clock_put(c, &k);
+		if (too_many_conns(c)) {
+			c->is_closing = 1;
+			return;
+		}
 		tls_accept(c);
 		return;
 	}
@@ -722,20 +866,53 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		value_sent(c);
 		return;
 	}
+	if (ev == MG_EV_READ) {
+		struct conn_clock k;
+
+		clock_get(c, &k);
+		if (!k.asking && c->recv.len) {
+			k.asking = mg_millis();
+			clock_put(c, &k);
+		}
+		return;
+	}
+	if (ev == MG_EV_POLL) {
+		if (!c->is_listening && !c->is_closing && overdue(c, mg_millis()))
+			c->is_closing = 1;
+		return;
+	}
 	/*
 	 * An upload is taken as its headers come, before its body; a request
-	 * over HTTP, while there is HTTPS, is sent on before its body too.
+	 * over HTTP, while there is HTTPS, is sent on before its body too, and
+	 * one over HTTP alone has to name the stick by an address.
 	 */
 	if (ev == MG_EV_HTTP_HDRS) {
-		if (!mg_match(hm->uri, mg_str("/api/health"), NULL) && tls_redirect(c, hm))
+		bool health = mg_match(hm->uri, mg_str("/api/health"), NULL);
+
+		if (!health && tls_redirect(c, hm)) {
 			c->is_draining = 1;
-		else if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL) &&
-			 !mg_strcmp(hm->method, mg_str("POST")) && upload_admitted(c, hm))
-			firmware_upload(c, hm);
+		} else if (!health && !c->is_tls && !host_is_address(hm)) {
+			reply_err(c, 421, "misdirected",
+				  "name the stick by its address, or use HTTPS");
+			c->is_draining = 1;
+		} else if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL) &&
+			   !mg_strcmp(hm->method, mg_str("POST"))) {
+			if (upload_admitted(c, hm))
+				firmware_upload(c, hm);
+		} else {
+			body_admitted(c, hm);
+		}
 		return;
 	}
 	if (ev != MG_EV_HTTP_MSG || c->is_draining)
 		return;
+
+	/* The request is in: the clock counts the wait for the next one. */
+	{
+		struct conn_clock k = { .since = mg_millis(), .answered = 1 };
+
+		clock_put(c, &k);
+	}
 
 	if (mg_match(hm->uri, mg_str("/api/health"), NULL)) {
 		reply_json(c, 200, "{\"ok\":true}");
@@ -976,6 +1153,18 @@ int main(int argc, char **argv)
 	errno = 0;
 	if (nice(10) == -1 && errno)
 		fprintf(stderr, "pond: cannot lower its priority: %s\n", strerror(errno));
+	/*
+	 * Out of memory, the kernel ends the daemon before omcid and the rest:
+	 * it is the program a client of the host side can make grow.
+	 */
+	{
+		int fd = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);
+
+		if (fd < 0 || write(fd, "500", 3) != 3)
+			fprintf(stderr, "pond: cannot offer itself to the OOM killer first\n");
+		if (fd >= 0)
+			close(fd);
+	}
 
 	load_token();
 	auth_init();

@@ -103,6 +103,23 @@ A change of password ends every other session. pond keeps the sessions in
 memory alone, each with the address its sign-in came from, which the panel
 lists (``/api/auth/sessions``), and a restart of the daemon ends them all.
 
+What a client may hold of the daemon is bounded, so that one that keeps
+connections open, sends its request slowly or sends a long body cannot hold
+the stick's memory, which the daemon shares with omcid: 32 connections in
+all and 8 from one address, one past them closed as it comes; a request's
+headers and body within 10 seconds of its first byte, and the first request
+within 10 seconds of the connection, a connection kept alive with nothing
+asked closing a minute after its last answer; a body of at most 1 KiB
+without a session or the token and 48 KiB with one, given by its length,
+not in chunks (413, 411), which the daemon answers at the headers, before the
+body comes; and 96 KiB of a connection's received data at most. An upload of
+an update file goes past these (below). The daemon offers itself first to the
+kernel's out-of-memory killer (``oom_score_adj`` 500). Over HTTP alone, without
+HTTPS, a request has to name the stick by an address in ``Host``: a name
+there is answered 421, as a page of another site that points a name of its own
+at the stick's address (DNS rebinding) would send one; ``/api/health`` answers
+whatever the ``Host``.
+
 A sign-in, and a change made in a session, must carry the header ``X-Pond``,
 which a page of another site cannot add, so a forged form neither signs the
 browser in nor changes anything.

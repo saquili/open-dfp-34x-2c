@@ -170,6 +170,7 @@ def main():
     servers_keys(pond, os.path.dirname(key), sys.argv[3])
     slow_flash(pond, os.path.dirname(key))
     sessions_and_token(pond, os.path.dirname(key))
+    limits(pond, key)
 
 
 # A second scalar of P-256, for a new key of the panel.
@@ -738,6 +739,84 @@ def sessions_and_token(pond, workdir):
         os.unlink(root + "/run/onu-auth")
         if os.path.exists(root + TOKEN_FILE):
             os.unlink(root + TOKEN_FILE)
+
+
+def limits(pond, key):
+    """What a client may hold of the daemon: a body before a sign-in is
+    refused at its headers, connections are counted by address and in all, a
+    silent connection is closed, and over HTTP alone a name in Host is."""
+    print("the limits of a client")
+
+    def gone(sock, wait):
+        sock.settimeout(wait)
+        try:
+            return sock.recv(1) == b""
+        except (socket.timeout, TimeoutError, ssl.SSLWantReadError):
+            return False
+        except (ConnectionResetError, ssl.SSLError, OSError):
+            return True
+
+    proc = subprocess.Popen([pond, "-l", f"https://127.0.0.1:{HTTPS}", "-k", key, "-t", "/nope"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not started(proc, HTTPS):
+            check(False, "the daemon listens")
+            return
+        t = context().wrap_socket(socket.create_connection(("127.0.0.1", HTTPS), 5))
+        t.sendall(b"POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Pond: 1\r\n"
+                  b"Content-Length: 250000\r\n\r\n")
+        t.settimeout(5)
+        check(t.recv(200).startswith(b"HTTP/1.1 413") and gone(t, 2),
+              "a body of 250 kB before a sign-in is refused at its headers, and closed")
+        t.close()
+        if sys.platform.startswith("linux"):
+            # Every address of 127/8 is the host's own on Linux.
+            same = [socket.create_connection(("127.0.0.1", HTTPS), 5,
+                                             source_address=("127.0.2.1", 0)) for _ in range(9)]
+            time.sleep(1)
+            check(sum(gone(s, 0.3) for s in same) == 1,
+                  "of nine connections from one address, one is closed")
+            for s in same:
+                s.close()
+            time.sleep(1)
+            many = [socket.create_connection(("127.0.0.1", HTTPS), 5,
+                                             source_address=(f"127.0.3.{i + 1}", 0))
+                    for i in range(40)]
+            time.sleep(1)
+            check(sum(gone(s, 0.2) for s in many) == 8,
+                  "of forty from forty addresses, eight are closed")
+            for s in many:
+                s.close()
+            time.sleep(1)
+        silent = socket.create_connection(("127.0.0.1", HTTPS), 5)
+        time.sleep(5)
+        open_at_5 = not gone(silent, 0.2)
+        time.sleep(7)
+        check(open_at_5 and gone(silent, 1), "a connection that sends nothing is closed after 10 s")
+        silent.close()
+    finally:
+        proc.terminate()
+        proc.wait(5)
+
+    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}", "-t", "/nope"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not started(proc, HTTP):
+            check(False, "the daemon listens over HTTP")
+            return
+        for host, want in (("rebind.example:18080", 421), ("127.0.0.1:18080", 401),
+                           ("[::1]:18080", 401)):
+            conn = http.client.HTTPConnection("127.0.0.1", HTTP, timeout=10)
+            status, _, _ = request(conn, "GET", "/api/auth/session", headers={"Host": host})
+            conn.close()
+            check(status == want, f"over HTTP alone, Host {host} is answered {want}")
+        conn = http.client.HTTPConnection("127.0.0.1", HTTP, timeout=10)
+        status, _, _ = request(conn, "GET", "/api/health", headers={"Host": "rebind.example"})
+        conn.close()
+        check(status == 200, "/api/health answers whatever the Host")
+    finally:
+        proc.terminate()
+        proc.wait(5)
 
 
 def downloads(pond, workdir, token):

@@ -23,7 +23,10 @@ BUILD   ?= build
 override CPPFLAGS += -Isrc -Ithird_party/mongoose -DMG_TLS=MG_TLS_BUILTIN
 override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes \
                  -Wshadow -Wpointer-arith -Wwrite-strings
-MG_FLAGS := -DMG_ENABLE_PACKED_FS=0 -DMG_MAX_RECV_SIZE=262144
+# A connection's receive buffer holds at most 96 KiB: the largest body the
+# panel sends is a few kilobytes, and an upload holds its reading back at 64
+# KiB (src/firmware.c); a client cannot make one connection hold more.
+MG_FLAGS := -DMG_ENABLE_PACKED_FS=0 -DMG_MAX_RECV_SIZE=98304
 LDLIBS  += -lmnl
 
 PROV := prov.o prov_file.o prov_net.o prov_mtd.o prov_netlink.o prov_settings.o \
