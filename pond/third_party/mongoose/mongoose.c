@@ -5,7 +5,8 @@
 // Vendored from Cesanta mongoose 7.23, taken under the GPL-2.0 arm of its
 // dual licence. Changed, apart from this header, in its built-in TLS and in
 // its poll loop, each marked "open-dfp-34x-2c": the signature of the
-// CertificateVerify message is DER as RFC 8446 asks, and a TLS connection
+// CertificateVerify message is DER as RFC 8446 asks, a ClientHello's bounds
+// are checked before it is read (upstream 22a94c0906), and a TLS connection
 // that is_full holds back reads no more. Mongoose holds micro-ecc by Kenneth
 // MacKay (its tls_uecc parts), under the BSD 2-clause licence, and code under
 // the MIT licence: its X25519, from STROBE, and its RSA arithmetic, from
@@ -17164,7 +17165,11 @@ static int mg_tls_server_recv_hello(struct mg_connection *c) {
   if (!mg_tls_got_record(c)) {
     return MG_IO_WAIT;
   }
-  if (rio->buf[0] != MG_TLS_HANDSHAKE || rio->buf[5] != MG_TLS_CLIENT_HELLO) {
+  // open-dfp-34x-2c: the bounds of a ClientHello and of its key share
+  // extension are checked before they are read (upstream 22a94c0906, after
+  // 7.23): a crafted ClientHello read past the record's buffer
+  if (rio->buf[0] != MG_TLS_HANDSHAKE || rio->len < 6 ||
+      rio->buf[5] != MG_TLS_CLIENT_HELLO) {
     mg_error(c, "not a client hello packet");
     return -1;
   }
@@ -17194,18 +17199,22 @@ static int mg_tls_server_recv_hello(struct mg_connection *c) {
     uint16_t k;
     uint16_t key_exchange_len;
     uint8_t *key_exchange;
-    uint16_t n = MG_LOAD_BE16(ext + j + 2);
+    uint16_t n;
+    if ((ext_len - j) < 4) goto fail;
+    n = MG_LOAD_BE16(ext + j + 2);
     if (((uint32_t) n + j + 4) > ext_len) goto fail;
     if (MG_LOAD_BE16(ext + j) != 0x0033) {  // not a key share extension, ignore
       j += (uint16_t) (n + 4);
       continue;
     }
+    if (n < 2) goto fail;
     key_exchange_len = MG_LOAD_BE16(ext + j + 4);
     key_exchange = ext + j + 6;
-    if ((key_exchange + key_exchange_len) > ((uint8_t *) rio->buf + rio->len))
-      goto fail;
+    if (key_exchange_len > n - 2) goto fail;
     for (k = 0; k < key_exchange_len;) {
-      uint16_t m = MG_LOAD_BE16(key_exchange + k + 2);
+      uint16_t m;
+      if ((key_exchange_len - k) < 4) goto fail;
+      m = MG_LOAD_BE16(key_exchange + k + 2);
       if (((uint32_t) m + k + 4) > key_exchange_len) goto fail;
       if (m == 32 && key_exchange[k] == 0x00 && key_exchange[k + 1] == 0x1d) {
         memmove(tls->x25519_cli, key_exchange + k + 4, m);
