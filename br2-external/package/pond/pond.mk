@@ -7,7 +7,8 @@
 # runs none of their install scripts: the build needs none of them (only
 # fsevents, for macOS, and the copy of msw that vitest brings have one).
 #
-# The daemon holds Mongoose, which holds micro-ecc under BSD-2-Clause. The
+# The daemon holds Mongoose, which holds micro-ecc under BSD-2-Clause and
+# its X25519 and RSA arithmetic under MIT. The
 # panel holds code of packages under MIT and ISC; its build writes their
 # licence texts into licenses.txt, which goes into the image with the panel's
 # files (pond/web/licences.ts).
@@ -20,8 +21,9 @@
 POND_VERSION = local
 POND_SITE = $(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/../pond
 POND_SITE_METHOD = local
-POND_LICENSE = GPL-2.0-only, BSD-2-Clause (micro-ecc in Mongoose), MIT, ISC (packages of the panel)
-POND_LICENSE_FILES = LICENSES/preferred/GPL-2.0-only.txt LICENSES/preferred/BSD-2-Clause.txt
+POND_LICENSE = GPL-2.0-only, BSD-2-Clause (micro-ecc in Mongoose), MIT (X25519 and RSA in Mongoose, packages of the panel), ISC (packages of the panel)
+POND_LICENSE_FILES = LICENSES/preferred/GPL-2.0-only.txt LICENSES/preferred/BSD-2-Clause.txt \
+	LICENSES/preferred/MIT.txt
 POND_POST_RSYNC_HOOKS += OPEN_DFP_34X_2C_COPY_LICENSES
 POND_DEPENDENCIES = json-c libmnl libubox ubus host-nodejs
 POND_NPM = PATH=$(HOST_DIR)/bin:$$PATH npm_config_cache=$(@D)/.npm \
