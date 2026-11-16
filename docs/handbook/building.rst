@@ -884,13 +884,13 @@ a one-shot trial")::
 The markers of a good boot on the console are the loader's lines for the image
 (``Image Type: MIPS Linux Kernel Image (lzma compressed)``,
 ``Load Address: 80100000``), ``Starting kernel ...``, the kernel's banner
-``Linux version 6.18.57``,
+``Linux version 6.18.63``,
 ``VFS: Mounted root (squashfs filesystem) readonly on device 31:5.``, and last
 the lines of the boot script, ending with ``open-dfp-34x-2c: ready``. What to
 check then, over ssh with the key above or on the console, after a login as
 root::
 
-    uname -r                 # 6.18.57
+    uname -r                 # 6.18.63
     cat /proc/cmdline        # panic=10, console=ttyS0,115200, ..., root=31:5
     grep ' / ' /proc/mounts  # /dev/root / squashfs ro,...
     busybox --list           # the applets above
