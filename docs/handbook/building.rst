@@ -299,7 +299,7 @@ BusyBox 1.37.0
     ``make -C build/image busybox-update-config``. The second command writes the
     file with BusyBox's own header, so put the licence header (the first two
     lines) back before ``make check``.
-dropbear 2026.93
+dropbear 2026.94
     The ssh server (``dropbear``), its key tool (``dropbearkey``) and the
     server side of ``scp``. It takes root's password and keys.
 The programs of the ONU, from this tree
