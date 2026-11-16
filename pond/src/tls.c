@@ -27,7 +27,7 @@ struct listen_addr {
 
 static struct listen_addr g_addrs[TLS_LISTEN_MAX];
 static int g_naddrs;
-static struct mg_mgr *g_mgr;
+static struct mg_mgr *g_pond_mgr;
 static bool g_tls;
 
 /* The certificates made so far, the oldest replaced first. */
@@ -45,6 +45,9 @@ static unsigned int g_next;
 /* The files of -k and -c, and the own certificate, when there is one. */
 static const char *g_keyf, *g_ownf;
 static struct cert_own g_own;
+/* Its chain as PEM, which Mongoose sends a certificate at a time. */
+static char g_own_pem[CERT_CHAIN_PEM_MAX];
+static size_t g_own_pem_len;
 static bool g_has_own;
 
 /* The own certificate of the file of -c, if any; said when it is refused. */
@@ -60,6 +63,8 @@ static void own_load(void)
 	if (rc && rc != -ENOENT)
 		fprintf(stderr, "pond: the own certificate of %s is not served: %s\n", g_ownf, err);
 	g_has_own = !rc;
+	if (g_has_own)
+		g_own_pem_len = cert_own_pem_chain(&g_own, g_own_pem);
 }
 
 int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *ownfile,
@@ -67,7 +72,7 @@ int tls_setup(struct mg_mgr *mgr, const char *keyfile, const char *ownfile,
 {
 	int i, rc;
 
-	g_mgr = mgr;
+	g_pond_mgr = mgr;
 	g_keyf = keyfile;
 	g_ownf = ownfile;
 	if (keyfile) {
@@ -210,13 +215,13 @@ void tls_accept(struct mg_connection *c)
 	if (g_has_own) {
 		cert_own_key_der(&g_own, key);
 		memset(&opts, 0, sizeof(opts));
-		opts.cert = mg_str_n((const char *)g_own.chain, g_own.len);
+		opts.cert = mg_str_n(g_own_pem, g_own_pem_len);
 		opts.key = mg_str_n((const char *)key, sizeof(key));
 		mg_tls_init(c, &opts);
 		memset(key, 0, sizeof(key));
 		return;
 	}
-	e = c->loc.is_ip6 ? NULL : certificate(c->loc.ip, time(NULL));
+	e = c->loc.is_ip6 ? NULL : certificate(c->loc.addr.ip, time(NULL));
 	if (!e) {
 		mg_error(c, "no certificate for this address");
 		return;
@@ -271,8 +276,8 @@ bool tls_redirect(struct mg_connection *c, struct mg_http_message *hm)
 		return false;
 	h = mg_http_get_header(hm, "Host");
 	if (!h || !host_of(*h, &host)) {
-		snprintf(here, sizeof(here), "%u.%u.%u.%u", c->loc.ip[0], c->loc.ip[1],
-			 c->loc.ip[2], c->loc.ip[3]);
+		snprintf(here, sizeof(here), "%u.%u.%u.%u", c->loc.addr.ip[0], c->loc.addr.ip[1],
+			 c->loc.addr.ip[2], c->loc.addr.ip[3]);
 		host = mg_str(here);
 	}
 	if (p != 443)
@@ -314,7 +319,7 @@ int tls_print(const char *ip, time_t now)
 		printf("%.*s SHA-256 %s until %s\n", (int)strcspn(ip, "/"), ip, fp, until);
 		return 0;
 	}
-	e = certificate(a.ip, now);
+	e = certificate(a.addr.ip, now);
 	if (!e) {
 		fprintf(stderr, "pond: no certificate for %s\n", ip);
 		return 1;
@@ -390,20 +395,20 @@ int prov_tls(struct prov_buf *out)
 	pv_comma(out);
 	pv_key(out, "certificates");
 	pv_open(out, '[');
-	for (l = g_mgr ? g_mgr->conns : NULL; g_tls && l; l = l->next) {
+	for (l = g_pond_mgr ? g_pond_mgr->conns : NULL; g_tls && l; l = l->next) {
 		const struct cert_entry *e;
 
 		if (!l->is_listening || l->is_closing || l->loc.is_ip6 ||
 		    !tls_port(mg_ntohs(l->loc.port)))
 			continue;
-		e = g_has_own ? NULL : certificate(l->loc.ip, now);
+		e = g_has_own ? NULL : certificate(l->loc.addr.ip, now);
 		if (!e && !g_has_own)
 			continue;
 		if (!first)
 			pv_comma(out);
 		first = false;
-		snprintf(ip, sizeof(ip), "%u.%u.%u.%u", l->loc.ip[0], l->loc.ip[1],
-			 l->loc.ip[2], l->loc.ip[3]);
+		snprintf(ip, sizeof(ip), "%u.%u.%u.%u", l->loc.addr.ip[0], l->loc.addr.ip[1],
+			 l->loc.addr.ip[2], l->loc.addr.ip[3]);
 		pv_open(out, '{');
 		pv_key(out, "address");
 		pv_str(out, ip);
@@ -428,7 +433,7 @@ int prov_tls(struct prov_buf *out)
 		}
 		pv_comma(out);
 		pv_key(out, "named");
-		pv_bool(out, !g_has_own || cert_own_names(&g_own, l->loc.ip));
+		pv_bool(out, !g_has_own || cert_own_names(&g_own, l->loc.addr.ip));
 		pv_close(out, '}');
 	}
 	pv_close(out, ']');

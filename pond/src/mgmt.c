@@ -77,7 +77,7 @@ static void unlisten(struct mg_mgr *mgr, const char *cidr)
 	if (!parse_ip(cidr, &a))
 		return;
 	for (l = mgr->conns; l; l = l->next)
-		if (l->is_listening && !memcmp(l->loc.ip, a.ip, 4)) {
+		if (l->is_listening && !memcmp(l->loc.addr.ip, a.addr.ip, 4)) {
 			l->is_closing = 1;
 			fprintf(stderr, "pond: no longer listening on %s\n", cidr);
 		}
@@ -190,7 +190,7 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 		}
 		/* Only a panel opened at the new address shows that it answers. */
 		if (!parse_ip(g_op.pending, &a) || c->loc.is_ip6 ||
-		    memcmp(c->loc.ip, a.ip, 4)) {
+		    memcmp(c->loc.addr.ip, a.addr.ip, 4)) {
 			reply(c, 403, "mgmt", "confirm the change from a panel opened at the new address");
 			return;
 		}

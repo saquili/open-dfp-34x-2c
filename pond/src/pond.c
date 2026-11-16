@@ -193,7 +193,7 @@ struct later {
 	char secure[16];
 };
 
-static struct mg_mgr *g_mgr;
+static struct mg_mgr *g_pond_mgr;
 
 static struct later *later_new(struct mg_connection *c)
 {
@@ -218,7 +218,7 @@ static void set_reply(struct mg_connection *c, const char *name, int rc,
 static void set_done(void *ctx, int rc, const char *err)
 {
 	struct later *l = ctx;
-	struct mg_connection *c = later_conn(g_mgr, l->id);
+	struct mg_connection *c = later_conn(g_pond_mgr, l->id);
 
 	if (c)
 		set_reply(c, l->name, rc, err);
@@ -424,7 +424,7 @@ static void login_reply(struct mg_connection *c, int rc, const char *id,
 static void login_done(void *ctx, int rc, const char *id)
 {
 	struct later *l = ctx;
-	struct mg_connection *c = later_conn(g_mgr, l->id);
+	struct mg_connection *c = later_conn(g_pond_mgr, l->id);
 
 	if (c)
 		login_reply(c, rc, id, 0, l->secure);
@@ -476,7 +476,7 @@ static void password_reply(struct mg_connection *c, int rc, int retry)
 static void password_done(void *ctx, int rc, const char *id)
 {
 	struct later *l = ctx;
-	struct mg_connection *c = later_conn(g_mgr, l->id);
+	struct mg_connection *c = later_conn(g_pond_mgr, l->id);
 
 	(void)id;
 	if (c)
@@ -980,7 +980,7 @@ int main(int argc, char **argv)
 	load_token();
 	auth_init();
 	mg_mgr_init(&mgr);
-	g_mgr = &mgr;
+	g_pond_mgr = &mgr;
 	if (tls_setup(&mgr, g_keyf, g_ownf, g_listen, g_nlisten))
 		return 1;
 	/*

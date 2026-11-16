@@ -883,3 +883,34 @@ void cert_own_key_der(const struct cert_own *own, uint8_t der[CERT_KEY_DER_LEN])
 	memcpy(der, head, sizeof(head));
 	memcpy(der + sizeof(head), own->key, CERT_KEY_LEN);
 }
+
+size_t cert_own_pem_chain(const struct cert_own *own, char out[CERT_CHAIN_PEM_MAX])
+{
+	static const char begin[] = "-----BEGIN CERTIFICATE-----\n";
+	static const char end[] = "-----END CERTIFICATE-----\n";
+	struct der_in in = { own->chain, own->len }, v;
+	size_t len = 0;
+	uint8_t tag;
+
+	for (;;) {
+		const uint8_t *cert = in.p;
+		size_t left = in.n, n;
+
+		if (!der_next(&in, &tag, &v))
+			break;
+		n = left - in.n;
+		memcpy(out + len, begin, sizeof(begin) - 1);
+		len += sizeof(begin) - 1;
+		/* 48 bytes a line, 64 characters of base64 */
+		for (size_t at = 0; at < n; at += 48) {
+			size_t k = n - at < 48 ? n - at : 48;
+
+			len += mg_base64_encode(cert + at, k, out + len, CERT_CHAIN_PEM_MAX - len);
+			out[len++] = '\n';
+		}
+		memcpy(out + len, end, sizeof(end) - 1);
+		len += sizeof(end) - 1;
+	}
+	out[len] = '\0';
+	return len;
+}

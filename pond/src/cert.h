@@ -152,6 +152,15 @@ bool cert_own_names(const struct cert_own *own, const uint8_t ip[4]);
 /* The private key of @own as cert_key_der() writes the daemon's. */
 void cert_own_key_der(const struct cert_own *own, uint8_t der[CERT_KEY_DER_LEN]);
 
+/*
+ * The chain of @own as Mongoose takes one, a PEM block BEGIN CERTIFICATE for
+ * each certificate, the server's first, in @out of CERT_CHAIN_PEM_MAX bytes,
+ * ended by a NUL. Return its length.
+ */
+#define CERT_CHAIN_PEM_MAX (CERT_CHAIN_MAX * 4 / 3 + CERT_CHAIN_MAX / 48 + \
+			    CERT_CHAIN_COUNT * 64 + 16)
+size_t cert_own_pem_chain(const struct cert_own *own, char out[CERT_CHAIN_PEM_MAX]);
+
 /* @t, seconds from 1970, as 2026-10-21T12:00:00Z, in @out of 24 bytes. */
 void cert_iso(long long t, char out[24]);
 

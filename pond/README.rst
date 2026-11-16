@@ -190,15 +190,12 @@ that asked keeps the one it has, and its answer, and a browser warns once
 about a certificate it was not shown before, unless it trusts its
 authority.
 
-Mongoose's TLS, of version 7.16, is changed in four places, each marked in
-``third_party/mongoose/mongoose.c``: ChaCha20 takes the byte order from the
-compiler, as the C library defines ``LITTLE_ENDIAN`` on the big-endian stick
-too, where every record came out wrong; the signature of its
-CertificateVerify message is encoded as DER asks, without the leading zeros
-that made OpenSSL, and BoringSSL with it, refuse about one handshake in 128;
-a malformed key ends the connection rather than leaving it a key of the
-wrong bytes; and the Certificate message carries each certificate of a
-chain as an entry of its own, where it sent the chain as one. Its poll loop
+Mongoose's TLS, of version 7.23, is changed in one place, marked in
+``third_party/mongoose/mongoose.c``: the signature of its CertificateVerify
+message is encoded as DER asks, without the leading zeros that made OpenSSL,
+and BoringSSL with it, refuse about one handshake in 128. The daemon hands
+it an own certificate's chain as PEM blocks, one for each certificate, which
+it sends as entries of the Certificate message of their own. Its poll loop
 is changed in one more: a TLS connection whose reading is held back
 (``is_full``) is no longer read on for the TLS data it has already taken in.
 Before, an update file sent over HTTPS faster than the flash takes it went
@@ -639,11 +636,12 @@ cannot without the intermediate (``tests/test_tls.py``); the routes of the
 servers' keys and of the token run against a stand-in for onu-config, and
 those of the sessions with a password of root's own.
 
-The HTTP layer is Mongoose 7.16 by Cesanta Software, in
+The HTTP layer is Mongoose 7.23 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,
 one of the two licences it is offered under, and built with its own TLS,
 changed as "HTTPS" says. The tests run on the build machine, little-endian:
 the byte order of the stick's own is tried on the stick (``tests/device``,
 ``mgmt.pond-https``). It holds
-micro-ecc by Kenneth MacKay, for its TLS, under the BSD 2-clause licence, whose
-notice goes with the binary too (``LICENSES/preferred/BSD-2-Clause.txt``).
+micro-ecc by Kenneth MacKay, for its TLS, under the BSD 2-clause licence, and
+code under the MIT licence, its X25519 from STROBE and its RSA arithmetic from
+BearSSL, whose notices go with the binary too (``LICENSES/preferred/``).
