@@ -272,7 +272,7 @@ has the commands, the sizes and how to put the images on the board. In short:
   headers, configured by ``rtl9602c_defconfig`` and built with this toolchain.
   The image is the LZMA-compressed legacy U-Boot image the boot loader takes.
 * The root filesystem is BusyBox 1.37.0 (``board/dfp-34x-2c3/busybox.config``),
-  dropbear 2026.93, and the files of ``board/dfp-34x-2c3/overlay``. The build
+  dropbear 2026.94, and the files of ``board/dfp-34x-2c3/overlay``. The build
   system installs no init scripts (``BR2_INIT_NONE``): the overlay's
   ``sbin/init`` starts procd, which reads the overlay's ``etc/inittab`` and runs
   its boot script, ``etc/init.d/rcS`` (ADR 0010). The files that belong to one
