@@ -490,6 +490,18 @@ more than 32 KiB, 423 and 429 as the updates do.
   them as ``rules``, in their order, and ``fw``, with ``ping_in`` and
   ``ping_lans``. The rules are the switch's ACL's, the defaults netfilter's;
   a rule that allows opens netfilter's default for IPv4 as well (ADR 0019).
+  ``dos``: the switch's checks of malformed and hostile frames, each of its
+  own, all off by default: ``LAND``, ``BLAT``, ``SYN_FIN``, ``XMAS``,
+  ``NULL_SCAN``, ``SYN_LOW_PORT``, ``TCP_SHORT``, ``TCP_FRAG``,
+  ``ICMP_FRAG``, ``PING_OF_DEATH``, ``UDP_BOMB`` and ``SYN_DATA``, ``on`` or
+  ``off``; ``SYN_FLOOD``, ``FIN_FLOOD`` and ``ICMP_FLOOD``, ``off`` or a
+  limit from 1 to 255 that the switch counts the frames of its kind against;
+  and ``SIDE``, whose frames they judge, ``internet`` (the default), ``host``
+  or ``both``. A key not given stays; a read gives them in ``settings``, as
+  ``dos``, in lower case, and a stick without them leaves ``dos`` out, as
+  the panel reads it. ``onu-apply`` gives them to the switch, and the change
+  goes on trial like the other settings (``docs/handbook/system.rst``, "The
+  switch's checks of malformed frames").
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
   ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION``,
