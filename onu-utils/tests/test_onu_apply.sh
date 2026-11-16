@@ -288,6 +288,64 @@ printf 'IGMP_PRIORITY=host\n' >"$ONU_ROOT/run/onu.conf"
 check 'echo host | cmp -s - "$ONU_ROOT/run/omcid/igmp-priority"'
 teardown
 
+echo "the switch's checks of malformed frames: none unless told, then as the settings say"
+setup
+dos() { grep '^onu-nl param dos_' "$LOG"; }
+conf FW_OUT=allow
+"$MODE_SCRIPT" start 2>/dev/null
+# None on, nothing is written: the switch starts with none.
+check '[ -z "$(dos)" ] && [ ! -e "$ONU_ROOT/run/onu-dos" ]'
+# Land, blat (bits 1 and 2) and the SYN flood (bit 13) at 40, the operator's
+# side (port 2): the thresholds first, the port last.
+printf 'DOS_LAND=on\nDOS_BLAT=on\nDOS_SYN_FLOOD=40\n' >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ "$(dos)" = "$(printf "onu-nl param dos_ports 0\nonu-nl param dos_synflood_thresh 40\nonu-nl param dos_actions 0\nonu-nl param dos_checks 8198\nonu-nl param dos_ports 4")" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-dos")" = "4 8198 dos_synflood_thresh=40" ]'
+# The same again writes nothing.
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ -z "$(dos)" ]'
+# The host's side as well, and the FIN and ICMP floods (bits 14 and 15).
+printf 'DOS_SIDE=both\nDOS_FIN_FLOOD=255\nDOS_ICMP_FLOOD=1\n' >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ "$(dos)" = "$(printf "onu-nl param dos_ports 0\nonu-nl param dos_finflood_thresh 255\nonu-nl param dos_icmpflood_thresh 1\nonu-nl param dos_actions 0\nonu-nl param dos_checks 49152\nonu-nl param dos_ports 5")" ]'
+printf 'DOS_SIDE=host\nDOS_XMAS=on\n' >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-nl param dos_checks 16$" && logged "^onu-nl param dos_ports 1$"'
+# All twelve that are on or off.
+printf 'DOS_LAND=on\nDOS_BLAT=on\nDOS_SYN_FIN=on\nDOS_XMAS=on\nDOS_NULL_SCAN=on\nDOS_SYN_LOW_PORT=on\nDOS_TCP_SHORT=on\nDOS_TCP_FRAG=on\nDOS_ICMP_FRAG=on\nDOS_PING_OF_DEATH=on\nDOS_UDP_BOMB=on\nDOS_SYN_DATA=on\n' \
+	>"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-nl param dos_checks 8190$" && logged "^onu-nl param dos_ports 4$"'
+# Back to none: the port off, the checks off, and the state kept as none.
+printf 'FW_OUT=allow\n' >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ "$(dos)" = "$(printf "onu-nl param dos_ports 0\nonu-nl param dos_actions 0\nonu-nl param dos_checks 0\nonu-nl param dos_ports 0")" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-dos")" = "0 0" ]'
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ -z "$(dos)" ]'
+# A threshold no flood check takes leaves it off, said; the others stay.
+printf 'DOS_SYN_FLOOD=300\nDOS_LAND=on\n' >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-nl param dos_checks 2$" && ! logged "dos_synflood_thresh"'
+# The switch refusing a parameter leaves its checks off, and the next run tries again.
+printf '#!/bin/sh\necho "onu-nl $*" >>"$LOG"\n[ "$2" = dos_checks ] && exit 1\nexit 0\n' >"$T/bin/onu-nl"
+printf 'DOS_BLAT=on\n' >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ "$(dos | tail -n 1)" = "onu-nl param dos_ports 0" ] && [ ! -e "$ONU_ROOT/run/onu-dos" ]'
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-nl param dos_checks 4$"'
+teardown
+
 echo "a local network, routed out by a session that keeps its address"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"

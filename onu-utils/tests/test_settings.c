@@ -275,12 +275,16 @@ static void test_defaults_format(void)
 			bad++;
 	}
 	CHECK(bad == 0);
-	CHECK(lines == SET_WAN_MAC + 1 + SETTINGS_SESSIONS * SETTINGS_NSKEYS + SETTINGS_NFKEYS + 1);
+	CHECK(lines == SET_WAN_MAC + 1 + SETTINGS_SESSIONS * SETTINGS_NSKEYS + SETTINGS_NFKEYS + SETTINGS_NDKEYS + 1);
 	CHECK(strstr(out, "FW_OUT=allow\n") && strstr(out, "FW_BETWEEN=block\n"));
 	/* The stick answers a ping from neither side unless told to. */
 	CHECK(strstr(out, "FW_PING_IN=block\n") && strstr(out, "FW_PING_LANS=block\n"));
 	/* omcid gives IGMP a priority the operator's rules take unless told not to. */
 	CHECK(strstr(out, "IGMP_PRIORITY=auto\n") != NULL);
+	/* The switch's checks are all off, and judge the frames from the operator's side. */
+	CHECK(strstr(out, "DOS_LAND=off\n") && strstr(out, "DOS_SYN_DATA=off\n") &&
+	      strstr(out, "DOS_SYN_FLOOD=off\n") && strstr(out, "DOS_ICMP_FLOOD=off\n") &&
+	      strstr(out, "DOS_SIDE=internet\n"));
 	/* The values given are the ones the table starts from. */
 	CHECK(strstr(out, "WAN_MAC=\n") != NULL);
 	need = settings_format_defaults(small, sizeof(small));
@@ -817,6 +821,18 @@ static void test_rules(void)
 		"FW_PING_IN=on",
 		"FW_PING_LANS=",
 		"FW_PING=allow",
+		"DOS_LAND=yes",
+		"DOS_LAND=",
+		"DOS_SYN_FIN=1",
+		"DOS_SYN_FLOOD=0",
+		"DOS_SYN_FLOOD=256",
+		"DOS_FIN_FLOOD=on",
+		"DOS_ICMP_FLOOD=040",
+		"DOS_SIDE=lan",
+		"DOS_SIDE=",
+		"DOS_TEARDROP=on",
+		"DOS_=on",
+		"DOS=on",
 	};
 	struct settings s;
 
@@ -868,6 +884,19 @@ static void test_rules(void)
 	CHECK(judge(&s, "IGMP_PRIORITY=host\n") == 0 && !strcmp(g_out, "IGMP_PRIORITY=host\n"));
 	CHECK(judge(&s, "IGMP_PRIORITY=auto\n") == 0 && !*g_out);
 	CHECK(judge(&s, "IGMP_PRIORITY=olt\n") == -1 && strstr(g_err, "IGMP_PRIORITY"));
+	/*
+	 * The switch's checks: one on, a flood check with its threshold, and
+	 * the side, written in the order of the table and without a default,
+	 * which every check starts from.
+	 */
+	CHECK(judge(&s, "DOS_SIDE=both\nDOS_SYN_FLOOD=40\nDOS_LAND=on\n") == 0 &&
+	      !strcmp(g_out, "DOS_LAND=on\nDOS_SYN_FLOOD=40\nDOS_SIDE=both\n"));
+	CHECK(judge(&s, "DOS_ICMP_FLOOD=255\nDOS_FIN_FLOOD=1\n") == 0 &&
+	      !strcmp(g_out, "DOS_FIN_FLOOD=1\nDOS_ICMP_FLOOD=255\n"));
+	CHECK(judge(&s, "DOS_LAND=off\nDOS_SYN_FLOOD=off\nDOS_SIDE=internet\n") == 0 && !*g_out);
+	/* A later line over an earlier one, a flood check turned off again. */
+	CHECK(judge(&s, "DOS_SYN_FLOOD=40\nDOS_SYN_FLOOD=off\n") == 0 && !*g_out);
+	CHECK(judge(&s, "DOS_SIDE=lan\n") == -1 && strstr(g_err, "DOS_SIDE"));
 
 	/* From somewhere to somewhere else. */
 	CHECK(judge(&s, PINNED NET2 "RULE1=1_allow_internet_internet:10.0.0.0/8_any__any_on\n") == -2 &&
