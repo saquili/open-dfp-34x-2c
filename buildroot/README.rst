@@ -11,10 +11,11 @@ Buildroot itself is not committed here. This directory pins one Buildroot
 release by hash and holds the script that turns the pin into a tree ready to
 build, so that every build starts from the same bytes. The tree is made in
 ``build/buildroot`` and is never committed. The patches we carry against the
-release are in ``patches/``: four, which add the MIPS I variant that this core
+release are in ``patches/``: five, which add the MIPS I variant that this core
 needs, take the licence text of the kernel this distribution builds, take
 the libraries of netifd at newer commits, with json-c built without
-thread-local storage, and take BusyBox's fixes of 2026 that no release has.
+thread-local storage, take BusyBox's fixes of 2026 that no release has, and
+take dropbear's newest release.
 
 What is here
 ============
@@ -29,8 +30,8 @@ What is here
     The script that makes the pinned release ready to build (below).
 ``patches/``
     The patches applied to the release, in name order: the MIPS I variant,
-    the kernel's licence text, the libraries of netifd and BusyBox's fixes
-    (below).
+    the kernel's licence text, the libraries of netifd, BusyBox's fixes and
+    dropbear 2026.94 (below).
 ``tests/``
     The self-tests of ``fetch``.
 
@@ -176,6 +177,12 @@ release builds, and names its CVE in ``BUSYBOX_IGNORE_CVES``.
 Fixes for applets the image leaves out (ssl_server, httpd, dpkg, the
 volume_id probers, libpwdgrp, the here strings of 1.38) are not taken. The
 release's tests of ash and awk give the same results with and without them.
+
+``patches/0005-*.patch`` takes dropbear 2026.94 for the release's 2026.93: it
+fixes the build of scp, prints an IPv6 address with a port in brackets and
+takes longer paths in scp. Its hash is the one of ``SHA256SUM.asc``, which
+the key of dropbear's releases signs, and the recipe's patch of scp applies
+unchanged.
 
 Checking the pin
 ================
