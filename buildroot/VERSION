@@ -13,14 +13,14 @@
 # SIGNATURE, a clear-signed text; the key with the fingerprint below signs it):
 #
 #   gpg --recv-keys <SIGNER>    # or import the key the message names
-#   gpg --verify buildroot-2025.02.18.tar.xz.sign
-#   grep 'SHA256: <SHA256>' buildroot-2025.02.18.tar.xz.sign
+#   gpg --verify buildroot-2025.02.19.tar.xz.sign
+#   grep 'SHA256: <SHA256>' buildroot-2025.02.19.tar.xz.sign
 #
 # One KEY=VALUE per line; no quoting, no spaces around the equals sign.
 NAME=buildroot
-VERSION=2025.02.18
-URL=https://buildroot.org/downloads/buildroot-2025.02.18.tar.xz
-SIZE=6043012
-SHA256=e38ad1df6ea0479fff6419a87a64535d02131674d463be154a763ef725b55321
-SIGNATURE=https://buildroot.org/downloads/buildroot-2025.02.18.tar.xz.sign
+VERSION=2025.02.19
+URL=https://buildroot.org/downloads/buildroot-2025.02.19.tar.xz
+SIZE=6058584
+SHA256=e5e58bff1da91f022f60cefdfe280140c08023cd0aeec1e5f6f9da0ea866d69c
+SIGNATURE=https://buildroot.org/downloads/buildroot-2025.02.19.tar.xz.sign
 SIGNER=18C7DF2819C1733D822D599EA500D6EE9CB0E540

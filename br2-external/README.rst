@@ -146,7 +146,7 @@ and packs it. What it runs is, in effect::
     export OPEN_DFP_34X_2C_KERNEL_ARCHIVE=$(tools/kernel-archive/kernel-archive)
     export GIT_CEILING_DIRECTORIES=$PWD
     export BR2_DL_DIR=$PWD/build/dl
-    br=build/buildroot/buildroot-2025.02.18
+    br=build/buildroot/buildroot-2025.02.19
     make -C $br O=$PWD/build/toolchain BR2_EXTERNAL=$PWD/br2-external \
         toolchain_defconfig
     make -C build/toolchain
@@ -169,7 +169,7 @@ packed, is ``build/toolchain/host``. What each line is for:
   happens to be checked out (``-g`` and its abbreviated id, or the description
   of the nearest tag when there is one, and ``-dirty`` after an uncommitted
   change), so the toolchain would differ from one commit to the next. With it
-  the version is ``2025.02.18`` whatever the checkout (the output of
+  the version is ``2025.02.19`` whatever the checkout (the output of
   ``make -C build/toolchain printvars VARS=BR2_VERSION_FULL`` shows it).
 * ``BR2_DL_DIR`` is the download cache. Buildroot fetches the sources of the
   toolchain itself and checks each against the hash it carries: gcc, binutils,

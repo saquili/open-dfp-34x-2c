@@ -479,11 +479,11 @@ class PinFile(FetchTest):
         # Nothing is fetched: the cache holds a file of the pinned name and
         # the wrong size, which the gate refuses before anything else.
         os.makedirs(self.dl)
-        with open(os.path.join(self.dl, "buildroot-2025.02.18.tar.xz"), "wb") as handle:
+        with open(os.path.join(self.dl, "buildroot-2025.02.19.tar.xz"), "wb") as handle:
             handle.write(b"not the release")
         done = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("the pin says 6043012", done.stderr)
+        self.assertIn("the pin says 6058584", done.stderr)
 
 
 class Tools(FetchTest):
