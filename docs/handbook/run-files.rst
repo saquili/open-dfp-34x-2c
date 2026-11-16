@@ -236,6 +236,12 @@ Private to one program or to onu-utils
        ``onu-apply`` put it in place, from the boot on, and the next one while
        it is written; gone when ``onu-fw`` refused it, so that the next apply
        tries again.
+   * - ``/run/onu-dos``
+     - The switch's checks of malformed frames in force, as ``onu-apply``
+       last set them: the port mask, the mask of the checks and the
+       thresholds of the flood checks, one line; absent while none was ever
+       on, and removed when the switch refused a parameter, so that the next
+       apply tries again.
    * - ``/run/onu-fw-acl.conf``, ``/run/onu-fw-acl.conf.new``, ``/run/onu-fw.acl``
      - The firewall's rules as ``onu-fw acl`` puts them into the switch's ACL
        (ADR 0019), the next set while it is written, and what became of each

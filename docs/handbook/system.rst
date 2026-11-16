@@ -215,6 +215,66 @@ template among the seven that the ACL shares with the other writers' rules
 when many rules of different fields are on. A rule that finds none is
 reported in ``/run/onu-fw.acl``, with the rules after it.
 
+The switch's checks of malformed frames
+=======================================
+
+The switch can stop sixteen shapes of malformed or hostile frames where they
+enter, before they reach the stick's CPU or cross to the other side
+(``linux/Documentation/networking/devlink/rtl9602c.rst``, "DoS checks"). The
+settings offer fifteen, each its own, all off by default, and the firewall's
+page of the panel sets them; ``onu-apply`` gives them to the switch
+(``onu-utils/README.rst``). ``DOS_SIDE`` says whose frames they judge, and the
+switch has one set of ports for all the checks: the operator's side
+(``internet``, the default), the host's (``host``) or both. A frame a check
+stops is dropped.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 40 38
+
+   * - Setting
+     - What it stops
+     - What else it can stop
+   * - ``DOS_LAND``
+     - An IP source equal to its destination.
+     - Nothing known.
+   * - ``DOS_BLAT``
+     - An L4 source port equal to its destination port.
+     - Traffic between two servers that use one port at both ends, such as NTP
+       between peers (I: from the protocols).
+   * - ``DOS_SYN_FIN``, ``DOS_XMAS``, ``DOS_NULL_SCAN``
+     - A TCP segment with SYN and FIN both set, an Xmas scan, a null scan.
+     - Nothing known.
+   * - ``DOS_SYN_LOW_PORT``
+     - A SYN from a source port below 1024.
+     - A client that binds a low source port (I: from the protocols).
+   * - ``DOS_TCP_SHORT``, ``DOS_TCP_FRAG``
+     - A TCP header too short, a TCP fragment offset.
+     - Nothing known.
+   * - ``DOS_ICMP_FRAG``, ``DOS_PING_OF_DEATH``
+     - A fragment of ICMP, a fragment whose offset and length go beyond 65535.
+     - A large ping that the sender fragments (I: from the protocols).
+   * - ``DOS_UDP_BOMB``
+     - A UDP length larger than the datagram.
+     - Nothing known.
+   * - ``DOS_SYN_DATA``
+     - A SYN that carries data.
+     - TCP Fast Open (I: from the protocol).
+   * - ``DOS_SYN_FLOOD``, ``DOS_FIN_FLOOD``, ``DOS_ICMP_FLOOD``
+     - The frames of that kind beyond a threshold, 1 to 255, that the switch
+       counts in a window of its own.
+     - Ordinary bursts, when the threshold is low. ``DOS_ICMP_FLOOD`` has not
+       been tried on ICMPv6 (neighbour discovery) at all.
+
+The checks and the thresholds were tried one by one on the stick, each caught
+by a frame of its shape (M: ``linux/Documentation/networking/dsa/
+rtl9602c-acl-qos.rst``). Not known: the length of the window the thresholds
+count in, so the panel gives a threshold as a number of the switch's, not of
+frames a second (I: a sweep of the offered rate against a threshold would
+settle it); and whether any check cuts good traffic of a real connection to an
+operator. A setting that is on goes on trial like the rest, so one that cuts
+the panel off goes back in 90 s.
+
 Who owns what
 =============
 
