@@ -71,7 +71,21 @@ static void test_sessions(void)
 	check(auth_sign_in("admin", "admin", FROM, t + 2041, id, &retry) == -EACCES,
 	      "another user is refused");
 
-	/* Wrong ones spread over many addresses stop everyone, at twenty. */
+	/* Each further wrong one holds the address back twice as long. */
+	auth_init();
+	for (int i = 0; i < 5; i++)
+		auth_sign_in("root", "wrong", FROM, t + 2050, id, &retry);
+	check(auth_sign_in("root", "wrong", FROM, t + 2060, id, &retry) == -EAGAIN,
+	      "a try while the address is held back is not checked");
+	check(auth_sign_in("root", "wrong", FROM, t + 2081, id, &retry) == -EACCES,
+	      "after half a minute a sixth wrong one is");
+	check(auth_sign_in("root", "admin", FROM, t + 2121, id, &retry) == -EAGAIN &&
+		      retry == 20,
+	      "and holds the address back for a minute");
+	check(auth_sign_in("root", "admin", FROM, t + 2142, id, &retry) == 0,
+	      "after which it signs in");
+
+	/* Wrong ones spread over many addresses slow those, not the others. */
 	auth_init();
 	for (int i = 0; i < 20; i++) {
 		char from[24];
@@ -79,10 +93,26 @@ static void test_sessions(void)
 		snprintf(from, sizeof(from), "198.51.100.%d", i);
 		auth_sign_in("root", "wrong", from, t + 2100, id, &retry);
 	}
-	check(auth_sign_in("root", "admin", OTHER, t + 2101, id, &retry) == -EAGAIN,
-	      "twenty wrong ones from twenty addresses stop every sign-in");
-	check(auth_sign_in("root", "admin", OTHER, t + 2140, id, &retry) == 0,
-	      "for half a minute too");
+	check(auth_sign_in("root", "admin", OTHER, t + 2101, id, &retry) == 0,
+	      "twenty wrong ones from twenty addresses do not stop one that gave none");
+	check(auth_sign_in("root", "admin", "198.51.100.3", t + 2101, id, &retry) == -EAGAIN &&
+		      retry == 4,
+	      "they slow the addresses that gave one");
+	check(auth_sign_in("root", "admin", "198.51.100.3", t + 2105, id, &retry) == 0,
+	      "to a sign-in five seconds after the last wrong one");
+
+	/* A table full of fresh wrong ones slows every address. */
+	auth_init();
+	for (int i = 0; i < 64; i++) {
+		char from[24];
+
+		snprintf(from, sizeof(from), "198.51.100.%d", i);
+		auth_sign_in("root", "wrong", from, t + 2200, id, &retry);
+	}
+	check(auth_sign_in("root", "admin", OTHER, t + 2201, id, &retry) == -EAGAIN,
+	      "once sixty-four addresses gave wrong ones, a new one is slowed too");
+	check(auth_sign_in("root", "admin", OTHER, t + 2205, id, &retry) == 0,
+	      "and signs in five seconds after the last wrong one");
 
 	auth_init();
 	for (int i = 0; i <= AUTH_SESSIONS; i++)

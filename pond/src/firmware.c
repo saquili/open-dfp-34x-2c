@@ -190,7 +190,7 @@ static void too_many(struct mg_connection *c, int retry)
 		 "Content-Type: application/json\r\nCache-Control: no-store\r\n"
 		 "Connection: close\r\nRetry-After: %d\r\n", retry);
 	mg_http_reply(c, 429, headers,
-		      "{\"error\":\"too many attempts\",\"detail\":\"wait half a minute and try again\","
+		      "{\"error\":\"too many attempts\",\"detail\":\"wait as long as retry_after says and try again\","
 		      "\"retry_after\":%d}", retry);
 }
 

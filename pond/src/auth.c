@@ -24,17 +24,25 @@
 #include <unistd.h>
 
 /*
- * Wrong passwords stop sign-ins for LOCK_S seconds: LOCK_AFTER of them from
- * one address stop that address, so that a page of another site, or one
- * machine of the host side, cannot lock the others out; ALL_AFTER of them
- * from any stop everyone, so that guesses spread over many addresses stay
- * as few. A count is forgotten FORGET_S seconds after its last wrong one.
+ * Wrong passwords hold back the sign-ins of the address they came from:
+ * after LOCK_AFTER of them for LOCK_S seconds, twice as long after each
+ * further one, up to LOCK_MAX_S; the count is forgotten FORGET_S seconds
+ * after its last wrong one. An address that gave none signs in at once, so
+ * that a page of another site, or one machine of the host side, cannot lock
+ * the owner out. ALL_AFTER wrong ones from all addresses together slow the
+ * addresses that gave any to a sign-in ALL_GAP_S seconds after the last
+ * wrong one, so that guesses spread over many addresses stay few; while the
+ * table of addresses is full of fresh counts, every address is slowed so.
+ * The count of all is forgotten ALL_FORGET_S seconds after its last.
  */
 #define LOCK_AFTER 5
-#define ALL_AFTER 20
 #define LOCK_S 30
-#define FORGET_S 300
-#define SOURCES 16
+#define LOCK_MAX_S 900
+#define FORGET_S 3600
+#define ALL_AFTER 20
+#define ALL_GAP_S 5
+#define ALL_FORGET_S 300
+#define SOURCES 64
 #define SOURCE_LEN AUTH_FROM_LEN
 
 /* What onu-config password-check says of a password (onu-utils). */
@@ -175,26 +183,62 @@ static struct fails *source(const char *from, bool take)
 	return pick;
 }
 
-/* Whether @f stops sign-ins now, after @after wrong ones, and how long. */
-static bool stopped(struct fails *f, int after, time_t now, int *retry_after)
+/* Whether the address of @f is held back now, and for how long. */
+static bool stopped(struct fails *f, time_t now, int *retry_after)
 {
-	if (!f)
+	time_t lock;
+	int more;
+
+	if (!f || !f->n)
 		return false;
-	if (f->n && now - f->last > FORGET_S)
+	if (now - f->last > FORGET_S) {
 		f->n = 0;
-	if (f->n >= after && now - f->last < LOCK_S) {
-		if (retry_after)
-			*retry_after = (int)(LOCK_S - (now - f->last));
-		return true;
+		return false;
 	}
-	return false;
+	if (f->n < LOCK_AFTER)
+		return false;
+	more = f->n - LOCK_AFTER;
+	lock = (time_t)LOCK_S << (more < 5 ? more : 5);
+	if (lock > LOCK_MAX_S)
+		lock = LOCK_MAX_S;
+	if (now - f->last >= lock)
+		return false;
+	if (retry_after)
+		*retry_after = (int)(lock - (now - f->last));
+	return true;
 }
 
-/* Whether sign-ins from @from are stopped now, and for how long. */
+/* Whether the wrong ones of all addresses slow a sign-in now, and how long. */
+static bool slowed(time_t now, int *retry_after)
+{
+	if (g_all.n && now - g_all.last > ALL_FORGET_S)
+		g_all.n = 0;
+	if (g_all.n < ALL_AFTER || now - g_all.last >= ALL_GAP_S)
+		return false;
+	if (retry_after)
+		*retry_after = (int)(ALL_GAP_S - (now - g_all.last));
+	return true;
+}
+
+/* Whether every slot of the table holds a fresh count. */
+static bool sources_full(time_t now)
+{
+	for (int i = 0; i < SOURCES; i++)
+		if (!g_src[i].n || now - g_src[i].last > FORGET_S)
+			return false;
+	return true;
+}
+
+/* Whether sign-ins from @from are held back now, and for how long. */
 static bool locked(const char *from, time_t now, int *retry_after)
 {
-	return stopped(&g_all, ALL_AFTER, now, retry_after) ||
-	       stopped(source(from, false), LOCK_AFTER, now, retry_after);
+	struct fails *f = source(from, false);
+
+	if (stopped(f, now, retry_after))
+		return true;
+	if (f && !f->n)
+		f = NULL;
+	return (f || sources_full(now)) && slowed(now, retry_after);
 }
 
 static void failed(const char *from, time_t now)

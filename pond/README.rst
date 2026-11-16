@@ -90,9 +90,15 @@ ssh take too. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
 proxy's that says so). There are at most three; a fourth sign-in ends the one
 idle the longest, and a
 session ends after 15 minutes without a request or 12 hours in all. Five wrong
-passwords from one address stop sign-ins from that address for 30 seconds,
-and twenty from all addresses together stop every sign-in as long (429, with
-``Retry-After``); behind a proxy every sign-in comes from the proxy's address.
+passwords from one address hold sign-ins from that address back for 30
+seconds, and each further one twice as long, up to 15 minutes; the count is
+forgotten an hour after its last wrong one (429, with ``Retry-After``). An
+address that gave no wrong password signs in at once, so that no machine of
+the host side, and no page of another site, can lock the owner out: twenty
+wrong ones from all addresses together only slow the addresses that gave
+one, to a sign-in five seconds after the last wrong one, as they slow every
+address while 64 addresses hold fresh counts. Behind a proxy every sign-in
+comes from the proxy's address.
 A change of password ends every other session. pond keeps the sessions in
 memory alone, each with the address its sign-in came from, which the panel
 lists (``/api/auth/sessions``), and a restart of the daemon ends them all.
