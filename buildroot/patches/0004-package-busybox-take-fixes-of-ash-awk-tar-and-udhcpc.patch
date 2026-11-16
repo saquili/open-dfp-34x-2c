@@ -1,0 +1,508 @@
+From: Paweł Phan <szop.hektar_1w@icloud.com>
+Subject: [PATCH] package/busybox: take fixes of ash, awk, tar and udhcpc
+
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+BusyBox's fixes of 2026 for applets the image holds, which no release
+carries yet (1.38.0 predates them), as patches 0021 to 0025 after the
+release's own:
+
+- ash: an out-of-bounds read in ifsbreakup() after an expansion that
+  failed (CVE-2026-38754), backported to 1.37.0;
+- awk: a one-byte heap overflow in next_token() when a string ends the
+  program;
+- tar: file names in the verbose listing printed with their control
+  characters;
+- udhcpc: the magic cookie read before the packet is known to hold it, and
+  the minimum size checked before the length is cut to the IP header's.
+
+The two of udhcpc concern what a DHCP server of the network sends. Applets
+the image leaves out are not patched (ssl_server, httpd, dpkg, the
+volume_id probers, libpwdgrp, here strings of 1.38). The release's ash and
+awk tests give the same results with and without them.
+
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ ...fix-out-of-bounds-read-in-ifsbreakup.patch | 158 ++++++++++++++++++
+ ...eap-buffer-overflow-in-next_token-st.patch | 103 ++++++++++++
+ ...0023-tar-Sanitize-verbose-file-names.patch |  29 ++++
+ ...cket.data.cookie-exists-before-we-ac.patch |  43 +++++
+ ...inimum-packet-size-after-reducing-it.patch |  92 ++++++++++
+ package/busybox/busybox.mk                    |   3 +
+ 6 files changed, 428 insertions(+)
+ create mode 100644 package/busybox/0021-ash-fix-out-of-bounds-read-in-ifsbreakup.patch
+ create mode 100644 package/busybox/0022-awk-fix-1-byte-heap-buffer-overflow-in-next_token-st.patch
+ create mode 100644 package/busybox/0023-tar-Sanitize-verbose-file-names.patch
+ create mode 100644 package/busybox/0024-udhcpc-ensure-packet.data.cookie-exists-before-we-ac.patch
+ create mode 100644 package/busybox/0025-udhcpc-6-check-minimum-packet-size-after-reducing-it.patch
+
+diff --git a/package/busybox/0021-ash-fix-out-of-bounds-read-in-ifsbreakup.patch b/package/busybox/0021-ash-fix-out-of-bounds-read-in-ifsbreakup.patch
+new file mode 100644
+index 00000000..c6867f48
+--- /dev/null
++++ b/package/busybox/0021-ash-fix-out-of-bounds-read-in-ifsbreakup.patch
+@@ -0,0 +1,158 @@
++From: Sanghyun Park <sanghyun.park.cnu@gmail.com>
++Date: Thu, 18 Jun 2026 17:04:20 +0900
++Subject: [PATCH] ash: fix out-of-bounds read in ifsbreakup()
++
++ifsfree() does not only release allocated ifsregion nodes; it also clears
++the global IFS region state used by ifsbreakup(). If argstr() raises an
++error while expanding an argument, ash longjmps out of expandarg() before
++that cleanup runs, leaving stale IFS split offsets behind.
++
++A later expansion can reuse the stack for a shorter string. ifsbreakup()
++then sees the stale IFS state, trusts the old offsets, and can walk past
++the current stack block before dereferencing p.
++
++Follow dash's root-cause fix: when an expansion-related handler catches
++EXERROR and continues, restore the handler and call ifsfree(). Apply
++the cleanup to redirectsafe(), expandstr(), and evaltree().
++
++Upstream commit:
++
++    Date:   Mon Dec 5 23:02:01 2022 +0800
++    expand: Add ifsfree to expand to fix a logic error that causes a buffer over-read
++
++    On Mon, Jun 20, 2022 at 02:27:10PM -0400, Alex Gorinson wrote:
++    > Due to a logic error in the ifsbreakup function in expand.c if a
++    > heredoc and normal command is run one after the other by means of a
++    > semi-colon, when the second command drops into ifsbreakup the command
++    > will be evaluated with the ifslastp/ifsfirst struct that was set when
++    > the here doc was evaluated. This results in a buffer over-read that
++    > can leak the program's heap, stack, and arena addresses which can be
++    > used to beat ASLR.
++    >
++    > Steps to Reproduce:
++    > First bug:
++    > cmd args: ~/exampleDir/example> dash
++    > $ M='AAAAAAAAAAAAAAAAA'    <note: 17 A's>
++    > $ q00(){
++    > $ <<000;echo
++    > $ ${D?$M$M$M$M$M$M}        <note: 6 $M's>
++    > $ 000
++    > $ }
++    > $ q00                      <note: After the q00 is typed in, the leak
++    > should be echo'd out; this works with ash, busybox ash, and dash and
++    > with all option args.>
++    >
++    > Patch:
++    > Adding the following to expand.c will fix both bugs in one go.
++    > (Thank you to Harald van Dijk and Michael Greenberg for doing the
++    > heavy lifting for this patch!)
++    > ==========================
++    > --- a/src/expand.c
++    > +++ b/src/expand.c
++    > @@ -859,6 +859,7 @@
++    > if (discard)
++    > return -1;
++    >
++    > +ifsfree();
++    > sh_error("Bad substitution");
++    > }
++    >
++    > @@ -1739,6 +1740,7 @@
++    > } else
++    > msg = umsg;
++    > }
++    > +ifsfree();
++    > sh_error("%.*s: %s%s", end - var - 1, var, msg, tail);
++    >  }
++    > ==========================
++
++    Thanks for the report!
++
++    I think it's better to add the ifsfree() call to the exception
++    handling path as other sh_error calls may trigger this too.
++
++function                                             old     new   delta
++restore_handler_expandarg                              -      33     +33
++evaltree                                             725     711     -14
++static.redirectsafe                                  141     124     -17
++expandstr                                            262     242     -20
++------------------------------------------------------------------------------
++(add/remove: 1/0 grow/shrink: 0/3 up/down: 36/-45)            Total: -18 bytes
++
++Signed-off-by: Sanghyun Park <sanghyun.park.cnu@gmail.com>
++Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
++
++[Backported to 1.37.0: the forward declaration of ifsfree() goes where
++1.37.0 has the one of expandhere(), which the release keeps 102 lines
++earlier.]
++
++Upstream: https://github.com/vda-linux/busybox_mirror/commit/a448b6d5b21e5b21249391389b6f0551d9bea136
++CVE: CVE-2026-38754
++Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
++---
++ shell/ash.c | 24 +++++++++++++++---------
++ 1 file changed, 15 insertions(+), 9 deletions(-)
++
++diff --git a/shell/ash.c b/shell/ash.c
++index bbd7307..919fb66 100644
++--- a/shell/ash.c
+++++ b/shell/ash.c
++@@ -5472,6 +5472,7 @@ stoppedjobs(void)
++  */
++ /* openhere needs this forward reference */
++ static void expandhere(union node *arg);
+++static void ifsfree(void);
++ static int
++ openhere(union node *redir)
++ {
++@@ -5913,6 +5914,17 @@ redirect(union node *redir, int flags)
++ 	//	preverrout_fd = copied_fd2;
++ }
++ 
+++static void
+++restore_handler_expandarg(struct jmploc *savehandler, int err)
+++{
+++	exception_handler = savehandler;
+++	if (err) {
+++		if (exception_type != EXERROR)
+++			longjmp(exception_handler->loc, 1);
+++		ifsfree();
+++	}
+++}
+++
++ static int
++ redirectsafe(union node *redir, int flags)
++ {
++@@ -5928,9 +5940,7 @@ redirectsafe(union node *redir, int flags)
++ 		exception_handler = &jmploc;
++ 		redirect(redir, flags);
++ 	}
++-	exception_handler = savehandler;
++-	if (err && exception_type != EXERROR)
++-		longjmp(exception_handler->loc, 1);
+++	restore_handler_expandarg(savehandler, err);
++ 	RESTORE_INT(saveint);
++ 	return err;
++ }
++@@ -9445,9 +9455,7 @@ evaltree(union node *n, int flags)
++ 			trap_depth--;
++ 			in_trap_ERR = 0;
++ 
++-			exception_handler = savehandler;
++-			if (err && exception_type != EXERROR)
++-				longjmp(exception_handler->loc, 1);
+++			restore_handler_expandarg(savehandler, err);
++ 
++ 			exitstatus = savestatus;
++ 		}
++@@ -13487,9 +13495,7 @@ expandstr(const char *ps, int syntax_type)
++ 	result = stackblock();
++ 
++ out:
++-	exception_handler = savehandler;
++-	if (err && exception_type != EXERROR)
++-		longjmp(exception_handler->loc, 1);
+++	restore_handler_expandarg(savehandler, err);
++ 
++ 	doprompt = saveprompt;
++ 	/* Try: PS1='`xxx(`' */
+diff --git a/package/busybox/0022-awk-fix-1-byte-heap-buffer-overflow-in-next_token-st.patch b/package/busybox/0022-awk-fix-1-byte-heap-buffer-overflow-in-next_token-st.patch
+new file mode 100644
+index 00000000..348db231
+--- /dev/null
++++ b/package/busybox/0022-awk-fix-1-byte-heap-buffer-overflow-in-next_token-st.patch
+@@ -0,0 +1,103 @@
++From: Ediz <ediz.research@gmail.com>
++Date: Thu, 20 Aug 2026 01:45:36 +0300
++Subject: [PATCH] awk: fix 1-byte heap-buffer-overflow in next_token()
++ string parse
++
++When the awk program ends with \<newline> right after the last string
++token, nextchar() eats the newline and then reads the terminating NUL
++that xmalloc_read_with_initial_buf() appends, advancing past the end
++of the buffer. The string-scan loop in next_token() then dereferences
++one byte past the buffer (heap-buffer-overflow, READ of size 1).
++
++Fix: test every nextchar() return for NULs.
++
++Reproducer (ASan build):
++awk 'BEGIN { print "string\
++'
++
++function                                             old     new   delta
++next_token                                           934     933      -1
++
++Signed-off-by: Ediz <ediz.research@gmail.com>
++Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
++
++Upstream: https://github.com/vda-linux/busybox_mirror/commit/15666f3e9a0b54305cec1b01f34bc5b2a1794e74
++Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
++---
++ editors/awk.c | 49 +++++++++++++++++++++++++++++++++----------------
++ 1 file changed, 33 insertions(+), 16 deletions(-)
++
++diff --git a/editors/awk.c b/editors/awk.c
++index 222e629..902b438 100644
++--- a/editors/awk.c
+++++ b/editors/awk.c
++@@ -896,24 +896,30 @@ static char *nextword(char **s)
++ 	return p;
++ }
++ 
+++/* Note: will NOT stop at NUL (either on <NUL> or \<newline><NUL>):
+++ * *s will be advanced past NUL!
+++ * Make sure you always check NUL return before continuing.
+++ */
++ static char nextchar(char **s)
++ {
++-	char c, *pps;
+++	char c;
++  again:
++ 	c = *(*s)++;
++-	pps = *s;
++-	if (c == '\\')
+++
+++	if (c == '\\') {
+++		char *pps = *s;
++ 		c = bb_process_escape_sequence((const char**)s);
++-	/* Example awk statement:
++-	 * s = "abc\"def"
++-	 * we must treat \" as "
++-	 */
++-	if (c == '\\' && *s == pps) { /* unrecognized \z? */
++-		c = *(*s); /* yes, fetch z */
++-		if (c) { /* advance unless z = NUL */
++-			(*s)++;
++-			if (c == '\n') /* \<newline>? eat it */
++-				goto again;
+++		/* Example awk statement:
+++		 * s = "abc\"def"
+++		 * we must treat \" as "
+++		 */
+++		if (c == '\\' && *s == pps) { /* unrecognized \z? */
+++			c = *(*s); /* yes, fetch z */
+++			if (c) { /* advance unless z = NUL */
+++				(*s)++;
+++				if (c == '\n') /* \<newline>? eat it */
+++					goto again;
+++			}
++ 		}
++ 	}
++ 	return c;
++@@ -1211,11 +1217,22 @@ static uint32_t next_token(uint32_t expected)
++ 			/* it's a string */
++ 			char *s = t_string = ++p;
++ 			while (*p != '"') {
++-				char *pp;
++-				if (*p == '\0' || *p == '\n')
+++				char c, *pp;
+++
+++				/* Since we need to handle \<newline><NUL>
+++				 * below, we can handle ordinary NUL there as well,
+++				 * instead of here. Thus commented out.
+++				 */
+++				if (/* *p == '\0' || */ *p == '\n')
++ 					syntax_error(EMSG_UNEXP_EOS);
++ 				pp = p;
++-				*s++ = nextchar(&pp);
+++				c = *s++ = nextchar(&pp);
+++				/* awk 'BEGIN { print "unterminated\
+++				 * '
+++				 * results in NUL here after nextchar() eats \<newline>
+++				 */
+++				if (c == '\0')
+++					syntax_error(EMSG_UNEXP_EOS);
++ 				p = pp;
++ 			}
++ 			p++;
+diff --git a/package/busybox/0023-tar-Sanitize-verbose-file-names.patch b/package/busybox/0023-tar-Sanitize-verbose-file-names.patch
+new file mode 100644
+index 00000000..062e0514
+--- /dev/null
++++ b/package/busybox/0023-tar-Sanitize-verbose-file-names.patch
+@@ -0,0 +1,29 @@
++From: Anton Skorup <anton.skorup@axis.com>
++Date: Thu, 27 Aug 2026 13:47:52 +0200
++Subject: [PATCH] tar: Sanitize verbose file names
++
++function                                             old     new   delta
++writeTarHeader                                       859     869     +10
++
++Signed-off-by: Anton Skorup <anton.skorup@axis.com>
++Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
++
++Upstream: https://github.com/vda-linux/busybox_mirror/commit/436223e2b77dd60aca7dfec91bf9af0b1787e5fe
++Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
++---
++ archival/tar.c | 2 +-
++ 1 file changed, 1 insertion(+), 1 deletion(-)
++
++diff --git a/archival/tar.c b/archival/tar.c
++index d42dcfc..d62b7d3 100644
++--- a/archival/tar.c
+++++ b/archival/tar.c
++@@ -427,7 +427,7 @@ static int writeTarHeader(struct TarBallInfo *tbInfo,
++ 		/* GNU "tar cvvf" prints "extended" listing a-la "ls -l" */
++ 		/* We don't have such excesses here: for us "v" == "vv" */
++ 		/* '/' is probably a GNUism */
++-		fprintf(vbFd, "%s%s\n", header_name,
+++		fprintf(vbFd, "%s%s\n", printable_string(header_name),
++ 				S_ISDIR(statbuf->st_mode) ? "/" : "");
++ 	}
++ 
+diff --git a/package/busybox/0024-udhcpc-ensure-packet.data.cookie-exists-before-we-ac.patch b/package/busybox/0024-udhcpc-ensure-packet.data.cookie-exists-before-we-ac.patch
+new file mode 100644
+index 00000000..37a152da
+--- /dev/null
++++ b/package/busybox/0024-udhcpc-ensure-packet.data.cookie-exists-before-we-ac.patch
+@@ -0,0 +1,43 @@
++From: Denys Vlasenko <vda.linux@googlemail.com>
++Date: Mon, 21 Sep 2026 12:15:19 +0200
++Subject: [PATCH] udhcpc: ensure packet.data.cookie exists before we access
++ it
++
++function                                             old     new   delta
++d4_recv_raw_packet                                   497     500      +3
++
++Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
++
++Upstream: https://github.com/vda-linux/busybox_mirror/commit/fd1972099f28636b5deea200022b528f3a0bd523
++Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
++---
++ networking/udhcp/dhcpc.c | 9 +++++++--
++ 1 file changed, 7 insertions(+), 2 deletions(-)
++
++diff --git a/networking/udhcp/dhcpc.c b/networking/udhcp/dhcpc.c
++index e44086c..936687e 100644
++--- a/networking/udhcp/dhcpc.c
+++++ b/networking/udhcp/dhcpc.c
++@@ -900,7 +900,12 @@ static NOINLINE int d4_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
++ 		break;
++ 	}
++ 
++-	if (bytes < (int) (sizeof(packet.ip) + sizeof(packet.udp))) {
+++	if (bytes < (int) (
+++			sizeof(packet.ip) + sizeof(packet.udp)
+++			+ offsetof(struct dhcp_packet, options)
+++			/* DHCP requires option 255 is always present, IOW: at least one byte in options[]: */
+++			+ 1
+++	)) {
++ 		log1s("packet is too short, ignoring");
++ 		return -2;
++ 	}
++@@ -954,7 +959,7 @@ static NOINLINE int d4_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
++ 	packet.ip.tot_len = packet.udp.len; /* yes, this is needed */
++ 	check = packet.udp.check;
++ 	packet.udp.check = 0;
++-	if (check && check != inet_cksum(&packet, bytes)) {
+++	if (check != 0 && check != inet_cksum(&packet, bytes)) {
++ 		log1s("packet with bad UDP checksum, ignoring");
++ 		return -2;
++ 	}
+diff --git a/package/busybox/0025-udhcpc-6-check-minimum-packet-size-after-reducing-it.patch b/package/busybox/0025-udhcpc-6-check-minimum-packet-size-after-reducing-it.patch
+new file mode 100644
+index 00000000..dec384a3
+--- /dev/null
++++ b/package/busybox/0025-udhcpc-6-check-minimum-packet-size-after-reducing-it.patch
+@@ -0,0 +1,92 @@
++From: Denys Vlasenko <vda.linux@googlemail.com>
++Date: Sat, 7 Nov 2026 14:05:35 +0100
++Subject: [PATCH] udhcpc[6]: check minimum packet size after reducing it to
++ ip.tot_len
++
++For DHCPv6, also require that all fields up until option array exist in the packet.
++I did not find a definitive info that DHCPv6 requires at least one option
++to be present, and the code appears to handle empty option array correctly.
++
++function                                             old     new   delta
++d6_recv_raw_packet                                   228     230      +2
++d4_recv_raw_packet                                   500     501      +1
++------------------------------------------------------------------------------
++(add/remove: 0/0 grow/shrink: 2/0 up/down: 3/0)                 Total: 3 bytes
++
++Signed-off-by: Denys Vlasenko <vda.linux@googlemail.com>
++
++Upstream: https://github.com/vda-linux/busybox_mirror/commit/56e9d36bb64fe508b4d5b9fb01f02bdee6dba792
++Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
++---
++ networking/udhcp/d6_dhcpc.c | 14 +++++++++-----
++ networking/udhcp/dhcpc.c    | 18 +++++++++---------
++ 2 files changed, 18 insertions(+), 14 deletions(-)
++
++diff --git a/networking/udhcp/d6_dhcpc.c b/networking/udhcp/d6_dhcpc.c
++index 1851cee..76d0924 100644
++--- a/networking/udhcp/d6_dhcpc.c
+++++ b/networking/udhcp/d6_dhcpc.c
++@@ -919,11 +919,6 @@ static NOINLINE int d6_recv_raw_packet(struct in6_addr *peer_ipv6, struct d6_pac
++ 		return bytes; /* returns -1 */
++ 	}
++ 
++-	if (bytes < (int) (sizeof(packet.ip6) + sizeof(packet.udp))) {
++-		log1s("packet is too short, ignoring");
++-		return -2;
++-	}
++-
++ 	if (bytes < sizeof(packet.ip6) + ntohs(packet.ip6.ip6_plen)) {
++ 		/* packet is bigger than sizeof(packet), we did partial read */
++ 		log1s("oversized packet, ignoring");
++@@ -933,6 +928,15 @@ static NOINLINE int d6_recv_raw_packet(struct in6_addr *peer_ipv6, struct d6_pac
++ 	/* ignore any extra garbage bytes */
++ 	bytes = sizeof(packet.ip6) + ntohs(packet.ip6.ip6_plen);
++ 
+++	if (bytes < (int) (
+++			sizeof(packet.ip6) + sizeof(packet.udp)
+++			+ offsetof(struct d6_packet, d6_options)
+++			/* + 4 - does DHCPv6 require that at least one option is present? */
+++	)) {
+++		log1s("packet is too short, ignoring");
+++		return -2;
+++	}
+++
++ 	/* make sure its the right packet for us, and that it passes sanity checks */
++ 	if (packet.ip6.ip6_nxt != IPPROTO_UDP
++ 	 || (packet.ip6.ip6_vfc >> 4) != 6
++diff --git a/networking/udhcp/dhcpc.c b/networking/udhcp/dhcpc.c
++index 936687e..f0d352f 100644
++--- a/networking/udhcp/dhcpc.c
+++++ b/networking/udhcp/dhcpc.c
++@@ -900,6 +900,15 @@ static NOINLINE int d4_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
++ 		break;
++ 	}
++ 
+++	if (bytes < ntohs(packet.ip.tot_len)) {
+++		/* packet is bigger than sizeof(packet), we did partial read */
+++		log1s("oversized packet, ignoring");
+++		return -2;
+++	}
+++
+++	/* ignore any extra garbage bytes */
+++	bytes = ntohs(packet.ip.tot_len);
+++
++ 	if (bytes < (int) (
++ 			sizeof(packet.ip) + sizeof(packet.udp)
++ 			+ offsetof(struct dhcp_packet, options)
++@@ -910,15 +919,6 @@ static NOINLINE int d4_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
++ 		return -2;
++ 	}
++ 
++-	if (bytes < ntohs(packet.ip.tot_len)) {
++-		/* packet is bigger than sizeof(packet), we did partial read */
++-		log1s("oversized packet, ignoring");
++-		return -2;
++-	}
++-
++-	/* ignore any extra garbage bytes */
++-	bytes = ntohs(packet.ip.tot_len);
++-
++ 	/* make sure its the right packet for us, and that it passes sanity checks */
++ 	if (packet.ip.protocol != IPPROTO_UDP
++ 	 || packet.ip.version != IPVERSION
+diff --git a/package/busybox/busybox.mk b/package/busybox/busybox.mk
+index 35dc3a52..4bd9c7be 100644
+--- a/package/busybox/busybox.mk
++++ b/package/busybox/busybox.mk
+@@ -40,6 +40,9 @@ BUSYBOX_IGNORE_CVES += CVE-2026-26157 CVE-2026-26158
+ # 0020-CVE-2026-29004-02.patch
+ BUSYBOX_IGNORE_CVES += CVE-2026-29004
+ 
++# 0021-ash-fix-out-of-bounds-read-in-ifsbreakup.patch
++BUSYBOX_IGNORE_CVES += CVE-2026-38754
++
+ BUSYBOX_CFLAGS = \
+ 	$(TARGET_CFLAGS)
+ 

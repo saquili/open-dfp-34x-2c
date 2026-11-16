@@ -11,10 +11,10 @@ Buildroot itself is not committed here. This directory pins one Buildroot
 release by hash and holds the script that turns the pin into a tree ready to
 build, so that every build starts from the same bytes. The tree is made in
 ``build/buildroot`` and is never committed. The patches we carry against the
-release are in ``patches/``: three, which add the MIPS I variant that this core
-needs, take the licence text of the kernel this distribution builds, and take
+release are in ``patches/``: four, which add the MIPS I variant that this core
+needs, take the licence text of the kernel this distribution builds, take
 the libraries of netifd at newer commits, with json-c built without
-thread-local storage.
+thread-local storage, and take BusyBox's fixes of 2026 that no release has.
 
 What is here
 ============
@@ -29,7 +29,8 @@ What is here
     The script that makes the pinned release ready to build (below).
 ``patches/``
     The patches applied to the release, in name order: the MIPS I variant,
-    the kernel's licence text and the libraries of netifd (below).
+    the kernel's licence text, the libraries of netifd and BusyBox's fixes
+    (below).
 ``tests/``
     The self-tests of ``fetch``.
 
@@ -154,6 +155,27 @@ claims the atomic builtins that json-c and ubus depend on.
 
 The instruction-set gate checks what the libraries became, as it checks every
 file of the image.
+
+BusyBox's fixes
+===============
+
+``patches/0004-*.patch``, whose subject names BusyBox, adds five patches to
+the recipe after the release's own, 0021 to 0025: fixes BusyBox made in 2026
+to applets the image holds, which its release 1.38.0 predates. Each names
+the upstream commit; the one of ash is backported to 1.37.0, the version the
+release builds, and names its CVE in ``BUSYBOX_IGNORE_CVES``.
+
+* ash: an out-of-bounds read in ``ifsbreakup()`` after an expansion that
+  failed (CVE-2026-38754);
+* awk: a one-byte heap overflow in ``next_token()``;
+* tar: control characters of file names in the verbose listing;
+* udhcpc: the magic cookie read before the packet is known to hold it, and
+  the minimum size checked before the length is cut to the IP header's; these
+  two concern what a DHCP server of the network sends.
+
+Fixes for applets the image leaves out (ssl_server, httpd, dpkg, the
+volume_id probers, libpwdgrp, the here strings of 1.38) are not taken. The
+release's tests of ash and awk give the same results with and without them.
 
 Checking the pin
 ================
