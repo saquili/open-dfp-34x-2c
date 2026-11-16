@@ -66,6 +66,7 @@ const CHANGED_BY: Record<string, Change[]> = {
     "dmz",
     "rule",
     "fw",
+    "dos",
     "sfp_lane",
     "mgmt",
     "hostname",

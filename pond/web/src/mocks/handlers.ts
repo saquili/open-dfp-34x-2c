@@ -25,6 +25,7 @@ import type {
   UniPorts,
   UniReport,
 } from "../api/types";
+import { CHECKS, DOS_OFF, FLOODS, isLimit } from "../lib/dos";
 import { checkKey, checkPem, fingerprint, type KeyProblem, type PemProblem } from "../lib/keys";
 import { MAX_MOVED, moved } from "../lib/ports";
 import { DEFAULT_PRODUCT, productNameOk, productSlug } from "../lib/product";
@@ -1668,6 +1669,40 @@ const stick = [
       ping_lans: pick(b.PING_LANS, now.ping_lans),
     };
     return HttpResponse.json({ id: "fw", ok: true });
+  }),
+
+  /*
+   * The switch's checks of malformed frames: each of the twelve on or off, a flood
+   * check off or with its limit from 1 to 255, and SIDE, whose frames they judge.
+   * A key not given stays as it is.
+   */
+  http.post("*/api/set/dos", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const next = { ...(settings.dos ?? DOS_OFF) };
+    const refuse = (detail: string) =>
+      HttpResponse.json({ error: "refused", detail }, { status: 400 });
+    for (const k of CHECKS) {
+      const v = b[k.toUpperCase()];
+      if (v === undefined) continue;
+      if (v !== "on" && v !== "off") return refuse(`${k.toUpperCase()}: on or off`);
+      next[k] = v;
+    }
+    for (const k of FLOODS) {
+      const v = b[k.toUpperCase()];
+      if (v === undefined) continue;
+      if (v !== "off" && !isLimit(v))
+        return refuse(`${k.toUpperCase()}: off, or a threshold from 1 to 255`);
+      next[k] = v;
+    }
+    if (b.SIDE !== undefined) {
+      if (b.SIDE !== "internet" && b.SIDE !== "host" && b.SIDE !== "both")
+        return refuse("SIDE: internet, host or both");
+      next.side = b.SIDE;
+    }
+    settings.dos = next;
+    return HttpResponse.json({ id: "dos", ok: true });
   }),
 
   /* A connection's DMZ: its device by LAN and MAC, or none with MAC=. */

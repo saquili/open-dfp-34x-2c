@@ -6,6 +6,7 @@
  * OpenAPI spec version: 1
  */
 import type { DmzInfo } from "./dmzInfo.ts";
+import type { DosChecks } from "./dosChecks.ts";
 import type { FixedInfo } from "./fixedInfo.ts";
 import type { ForwardInfo } from "./forwardInfo.ts";
 import type { FwDefaults } from "./fwDefaults.ts";
@@ -31,6 +32,7 @@ export interface Settings {
   /** The firewall's rules, in their order. */
   rules?: RuleInfo[];
   fw?: FwDefaults;
+  dos?: DosChecks;
   /**
    * passthrough with sessions, bridge without, as onu-apply brought it up.
    * @nullable

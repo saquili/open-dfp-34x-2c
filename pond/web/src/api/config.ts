@@ -245,6 +245,7 @@ export const REFRESH = {
   dmz: [["live"]],
   rule: [["live"]],
   fw: [["live"]],
+  dos: [["live"]],
   sfp_lane: [["sfp_lane"], ["live"]],
   mgmt: [["mgmt"], ["live"], ["switch"], ["tls"]],
   hostname: [["live"]],
@@ -310,6 +311,8 @@ export const useForwardChange = () => useChange("forward");
 export const useDmzChange = () => useChange("dmz");
 export const useRuleChange = () => useChange("rule");
 export const useFwChange = () => useChange("fw");
+/** The switch's checks of malformed frames: LAND=on, SYN_FLOOD=40 or off, SIDE=internet, host or both. */
+export const useDosChange = () => useChange("dos");
 /** IGMP_PRIORITY=auto: the stick gives the rules' priority; host: the host's goes. */
 export const useIptvChange = () => useChange("iptv");
 /** FIBRE=VID with ACTION=move HOST=VID, off, only_uni, only_veip, or auto for the stick's own. */
