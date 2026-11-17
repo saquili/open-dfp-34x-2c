@@ -122,6 +122,7 @@ SYS_HOSTNAME=
 SYS_LOG_SERVER=
 BOARD_MGMT_VLAN=$MGMT_VLAN
 BOARD_MGMT_ADDRESS=$MGMT_ADDRESS
+MGMT_GATEWAY=
 if [ -r /run/onu-system ]; then
 	SYS_HOSTNAME=$(sed -n 's/^HOSTNAME=//p' /run/onu-system)
 	SYS_LOG_SERVER=$(sed -n 's/^LOG_SERVER=//p' /run/onu-system)
@@ -129,6 +130,7 @@ if [ -r /run/onu-system ]; then
 	[ -n "$value" ] && MGMT_VLAN=$value
 	value=$(sed -n 's/^MGMT_ADDRESS=//p' /run/onu-system)
 	[ -n "$value" ] && MGMT_ADDRESS=$value
+	MGMT_GATEWAY=$(sed -n 's/^MGMT_GATEWAY=//p' /run/onu-system)
 fi
 
 hostname -F /etc/hostname
@@ -226,7 +228,7 @@ onu-nl link set sfp up || warn "no interface sfp"
 # (onu-apply guard, onu-fw guard), before any server starts: what comes in
 # to the stick by any interface but the management VLAN's is dropped, but
 # what one of its programs takes there.
-onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" || {
+onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" "$MGMT_GATEWAY" || {
 	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS is not a pair, the image's instead"
 	MGMT_VLAN=$BOARD_MGMT_VLAN
 	MGMT_ADDRESS=$BOARD_MGMT_ADDRESS
