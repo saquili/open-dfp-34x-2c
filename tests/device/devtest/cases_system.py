@@ -166,22 +166,15 @@ def watchdog(ctx: Context):
                        f"up {up:.0f} s")
 
 
-@case("system.watchdog-reset", "System",
-      "An armed watchdog that nobody feeds resets the stick within its timeout",
-      destructive=True, last=True, tools=("ubus",))
-def watchdog_reset(ctx: Context):
-    timeout = int(ctx.stick.text("cat /sys/class/watchdog/watchdog0/timeout"))
-    boot = ctx.stick.text("cat /proc/sys/kernel/random/boot_id")
-    # procd stops feeding it and lets go of the device without the magic character,
-    # which leaves it armed (procd's "system watchdog" method, with "stop").
-    ctx.stick.run("ubus call system watchdog '{\"stop\": true}'", timeout=20, check=True)
+def reset_seen(ctx: Context, boot: str, stay: float, limit: float, cause: str) -> tuple[str, str]:
+    """Wait for the stick, which is to reset, to be gone and back with a boot other than @boot:
+    gone within @stay seconds of now, back within @limit, the boot loader counting down for
+    minutes before it starts a kernel unless the bench's reload command brings the stick back as
+    soon as it is gone. What went wrong, or "" and what was seen, @cause naming what began it."""
     start = time.monotonic()
     gone = None
     how = ""
-    # Gone within the timeout and a margin, then back with a new boot: the
-    # boot loader may count down for minutes before it starts a kernel, unless
-    # the bench's reload command brings the stick back as soon as it is gone.
-    while time.monotonic() - start < timeout + RESET_RETURN:
+    while time.monotonic() - start < limit:
         time.sleep(5)
         reply = ctx.stick.run("cat /proc/sys/kernel/random/boot_id", timeout=10)
         now = time.monotonic() - start
@@ -196,16 +189,80 @@ def watchdog_reset(ctx: Context):
                            f", by the loader's countdown: the reload command failed "
                            f"(exit {code})")
         elif answer == boot:
-            if now > timeout + RESET_MARGIN:
-                return failed(f"timeout {timeout} s; still answering {now:.0f} s after arming")
+            if now > stay:
+                return f"still answering {now:.0f} s after {cause}", ""
         elif gone is None:
-            return failed(f"timeout {timeout} s; a new boot after {now:.0f} s, "
-                          "without having been seen gone")
+            return f"a new boot after {now:.0f} s, without having been seen gone", ""
         else:
-            return passed(f"timeout {timeout} s; gone after {gone:.0f} s, back with a new "
-                          f"boot after {now:.0f} s{how}")
-    return failed(f"timeout {timeout} s; gone after {gone:.0f} s, no new boot within "
-                  f"{timeout + RESET_RETURN} s")
+            return "", f"gone after {gone:.0f} s, back with a new boot after {now:.0f} s{how}"
+    return f"gone after {gone or 0:.0f} s, no new boot within {limit:.0f} s", ""
+
+
+# Where the kernel's last words before a restart are kept (pstore), what clears
+# them, and the seconds within which a panic restarts the stick (panic=10).
+PSTORE = "/sys/fs/pstore"
+CRASH_CLEAR = "/usr/lib/onu/onu-crash clear"
+PANIC_RESTART = 60
+PANIC_TEXT = "sysrq triggered crash"
+
+
+def pstore_files(ctx: Context) -> dict[str, int]:
+    """The records pstore shows, by name, with their sizes."""
+    listing = ctx.stick.text(f"cd {PSTORE} && for f in *; do [ -f \"$f\" ] && "
+                             "echo \"$f $(wc -c <\"$f\")\"; done; true")
+    return {name: int(size) for name, _, size in
+            (line.partition(" ") for line in listing.splitlines()) if size.isdigit()}
+
+
+@case("system.crash-record", "System",
+      "A kernel panic restarts the stick, and the record of it, with the console's last lines, "
+      "is kept across the restart, served by the status daemon and removed on request",
+      destructive=True, last=True)
+def crash_record(ctx: Context):
+    from .cases_net import http
+    if ctx.stick.run(f"grep -q ' {PSTORE} pstore ' /proc/mounts").code:
+        return failed(f"pstore is not mounted on {PSTORE}: the kernel keeps no record")
+    if ctx.stick.run("[ -w /proc/sysrq-trigger ]").code:
+        return skipped("the kernel has no /proc/sysrq-trigger to make it panic")
+    ctx.stick.run(CRASH_CLEAR, check=True)
+    boot = ctx.stick.text("cat /proc/sys/kernel/random/boot_id")
+    ctx.stick.run("echo c >/proc/sysrq-trigger", timeout=10)
+    trouble, how = reset_seen(ctx, boot, PANIC_RESTART, PANIC_RESTART + RESET_RETURN, "the panic")
+    if trouble:
+        return failed(f"the panic: {trouble}")
+    kept = pstore_files(ctx)
+    panic = ctx.stick.text(f"cat {PSTORE}/dmesg-* 2>/dev/null; true")
+    console = sum(size for name, size in kept.items() if name.startswith("console-"))
+    record = panic.startswith("Panic#") and PANIC_TEXT in panic
+    served = "no token in the settings"
+    in_pond = True
+    if ctx.settings.pond_token:
+        code, body = http(ctx, "/api/get/crash", token=True)
+        records = json.loads(body).get("value", {}).get("records", []) if code == 200 else []
+        in_pond = any(r.get("reason") == "panic" and PANIC_TEXT in r.get("text", "")
+                      for r in records)
+        served = (f"the status daemon serves {len(records)} record(s)" if code == 200 else
+                  f"the status daemon: HTTP {code}")
+    ctx.stick.run(CRASH_CLEAR)
+    left = pstore_files(ctx)
+    ok = record and console > 0 and in_pond and not left
+    return verdict(ok, f"{how}; panic record {'kept' if record else 'missing'} "
+                       f"({sum(size for n, size in kept.items() if n.startswith('dmesg-'))} B), "
+                       f"console {console} B; {served}; "
+                       f"{'removed' if not left else 'left: ' + ', '.join(sorted(left))}")
+
+
+@case("system.watchdog-reset", "System",
+      "An armed watchdog that nobody feeds resets the stick within its timeout",
+      destructive=True, last=True, tools=("ubus",))
+def watchdog_reset(ctx: Context):
+    timeout = int(ctx.stick.text("cat /sys/class/watchdog/watchdog0/timeout"))
+    boot = ctx.stick.text("cat /proc/sys/kernel/random/boot_id")
+    # procd stops feeding it and lets go of the device without the magic character,
+    # which leaves it armed (procd's "system watchdog" method, with "stop").
+    ctx.stick.run("ubus call system watchdog '{\"stop\": true}'", timeout=20, check=True)
+    trouble, how = reset_seen(ctx, boot, timeout + RESET_MARGIN, timeout + RESET_RETURN, "arming")
+    return failed(f"timeout {timeout} s; {trouble}") if trouble else passed(f"timeout {timeout} s; {how}")
 
 
 def kv(text: str) -> dict[str, str]:

@@ -107,6 +107,13 @@ today's image, but none has run on it. What a case expects of the image:
 * procd feeds the watchdog (ADR 0010): ``system.watchdog`` looks for procd
   holding the device, and ``system.watchdog-reset`` has procd let go of it
   without closing it properly, so that nobody feeds an armed watchdog.
+* A panic restarts the stick, and its record, which ramoops keeps in DRAM
+  across the restart, is in ``/sys/fs/pstore`` after it: ``system.crash-record``
+  removes the records of before, has the kernel panic by
+  ``/proc/sysrq-trigger``, waits for the new boot, and looks for the panic's
+  record with the panic's message whole, the console's record beside it,
+  the status daemon serving it (with the token), and both gone once removed.
+  It is run with ``--destructive``.
 * The ssh server takes root's key and root's password (ADR 0009), which
   ``net.ssh-login`` checks.
 * ``omci.tcont-map`` and ``data.cpu-limit`` read the kernel's debugfs, which

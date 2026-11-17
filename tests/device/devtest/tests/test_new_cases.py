@@ -404,5 +404,95 @@ class Updates(unittest.TestCase):
         self.assertIn("never saw the stick come back", result.evidence)
 
 
+
+class FakePanicStick:
+    """A stick that panics on "echo c", is gone a while and comes back with a new boot, and
+    whose pstore holds what @kept says after it."""
+
+    def __init__(self, kept: dict[str, str], gone: int = 3, pstore: bool = True):
+        self.kept, self.gone, self.pstore = kept, gone, pstore
+        self.files: dict[str, str] = {"console-ramoops-0": "old\n"}
+        self.boot = "first"
+        self.panicked = False
+        self.asked: list[str] = []
+
+    def run(self, command, *, timeout=60.0, check=False, stdin=None):
+        self.asked.append(command)
+        out, code = "", 0
+        if "/proc/mounts" in command:
+            code = 0 if self.pstore else 1
+        elif "onu-crash clear" in command:
+            self.files = {}
+        elif "echo c >/proc/sysrq-trigger" in command:
+            self.panicked, code = True, 255
+            self.files = dict(self.kept)
+        elif "boot_id" in command:
+            if self.panicked and self.gone:
+                self.gone -= 1
+                return Reply([command], 255, "", "", 0.0)
+            out = "second" if self.panicked else self.boot
+        elif "wc -c" in command:
+            out = "".join(f"{n} {len(v)}\n" for n, v in sorted(self.files.items()))
+        elif "cat /sys/fs/pstore/dmesg-" in command:
+            out = "".join(v for n, v in sorted(self.files.items()) if n.startswith("dmesg-"))
+        return Reply([command], code, out, "", 0.0)
+
+    def text(self, command, *, timeout=60.0):
+        return self.run(command, timeout=timeout).out.strip()
+
+
+PANIC = "Panic#1 Part1\n<0>[ 23.1] Kernel panic - not syncing: sysrq triggered crash\n"
+
+
+class CrashRecord(unittest.TestCase):
+    def outcome(self, stick, pond="200"):
+        real = cases_system.time
+        cases_system.time = Clock()
+        try:
+            records = [{"reason": "panic", "text": PANIC}] if "dmesg-ramoops-0" in stick.kept else []
+            body = json.dumps({"id": "crash", "value": {"records": records}})
+            ctx = context(bench=[("curl", 0, f"{body}\n{pond}")])
+            ctx.stick = stick
+            return cases_system.crash_record(ctx)
+        finally:
+            cases_system.time = real
+
+    def test_the_panic_is_kept_served_and_removed(self):
+        stick = FakePanicStick({"dmesg-ramoops-0": PANIC, "console-ramoops-0": "boot\n"})
+        result = self.outcome(stick)
+        self.assertEqual(result.status, PASS, result.evidence)
+        self.assertIn("panic record kept", result.evidence)
+        self.assertIn("the status daemon serves 1 record(s)", result.evidence)
+        self.assertIn("removed", result.evidence)
+        self.assertLess(stick.asked.index("/usr/lib/onu/onu-crash clear"),
+                        stick.asked.index("echo c >/proc/sysrq-trigger"),
+                        "the records of before are removed before the panic")
+
+    def test_a_record_without_the_panic_fails_the_case(self):
+        result = self.outcome(FakePanicStick({"console-ramoops-0": "boot\n"}))
+        self.assertEqual(result.status, FAIL)
+        self.assertIn("panic record missing", result.evidence)
+
+    def test_a_status_daemon_that_does_not_serve_it_fails_the_case(self):
+        stick = FakePanicStick({"dmesg-ramoops-0": PANIC, "console-ramoops-0": "boot\n"})
+        result = self.outcome(stick, pond="500")
+        self.assertEqual(result.status, FAIL)
+        self.assertIn("HTTP 500", result.evidence)
+
+    def test_a_stick_that_does_not_restart_fails_the_case(self):
+        stick = FakePanicStick({"dmesg-ramoops-0": PANIC}, gone=0)
+        stick.run = (lambda run: lambda command, **kw: (
+            Reply([command], 0, "first", "", 0.0) if "boot_id" in command else run(command, **kw)))(stick.run)
+        result = self.outcome(stick)
+        self.assertEqual(result.status, FAIL)
+        self.assertIn("still answering", result.evidence)
+
+    def test_a_kernel_without_pstore_fails_at_once(self):
+        stick = FakePanicStick({}, pstore=False)
+        result = self.outcome(stick)
+        self.assertEqual(result.status, FAIL)
+        self.assertNotIn("echo c >/proc/sysrq-trigger", stick.asked)
+
+
 if __name__ == "__main__":
     unittest.main()
