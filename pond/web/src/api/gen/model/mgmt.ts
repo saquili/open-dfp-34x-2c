@@ -8,13 +8,21 @@
 import type { MgmtPending } from "./mgmtPending.ts";
 
 /**
- * The management VLAN and address (pond's value "mgmt"), and a new pair added beside them that waits to be confirmed from a panel opened at it.
+ * The management VLAN, address and gateway (pond's value "mgmt"), and a new set added beside them that waits to be confirmed from a panel opened at it.
  */
 export interface Mgmt {
-  /** @nullable */
+  /**
+   * The management VLAN, 1 to 4094, or null: untagged, on the host link itself, as a new stick starts.
+   * @nullable
+   */
   vlan: number | null;
   /** @nullable */
   address: string | null;
+  /**
+   * The router on the management network through which the stick answers from beyond it and reaches the servers it uses; null for none.
+   * @nullable
+   */
+  gateway: string | null;
   /**
    * An address on the SFP port itself, without a VLAN; empty in production.
    * @nullable

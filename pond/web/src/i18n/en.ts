@@ -946,26 +946,42 @@ export const en = {
     revert: "Go back now",
     mgmtTitle: "Managing the stick",
     mgmtHint:
-      "The VLAN and address the panel and ssh answer on. This VLAN never goes out to the fibre.",
+      "Where the panel and ssh answer: untagged or in a VLAN of their own, at an address and, if you give one, behind a gateway. Management traffic never goes out to the fibre.",
+    mgmtTagging: "Management traffic",
+    mgmtUntagged: "Untagged",
+    mgmtTagged: "In a VLAN",
+    mgmtUntaggedValue: "untagged",
+    mgmtUntaggedHint:
+      "The panel and ssh answer on the host's own network, without a VLAN, as a new stick starts. Every device on that network can reach them: keep the password your own.",
     mgmtVlan: "Management VLAN",
-    mgmtVlanHint: "A number from 1 to 4094; management always has a VLAN of its own.",
+    mgmtVlanHint:
+      "A number from 1 to 4094. The VLAN belongs to management alone and never crosses to the fibre.",
+    mgmtVlanRequired: "A VLAN from 1 to 4094",
     mgmtAddress: "Management address",
     mgmtAddressHint: "An address with its prefix, e.g. 192.0.2.2/30.",
     mgmtAddressRule: "An IPv4 address with its prefix, e.g. 192.0.2.2/30",
+    mgmtGateway: "Gateway (optional)",
+    mgmtGatewayHint:
+      "The router on the management network. Through it the panel answers from other networks and the stick reaches its time and log servers. Empty: the management network alone.",
+    mgmtGatewayRule: "An IPv4 address in the management network, other than the stick's own",
+    mgmtGatewayShown: "Gateway",
+    mgmtNoGateway: "none",
     dataAddress: "Address without a VLAN",
     mgmtHere: "Panel opened at",
     mgmtAdd: "Add the new address",
     mgmtConfirm:
-      "Add a new management VLAN and address? The old ones stay until you confirm the new from a panel opened at the new address.",
+      "Add the new management settings? The ones in use stay until you confirm the new from a panel opened at the new address.",
     mgmtPending:
-      "The new address {address} in VLAN {vlan} works beside the old one. Open the panel at the new address and confirm the change there; the old one then goes.",
+      "The new address {address} ({where}) works beside the old one. Open the panel at the new address and confirm the change there; the old one then goes.",
+    mgmtPendingVlan: "in VLAN {vlan}",
+    mgmtPendingGateway: ", gateway {gateway}",
     mgmtConfirmHere:
       "This panel runs at the new address, so the change worked. Confirm it and the old address goes.",
     mgmtOpenNew: "Open at the new address",
     mgmtCommit: "Confirm the new address",
     mgmtCancel: "Give up",
     mgmtSafety:
-      "The new VLAN and address come beside the ones in use, which keep working. Those go only when you confirm the change from a panel opened at the new address; unconfirmed, the new ones go by themselves after 10\u00a0min. You cannot lock yourself out.",
+      "The new settings work beside the ones in use, which keep working. Those go only when you confirm the change from a panel opened at the new address; unconfirmed, the new ones go by themselves after 10\u00a0min. You cannot lock yourself out.",
     mgmtUnavailable:
       "This stick cannot change its management address from the panel yet (it needs a software update).",
     crcErrors: "CRC errors (from the host)",

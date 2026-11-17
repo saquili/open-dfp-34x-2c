@@ -6,9 +6,10 @@
  * and the management VLAN and address the stick is reached on. Both changes
  * can cut the panel off, as the panel comes over this very port, so neither
  * is final at once: a new lane mode is kept only when it is confirmed from
- * the panel within a minute, else the stick goes back to the old one; a new
- * management address is added beside the old one and replaces it only when
- * confirmed from a panel opened at the new address.
+ * the panel within a minute, else the stick goes back to the old one; new
+ * management settings (untagged or a VLAN, the address, a gateway) are added
+ * beside the old ones and replace them only when confirmed from a panel
+ * opened at the new address.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -26,6 +27,7 @@ import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { useCountdown } from "../lib/countdown";
 import { bitrate, integer } from "../lib/format";
+import { ip4, net4 } from "../lib/ipv4";
 import { vlan, z } from "../lib/schemas";
 import { hostLink, laneMode, linkSpeed, port } from "../lib/state";
 
@@ -213,37 +215,66 @@ function LaneCard() {
   );
 }
 
+/** Whether @cidr is an IPv4 address with its prefix. */
+const isCidr = (v: string) => {
+  const m = /^((\d{1,3}\.){3}\d{1,3})\/(\d{1,2})$/.exec(v);
+  return m != null && ip4(m[1] ?? "") != null && +(m[3] ?? 99) <= 32;
+};
+
+/*
+ * Whether @gateway can be the gateway of @cidr: an address of its network,
+ * not the stick's own, nor, on a network of more than two addresses, the
+ * network's first or last, which no host holds.
+ */
+function gatewayFits(gateway: string, cidr: string) {
+  const g = ip4(gateway);
+  const n = net4(cidr);
+  const own = ip4(cidr.split("/")[0] ?? "");
+  if (g == null || n == null || own == null || g === own) return false;
+  if (g < n.first || g > n.last) return false;
+  return n.last - n.first < 2 || (g !== n.first && g !== n.last);
+}
+
 function MgmtCard() {
   const { t } = useI18n();
   const mgmt = useMgmt();
   const change = useMgmtChange();
   const state = useChangeState(change);
   const m = mgmt.data;
-  const schema = z.object({
-    vlan: vlan(t),
-    address: z.string().check(
-      z.trim(),
-      z.refine(
-        (v) =>
-          /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/.test(v) &&
-          v
-            .split("/")[0]
-            ?.split(".")
-            .every((o) => +o <= 255) === true &&
-          +(v.split("/")[1] ?? 99) <= 32,
-        t("sfp.mgmtAddressRule"),
-      ),
-    ),
-  });
+  const schema = z
+    .object({
+      tagged: z.boolean(),
+      vlan: vlan(t),
+      address: z.string().check(z.trim(), z.refine(isCidr, t("sfp.mgmtAddressRule"))),
+      gateway: z.string().check(z.trim()),
+    })
+    .check(
+      z.refine((v) => !v.tagged || v.vlan !== "", {
+        message: t("sfp.mgmtVlanRequired"),
+        path: ["vlan"],
+      }),
+      z.refine((v) => v.gateway === "" || !isCidr(v.address) || gatewayFits(v.gateway, v.address), {
+        message: t("sfp.mgmtGatewayRule"),
+        path: ["gateway"],
+      }),
+    );
   type Values = z.infer<typeof schema>;
   const form = useForm<Values>({
     resolver: zodResolver(schema),
-    values: { vlan: m?.vlan != null ? String(m.vlan) : "", address: m?.address ?? "" },
+    values: {
+      tagged: m?.vlan != null,
+      vlan: m?.vlan != null ? String(m.vlan) : "",
+      address: m?.address ?? "",
+      gateway: m?.gateway ?? "",
+    },
   });
   const { errors, isDirty } = form.formState;
+  const tagged = form.watch("tagged");
   const here = window.location.hostname;
   const pending = m?.pending;
   const onNew = pending && here === pending.address.split("/")[0];
+  const where = (v: number | null) =>
+    v == null ? t("sfp.mgmtUntaggedValue") : t("sfp.mgmtPendingVlan", { vlan: v });
 
   return (
     <Card title={t("sfp.mgmtTitle")}>
@@ -252,11 +283,17 @@ function MgmtCard() {
       {m && (
         <Facts
           rows={[
-            [t("sfp.mgmtVlan"), m.vlan ?? "–"],
+            [t("sfp.mgmtVlan"), m.vlan ?? t("sfp.mgmtUntaggedValue")],
             [
               t("sfp.mgmtAddress"),
               <span key="a" className="tabular">
                 {m.address ?? "–"}
+              </span>,
+            ],
+            [
+              t("sfp.mgmtGatewayShown"),
+              <span key="g" className="tabular">
+                {m.gateway ?? t("sfp.mgmtNoGateway")}
               </span>,
             ],
             m.data_address ? [t("sfp.dataAddress"), m.data_address] : null,
@@ -273,13 +310,20 @@ function MgmtCard() {
       {pending ? (
         <div
           role="alert"
-          className="alert alert-info alert-soft grid-flow-row gap-2 text-base-content"
+          className="alert alert-info alert-soft grid-flow-row grid-cols-1 gap-2 text-base-content sm:grid-cols-1"
         >
           <span className="flex items-start gap-2 text-sm">
             <Info className="mt-0.5 size-4 shrink-0 text-info" aria-hidden />
             {onNew
               ? t("sfp.mgmtConfirmHere")
-              : t("sfp.mgmtPending", { vlan: pending.vlan, address: pending.address })}
+              : t("sfp.mgmtPending", {
+                  address: pending.address,
+                  where:
+                    where(pending.vlan) +
+                    (pending.gateway
+                      ? t("sfp.mgmtPendingGateway", { gateway: pending.gateway })
+                      : ""),
+                })}
           </span>
           <span className="flex flex-wrap gap-2">
             {onNew ? (
@@ -319,26 +363,59 @@ function MgmtCard() {
         <form
           onSubmit={form.handleSubmit((v) => {
             if (!window.confirm(t("sfp.mgmtConfirm"))) return;
-            change.mutate({ VLAN: v.vlan, ADDRESS: v.address });
+            change.mutate({
+              VLAN: v.tagged ? v.vlan : "untagged",
+              ADDRESS: v.address,
+              GATEWAY: v.gateway,
+            });
           })}
           noValidate
           className="grid gap-3"
         >
+          <fieldset className="grid gap-1">
+            <legend className="mb-1 text-sm font-medium">{t("sfp.mgmtTagging")}</legend>
+            <div className="join">
+              {([false, true] as const).map((v) => (
+                <button
+                  key={String(v)}
+                  type="button"
+                  disabled={!m}
+                  aria-pressed={tagged === v}
+                  className={`btn join-item btn-sm ${tagged === v ? "btn-active" : ""}`}
+                  onClick={() => form.setValue("tagged", v, { shouldDirty: true })}
+                >
+                  {t(v ? "sfp.mgmtTagged" : "sfp.mgmtUntagged")}
+                </button>
+              ))}
+            </div>
+            {!tagged && (
+              <span className="text-xs text-base-content/70">{t("sfp.mgmtUntaggedHint")}</span>
+            )}
+          </fieldset>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field
-              label={t("sfp.mgmtVlan")}
-              hint={t("sfp.mgmtVlanHint")}
-              inputMode="numeric"
-              error={errors.vlan?.message}
-              disabled={!m}
-              {...form.register("vlan")}
-            />
+            {tagged && (
+              <Field
+                label={t("sfp.mgmtVlan")}
+                hint={t("sfp.mgmtVlanHint")}
+                inputMode="numeric"
+                error={errors.vlan?.message}
+                disabled={!m}
+                {...form.register("vlan")}
+              />
+            )}
             <Field
               label={t("sfp.mgmtAddress")}
               hint={t("sfp.mgmtAddressHint")}
               error={errors.address?.message}
               disabled={!m}
               {...form.register("address")}
+            />
+            <Field
+              label={t("sfp.mgmtGateway")}
+              hint={t("sfp.mgmtGatewayHint")}
+              error={errors.gateway?.message}
+              disabled={!m}
+              {...form.register("gateway")}
             />
           </div>
           <div className="flex flex-wrap items-center gap-3">

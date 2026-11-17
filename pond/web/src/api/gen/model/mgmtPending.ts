@@ -10,7 +10,10 @@
  * @nullable
  */
 export type MgmtPending = {
-  vlan: number;
+  /** @nullable */
+  vlan: number | null;
   address: string;
+  /** @nullable */
+  gateway: string | null;
   until_s: number;
 } | null;

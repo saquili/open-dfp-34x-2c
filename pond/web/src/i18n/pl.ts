@@ -939,26 +939,42 @@ export const pl: Dictionary = {
     revert: "Wróć teraz",
     mgmtTitle: "Zarządzanie wkładką",
     mgmtHint:
-      "VLAN i adres, pod którymi odpowiada panel i ssh. Ten VLAN nigdy nie wychodzi na światłowód.",
+      "Gdzie odpowiadają panel i ssh: bez tagu albo w osobnym VLAN-ie, pod adresem i, jeśli ją podasz, za bramą. Ruch zarządzania nigdy nie wychodzi na światłowód.",
+    mgmtTagging: "Ruch zarządzania",
+    mgmtUntagged: "Bez tagu",
+    mgmtTagged: "W VLAN-ie",
+    mgmtUntaggedValue: "bez tagu",
+    mgmtUntaggedHint:
+      "Panel i ssh odpowiadają w sieci samego hosta, bez VLAN-u, tak jak startuje nowa wkładka. Widzi je każde urządzenie w tej sieci: trzymaj hasło tylko dla siebie.",
     mgmtVlan: "VLAN zarządzania",
-    mgmtVlanHint: "Liczba od 1 do 4094; zarządzanie zawsze idzie osobnym VLAN-em.",
+    mgmtVlanHint:
+      "Liczba od 1 do 4094. Ten VLAN należy tylko do zarządzania i nigdy nie przechodzi na światłowód.",
+    mgmtVlanRequired: "VLAN od 1 do 4094",
     mgmtAddress: "Adres zarządzania",
     mgmtAddressHint: "Adres z maską, np. 192.0.2.2/30.",
     mgmtAddressRule: "Adres IPv4 z maską, np. 192.0.2.2/30",
+    mgmtGateway: "Brama (opcjonalnie)",
+    mgmtGatewayHint:
+      "Router w sieci zarządzania. Przez niego panel odpowiada z innych sieci, a wkładka sięga do serwerów czasu i logów. Puste: tylko sieć zarządzania.",
+    mgmtGatewayRule: "Adres IPv4 w sieci zarządzania, inny niż adres wkładki",
+    mgmtGatewayShown: "Brama",
+    mgmtNoGateway: "brak",
     dataAddress: "Adres bez VLAN-u",
     mgmtHere: "Panel otwarty pod",
     mgmtAdd: "Dodaj nowy adres",
     mgmtConfirm:
-      "Dodać nowy VLAN i adres zarządzania? Stary zostaje, dopóki nie potwierdzisz nowego z panelu otwartego pod nowym adresem.",
+      "Dodać nowe ustawienia zarządzania? Obecne zostają, dopóki nie potwierdzisz nowych z panelu otwartego pod nowym adresem.",
     mgmtPending:
-      "Nowy adres {address} w VLAN-ie {vlan} działa obok starego. Otwórz panel pod nowym adresem i potwierdź tam zmianę; wtedy stary zniknie.",
+      "Nowy adres {address} ({where}) działa obok starego. Otwórz panel pod nowym adresem i potwierdź tam zmianę; wtedy stary zniknie.",
+    mgmtPendingVlan: "w VLAN-ie {vlan}",
+    mgmtPendingGateway: ", brama {gateway}",
     mgmtConfirmHere:
       "Ten panel działa pod nowym adresem, więc zmiana się udała. Potwierdź ją, a stary adres zniknie.",
     mgmtOpenNew: "Otwórz pod nowym adresem",
     mgmtCommit: "Potwierdź nowy adres",
     mgmtCancel: "Zrezygnuj",
     mgmtSafety:
-      "Nowy VLAN i adres dochodzą obok obecnych, które działają dalej. Obecne znikają dopiero, gdy potwierdzisz zmianę z panelu otwartego pod nowym adresem; bez potwierdzenia nowe same znikają po 10\u00a0min. Nie da się odciąć od wkładki.",
+      "Nowe ustawienia działają obok obecnych, które działają dalej. Obecne znikają dopiero, gdy potwierdzisz zmianę z panelu otwartego pod nowym adresem; bez potwierdzenia nowe same znikają po 10\u00a0min. Nie da się odciąć od wkładki.",
     mgmtUnavailable:
       "Ta wkładka nie pozwala jeszcze zmieniać adresu zarządzania z panelu (wymaga aktualizacji oprogramowania).",
     crcErrors: "Błędy CRC (od hosta)",

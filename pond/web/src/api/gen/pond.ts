@@ -7642,7 +7642,7 @@ export const getSetMgmtUrl = () => {
 };
 
 /**
- * @summary A new management VLAN and address, on trial until confirmed from it
+ * @summary A new management VLAN, address and gateway, on trial until confirmed from it
  */
 export const setMgmt = async (
   setMgmtBody: SetMgmtBody,
@@ -7719,7 +7719,7 @@ export type SetMgmtMutationError = Error | UnauthorisedResponse;
 export type SetMgmtMutationVariables = { data: SetMgmtBody };
 
 /**
- * @summary A new management VLAN and address, on trial until confirmed from it
+ * @summary A new management VLAN, address and gateway, on trial until confirmed from it
  */
 export const useSetMgmt = <TError = Error | UnauthorisedResponse, TContext = unknown>(
   options?: {

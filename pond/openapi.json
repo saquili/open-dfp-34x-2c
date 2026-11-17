@@ -4893,7 +4893,7 @@
         "tags": [
           "values"
         ],
-        "summary": "A new management VLAN and address, on trial until confirmed from it",
+        "summary": "A new management VLAN, address and gateway, on trial until confirmed from it",
         "parameters": [
           {
             "$ref": "#/components/parameters/XPond"
@@ -4901,7 +4901,7 @@
         ],
         "requestBody": {
           "required": true,
-          "description": "KEY=VALUE lines: VLAN and ADDRESS, or COMMIT=1, or CANCEL=1",
+          "description": "KEY=VALUE lines: VLAN (1 to 4094, or untagged), ADDRESS and GATEWAY (empty for none), or COMMIT=1, or CANCEL=1",
           "content": {
             "text/plain": {
               "schema": {
@@ -4911,6 +4911,9 @@
                     "type": "string"
                   },
                   "ADDRESS": {
+                    "type": "string"
+                  },
+                  "GATEWAY": {
                     "type": "string"
                   },
                   "COMMIT": {
@@ -8763,20 +8766,28 @@
         ]
       },
       "Mgmt": {
-        "description": "The management VLAN and address (pond's value \"mgmt\"), and a new pair added beside them that waits to be confirmed from a panel opened at it.",
+        "description": "The management VLAN, address and gateway (pond's value \"mgmt\"), and a new set added beside them that waits to be confirmed from a panel opened at it.",
         "type": "object",
         "properties": {
           "vlan": {
             "type": [
               "number",
               "null"
-            ]
+            ],
+            "description": "The management VLAN, 1 to 4094, or null: untagged, on the host link itself, as a new stick starts."
           },
           "address": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "gateway": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The router on the management network through which the stick answers from beyond it and reaches the servers it uses; null for none."
           },
           "data_address": {
             "type": [
@@ -8792,10 +8803,19 @@
             ],
             "properties": {
               "vlan": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "address": {
                 "type": "string"
+              },
+              "gateway": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "until_s": {
                 "type": "number"
@@ -8804,6 +8824,7 @@
             "required": [
               "vlan",
               "address",
+              "gateway",
               "until_s"
             ]
           }
@@ -8811,6 +8832,7 @@
         "required": [
           "vlan",
           "address",
+          "gateway",
           "data_address",
           "pending"
         ]

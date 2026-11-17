@@ -483,7 +483,23 @@ let hostname = LIVE.hostname ?? "dfp-34x-2c3";
 let product = LIVE.product ?? DEFAULT_PRODUCT;
 const upNow = () => LIVE.uptime.up_s + (Date.now() - started) / 1000;
 let lane: SfpLane = { choice: "auto", active: "2500basex", trial: null };
-let mgmt: Mgmt = { vlan: 4094, address: "192.0.2.250/30", data_address: null, pending: null };
+/*
+ * The management settings: a new stick's untagged default (issues 1 and 2 of
+ * the repository), a managed one's VLAN behind a gateway, and today's
+ * software's VLAN without one.
+ */
+let mgmt: Mgmt =
+  SCENARIO === "sessions" || SCENARIO === "demo" || SCENARIO === "production"
+    ? {
+        vlan: 4094,
+        address: "192.0.2.250/30",
+        gateway: "192.0.2.249",
+        data_address: null,
+        pending: null,
+      }
+    : SCENARIO === "stick"
+      ? { vlan: 4094, address: "192.0.2.250/30", gateway: null, data_address: null, pending: null }
+      : { vlan: null, address: "192.168.1.1/24", gateway: null, data_address: null, pending: null };
 const identity: Identity = {
   serial: "XXXXXXXXXXXX",
   ploam_set: true,
@@ -1130,10 +1146,21 @@ const stick = [
     if (b.VLAN && b.ADDRESS)
       mgmt = {
         ...mgmt,
-        pending: { vlan: Number(b.VLAN), address: b.ADDRESS, until_s: upNow() + 600 },
+        pending: {
+          vlan: b.VLAN === "untagged" ? null : Number(b.VLAN),
+          address: b.ADDRESS,
+          gateway: b.GATEWAY ? b.GATEWAY : null,
+          until_s: upNow() + 600,
+        },
       };
     else if (b.COMMIT && mgmt.pending)
-      mgmt = { ...mgmt, vlan: mgmt.pending.vlan, address: mgmt.pending.address, pending: null };
+      mgmt = {
+        ...mgmt,
+        vlan: mgmt.pending.vlan,
+        address: mgmt.pending.address,
+        gateway: mgmt.pending.gateway,
+        pending: null,
+      };
     else if (b.CANCEL) mgmt = { ...mgmt, pending: null };
     return HttpResponse.json({ id: "mgmt", ok: true });
   }),

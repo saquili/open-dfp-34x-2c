@@ -9,6 +9,7 @@
 export type SetMgmtBody = {
   VLAN?: string;
   ADDRESS?: string;
+  GATEWAY?: string;
   COMMIT?: string;
   CANCEL?: string;
 };
