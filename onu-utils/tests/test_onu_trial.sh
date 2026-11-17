@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # Tests of scripts/onu-trial, with stand-ins for onu-update, pon, nc, pidof,
-# reboot, logger, logread and ip, each told by a file what to answer.
+# reboot, logger and ip, each told by a file what to answer.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -37,8 +37,8 @@ setup() {
 	# The wait for procd's restart is no wait here; the looks' are real.
 	printf '#!/bin/sh\n[ "$1" = 30 ] && exit 0\nexec %s "$@"\n' "$(command -v sleep)" >"$T/bin/sleep"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
-	# The system log is $T/syslog; the stick's one address is 192.0.2.1.
-	printf '#!/bin/sh\ncat "%s/syslog" 2>/dev/null\nexit 0\n' "$T" >"$T/bin/logread"
+	# The system log is syslogd's /run/messages; the stick's one address is
+	# 192.0.2.1.
 	printf '#!/bin/sh\nprintf "1: lo\\n    inet 127.0.0.1/8 scope host lo\\n2: mgmt\\n    inet 192.0.2.1/30 scope global mgmt\\n"\n' >"$T/bin/ip"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/sync"
 	chmod +x "$T/bin"/*
@@ -171,14 +171,15 @@ teardown
 echo "an ssh login from another address lets it be committed, from the stick's own not"
 setup
 nobody
-printf "Nov 17 12:00:00 dropbear[300]: Pubkey auth succeeded for 'root' with ssh-ed25519 key SHA256:x from 198.51.100.7:40122\n" >"$T/syslog"
+printf "Nov 17 12:00:00 dropbear[300]: Pubkey auth succeeded for 'root' with ssh-ed25519 key SHA256:x from 198.51.100.7:40122\n" >"$ONU_ROOT/run/messages.0"
 trial
 check '[ "$result" = committed ] && ! logged reboot'
 teardown
 setup
 nobody
-printf "Nov 17 12:00:00 dropbear[300]: Password auth succeeded for 'root' from 192.0.2.1:40122\n" >"$T/syslog"
-printf "Nov 17 12:00:01 dropbear[301]: Password auth succeeded for 'root' from 127.0.0.1:40123\n" >>"$T/syslog"
+rm -f "$ONU_ROOT/run/messages.0"
+printf "Nov 17 12:00:00 dropbear[300]: Password auth succeeded for 'root' from 192.0.2.1:40122\n" >"$ONU_ROOT/run/messages"
+printf "Nov 17 12:00:01 dropbear[301]: Password auth succeeded for 'root' from 127.0.0.1:40123\n" >>"$ONU_ROOT/run/messages"
 trial
 check '[ "$result" = failed ] && logged reboot'
 teardown

@@ -124,10 +124,10 @@ own_addresses() {
 
 # Whether a person signed in since the start, from an address other than the
 # stick's own: to the panel, which the status daemon marks, or over ssh,
-# which dropbear says in the system log.
+# which dropbear says in the system log, the files syslogd keeps in /run.
 person_came() {
 	[ -s "$RUN/pond/signed-in" ] && return 0
-	logread 2>/dev/null |
+	cat "$RUN/messages.0" "$RUN/messages" 2>/dev/null |
 		sed -n "s/.*auth succeeded for '[^']*'.* from \([0-9.]*\):[0-9]*.*/\1/p" |
 		grep -v -x -F "$(own_addresses)" | grep -q .
 }
