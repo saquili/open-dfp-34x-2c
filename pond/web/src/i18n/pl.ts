@@ -572,7 +572,7 @@ export const pl: Dictionary = {
   dos: {
     title: "Ochrona przed atakami",
     edit: "Zmień ochronę",
-    line: "Ramki, które przełącznik odrzuca, zanim dotrą do wkładki lub przejdą przez nią",
+    line: "Ramki, które przełącznik odrzuca, gdy przekazuje je między internetem a hostem",
     off: "wyłączona",
     summary: "włączone: {n} z {all} sprawdzeń",
     side: "Oceniane",
@@ -590,7 +590,7 @@ export const pl: Dictionary = {
       "Każde sprawdzenie odrzuca pakiety jednego błędnego kształtu. Zwykły ruch rzadko je ma; uwaga mówi, gdzie może.",
     floodsTitle: "Zalewy",
     floodsHint:
-      "Sprawdzenie zalewu liczy pakiety swojego rodzaju w oknie czasu, które przełącznik ma własne, i odrzuca te ponad limitem. Długość okna nie została zmierzona, więc limit to liczba przełącznika, a nie pakiety na sekundę. Zacznij od 255 i obniżaj, patrząc na ruch.",
+      "Sprawdzenie zalewu liczy pakiety swojego rodzaju w oknie około jednej milisekundy i odrzuca te ponad limitem: limit 1 przepuszcza około 700 pakietów na sekundę, 5 około 4500, a 255 prawie wszystkie. Zacznij od 10 i obniżaj, patrząc na ruch.",
     limit: "Limit (1 do 255)",
     limitBad: "Limit to liczba od 1 do 255.",
     check: {
@@ -627,7 +627,7 @@ export const pl: Dictionary = {
       syn_flood: "Nowe połączenia TCP zaczynane szybciej niż limit.",
       fin_flood: "Połączenia TCP kończone szybciej niż limit.",
       icmp_flood:
-        "Pingi i odpowiedzi na nie szybciej niż limit. Nie sprawdzone jeszcze z rozpoznawaniem sąsiadów w IPv6.",
+        "Pingi i odpowiedzi na nie szybciej niż limit. Liczy też ICMPv6, w tym rozpoznawanie sąsiadów w IPv6, więc trzymaj limit powyżej tych kilku pakietów na milisekundę, które wysyła sieć.",
     },
   },
   fw: {

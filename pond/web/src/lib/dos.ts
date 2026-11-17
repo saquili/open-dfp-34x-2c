@@ -51,8 +51,12 @@ export const DOS_OFF: DosChecks = {
   side: "internet",
 };
 
-/** The limit a flood check starts from when it is turned on: the highest, which cuts the least. */
-export const FLOOD_START = "255";
+/**
+ * The limit a flood check starts from when it is turned on: 10 of the switch's
+ * window of about a millisecond, some 9,000 packets a second (a limit of 5 let
+ * about 4,500 through, measured).
+ */
+export const FLOOD_START = "10";
 
 /** Whether @v is a limit the switch takes: a number from 1 to 255, with no leading zero. */
 export const isLimit = (v: string) => /^([1-9]\d?|1\d\d|2[0-4]\d|25[0-5])$/.test(v);

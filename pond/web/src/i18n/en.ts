@@ -580,7 +580,7 @@ export const en = {
   dos: {
     title: "Protection from attacks",
     edit: "Change the protection",
-    line: "Frames the switch drops before they reach the stick or cross it",
+    line: "Frames the switch drops as it passes them between the internet and the host",
     off: "off",
     summary: "{n} of {all} checks on",
     side: "Judged",
@@ -598,7 +598,7 @@ export const en = {
       "Each check drops packets of one wrong shape. Normal traffic rarely has them; a note says where it can.",
     floodsTitle: "Floods",
     floodsHint:
-      "A flood check counts the packets of its kind in a time window of the switch's own, and drops those beyond the limit. How long the window is has not been measured, so the limit is a number of the switch's, not packets a second. Start at 255 and lower it while you watch the traffic.",
+      "A flood check counts the packets of its kind in a window of about one millisecond and drops those beyond the limit: a limit of 1 lets about 700 a second through, 5 about 4,500, and 255 nearly all. Start at 10 and lower it while you watch the traffic.",
     limit: "Limit (1 to 255)",
     limitBad: "The limit is a number from 1 to 255.",
     check: {
@@ -635,7 +635,7 @@ export const en = {
       syn_flood: "New TCP connections started faster than the limit.",
       fin_flood: "TCP connections ended faster than the limit.",
       icmp_flood:
-        "Pings and their answers faster than the limit. Not tried with IPv6's neighbour discovery yet.",
+        "Pings and their answers faster than the limit. It counts ICMPv6 as well, IPv6's neighbour discovery among it, so keep the limit above the few such packets a millisecond that a network sends.",
     },
   },
   fw: {
