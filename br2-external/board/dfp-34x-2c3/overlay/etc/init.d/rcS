@@ -34,17 +34,20 @@ export PATH
 # onu-mgmt has written it, below.
 onu-trial >/run/onu-trial.log 2>&1 &
 
-# The management address is on a VLAN of its own, 4094, of the host link's
-# bridge, which the switch keeps from the PON both ways (ADR 0023): the
-# address the shipped firmware gave the host link (ponid lan_address), so
-# that its owner finds the panel at the address where they found the shipped
-# firmware's page, or else that firmware's own default.
-# On a new stick (MGMT_UNTAGGED=1, which the first start stores) the host
-# link's untagged frames go to that VLAN too, so that the panel answers
-# without a VLAN set on the router; on one updated from an earlier build they
-# go where the OLT's services take them, as before. A bench with other
-# addresses puts them in /etc/board.conf (docs/handbook/building.rst),
-# DATA_ADDRESS for one on the host link itself, on the bridge.
+# The management address is on a VLAN of the host link of its own, 4094,
+# which the switch keeps from the PON both ways and which works whether the
+# link is bridged or not: the one the shipped firmware gave the host link
+# (ponid lan_address), so that its owner finds the panel at the address where
+# they found the shipped firmware's page, or else that firmware's own
+# default. The host link itself has no address of the stick's, as an
+# operator's ONT has none on the subscriber's data path: the OLT's services
+# put it in a bridge, where an address of the port would take no traffic. On
+# a new stick (MGMT_UNTAGGED=1, which the first start stores) the host link's
+# untagged frames go to management too, which the switch then keeps from the
+# PON, so that the panel answers without a VLAN set on the router (ADR 0023);
+# on one updated from an earlier build they go where the OLT's services take
+# them, as before. A bench with other addresses puts them in /etc/board.conf
+# (docs/handbook/building.rst), DATA_ADDRESS for one on the host link itself.
 DATA_ADDRESS=
 MGMT_VLAN=4094
 MGMT_ADDRESS=$(ponid lan_address 2>/dev/null) || MGMT_ADDRESS=192.168.1.1/24
@@ -213,8 +216,7 @@ onu-nl link set lo up
 onu-nl link set cpu up || warn "the switch's conduit does not come up"
 onu-nl link set sfp up || warn "no interface sfp"
 
-# The management VLAN and its address, and the address on the host link
-# itself, on its bridge. netifd
+# The management VLAN and its address, and the address on sfp itself. netifd
 # brings them up, from the part "mgmt" of its configuration in /run/config,
 # which onu-mgmt writes (onu-net) now and again when the pair changes. A
 # stored pair that is not a VLAN and an address gives way to the image's.
@@ -239,8 +241,8 @@ onu-svc start netifd -- /usr/sbin/netifd -c /run/config -r /run/resolv.conf.auto
 }
 onu-net wait mgmt "$MGMT_ADDRESS" 10 ||
 	warn "netifd did not bring $MGMT_ADDRESS up in VLAN $MGMT_VLAN"
-[ -z "$DATA_ADDRESS" ] || onu-net wait omcibr0 "$DATA_ADDRESS" 10 ||
-	warn "netifd did not bring $DATA_ADDRESS up on the host link"
+[ -z "$DATA_ADDRESS" ] || onu-net wait sfp "$DATA_ADDRESS" 10 ||
+	warn "netifd did not bring $DATA_ADDRESS up on sfp"
 
 # The system log goes to a server of the host side as well when the settings
 # name one (LOG_SERVER), now that the management address is there to send
@@ -341,7 +343,7 @@ onu-update digest >/dev/null 2>&1 &
 {
 	echo
 	echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
-	echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN${MGMT_UNTAGGED:+, and untagged})${data:+ and $DATA_ADDRESS (the host link)}"
+	echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN${MGMT_UNTAGGED:+, and untagged})${data:+ and $DATA_ADDRESS (sfp)}"
 	[ -r /run/pond/tls.key ] && pond -k /run/pond/tls.key -c /run/pond/tls.own -F "$mgmt" |
 		sed 's/^\([^ ]*\) SHA-256 \([^ ]*\) until \([^T]*\).*$/open-dfp-34x-2c: the panel on https:\/\/\1\/, certificate SHA-256 \2, valid until \3/'
 	echo "open-dfp-34x-2c: ready"
