@@ -119,7 +119,7 @@ static void done(void *ctx, int code, const char *output)
 	if (!strcmp(g_op.method, "mgmt_add")) {
 		if (code) {
 			status = bad ? 400 : 409;
-			why = bad ? "not a VLAN and an address with its prefix" :
+			why = bad ? "not a VLAN and an address with its prefix, or a gateway on its network" :
 				    "the new pair was not added: a change waits, or the VLAN is in use";
 		} else if (strcmp(g_op.address, g_op.current)) {
 			tls_listen(g_op.mgr, g_op.address, g_op.fn);
@@ -160,9 +160,9 @@ static void begin(struct mg_connection *c, const char *method,
 
 void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_handler_t fn)
 {
-	static const char *const names[] = { "vlan", "address" };
-	char vlan[8], address[24], flag[4], text[512];
-	const char *const values[] = { vlan, address };
+	static const char *const names[] = { "vlan", "address", "gateway" };
+	char vlan[8], address[24], gateway[16], flag[4], text[512];
+	const char *values[] = { vlan, address, NULL };
 	struct mg_addr a;
 
 	if (g_op.method) {
@@ -182,7 +182,10 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 	if (line_value(hm->body, "VLAN", vlan, sizeof(vlan)) &&
 	    line_value(hm->body, "ADDRESS", address, sizeof(address))) {
 		snprintf(g_op.address, sizeof(g_op.address), "%s", address);
-		begin(c, "mgmt_add", names, values, 2);
+		/* A gateway of the pair's network, or none (GitHub issue 1). */
+		if (line_value(hm->body, "GATEWAY", gateway, sizeof(gateway)) && *gateway)
+			values[2] = gateway;
+		begin(c, "mgmt_add", names, values, 3);
 	} else if (line_value(hm->body, "COMMIT", flag, sizeof(flag))) {
 		if (!*g_op.pending) {
 			reply(c, 409, "mgmt", "no change waits");
@@ -198,7 +201,7 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 	} else if (line_value(hm->body, "CANCEL", flag, sizeof(flag))) {
 		begin(c, "mgmt_cancel", NULL, NULL, 0);
 	} else {
-		reply(c, 400, "mgmt", "VLAN and ADDRESS, COMMIT=1 or CANCEL=1");
+		reply(c, 400, "mgmt", "VLAN and ADDRESS (and GATEWAY), COMMIT=1 or CANCEL=1");
 	}
 }
 

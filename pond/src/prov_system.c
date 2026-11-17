@@ -360,6 +360,9 @@ int prov_mgmt(struct prov_buf *out)
 	pv_key(out, "address");
 	pv_line_str(out, text, "ADDRESS");
 	pv_comma(out);
+	pv_key(out, "gateway");
+	pv_line_str(out, text, "GATEWAY");
+	pv_comma(out);
 	pv_key(out, "data_address");
 	pv_line_str(out, text, "DATA_ADDRESS");
 	pv_comma(out);
@@ -371,6 +374,9 @@ int prov_mgmt(struct prov_buf *out)
 		pv_comma(out);
 		pv_key(out, "address");
 		pv_line_str(out, text, "PENDING_ADDRESS");
+		pv_comma(out);
+		pv_key(out, "gateway");
+		pv_line_str(out, text, "PENDING_GATEWAY");
 		pv_comma(out);
 		pv_key(out, "until_s");
 		pv_line_num(out, text, "PENDING_UNTIL");

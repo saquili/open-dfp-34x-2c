@@ -27,8 +27,8 @@ const struct prov pond_provs[] = {
 	  "The SFP lane's setting, the one it runs in, and a change on trial",
 	  prov_sfp_lane, prov_sfp_lane_write, PROV_VOLATILE },
 	{ "mgmt", "System",
-	  "The management VLAN and address, and a new pair that waits to be "
-	  "confirmed from it", prov_mgmt, NULL, PROV_VOLATILE },
+	  "The management VLAN, address and gateway, and a new pair that waits "
+	  "to be confirmed from it", prov_mgmt, NULL, PROV_VOLATILE },
 	{ "tls", "System",
 	  "The panel's HTTPS: an own certificate, and the certificate of each "
 	  "address it answers on, by its SHA-256", prov_tls, NULL, 0 },

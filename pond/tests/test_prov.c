@@ -3269,9 +3269,9 @@ static const char lane_stub[] =
 
 static const char mgmt_stub[] =
 	"#!/bin/sh\n"
-	"printf 'VLAN=4094\\nADDRESS=198.51.100.2/30\\nIFACE=mgmt\\nDATA_ADDRESS=\\n'\n"
+	"printf 'VLAN=4094\\nADDRESS=198.51.100.2/30\\nGATEWAY=198.51.100.1\\nIFACE=mgmt\\nDATA_ADDRESS=\\n'\n"
 	"[ -e \"$POND_ROOT/mgmt.pending\" ] &&"
-	" printf 'PENDING_VLAN=100\\nPENDING_ADDRESS=192.0.2.6/30\\nPENDING_UNTIL=1100\\n'\n"
+	" printf 'PENDING_VLAN=100\\nPENDING_ADDRESS=192.0.2.6/30\\nPENDING_GATEWAY=\\nPENDING_UNTIL=1100\\n'\n"
 	"exit 0\n";
 
 static const char system_store_stub[] =
@@ -3331,12 +3331,12 @@ static void test_system(void)
 	setenv("POND_ONU_MGMT", prov_path("/mgmt-stub", stub, sizeof(stub)), 1);
 	s = render(prov_mgmt, buf, sizeof(buf), &e);
 	check(!e && !strcmp(s, "{\"vlan\":4094,\"address\":\"198.51.100.2/30\","
-			       "\"data_address\":null,\"pending\":null}"),
-	      "the management pair in use");
+			       "\"gateway\":\"198.51.100.1\",\"data_address\":null,\"pending\":null}"),
+	      "the management pair in use, with its gateway");
 	put("/mgmt.pending", "", 0644);
 	s = render(prov_mgmt, buf, sizeof(buf), &e);
 	check(!e && strstr(s, "\"pending\":{\"vlan\":100,\"address\":\"192.0.2.6/30\","
-			      "\"until_s\":1100}") != NULL,
+			      "\"gateway\":null,\"until_s\":1100}") != NULL,
 	      "a new pair that waits, and when it goes unless confirmed");
 	unsetenv("POND_ONU_MGMT");
 
