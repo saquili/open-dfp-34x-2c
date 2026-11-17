@@ -2068,8 +2068,8 @@ lans_fw() {
 # it. Its file, $RUN/onu-guard.conf, names the management interfaces by the
 # beginning of their names, mgmt and the mgmtVID of a pair on trial, so that
 # a pair added beside the old one is reached at once; the address on the
-# host link itself, a bench's (DATA_ADDRESS of /run/onu-mgmt), on the host
-# link's bridge (ADR 0023), which is a management address too; the sessions'
+# host link itself, a bench's (DATA_ADDRESS of /run/onu-mgmt), which is a
+# management address too; the sessions'
 # interfaces, pppN, whose dhcp6d asks for a prefix; the interface of each
 # IPoE connection that is up, with its DHCP client when its address comes
 # from DHCP; each link a session hands its address down by, with udhcpd
@@ -2084,7 +2084,7 @@ guard_fw() {
 	{
 		echo "mgmt mgmt*"
 		gf_data=$(sed -n 's/^DATA_ADDRESS=//p' "$RUN/onu-mgmt" 2>/dev/null | head -n 1)
-		[ -z "$gf_data" ] || echo "data omcibr0 ${gf_data%/*}"
+		[ -z "$gf_data" ] || echo "data sfp ${gf_data%/*}"
 		[ -z "$(sessions)" ] || echo "session ppp*"
 		for gf_d in "$IPOE_DIR"/*; do
 			[ -r "$gf_d/dev" ] || continue

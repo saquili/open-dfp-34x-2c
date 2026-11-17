@@ -623,15 +623,14 @@ by its whole path where procd starts it.
    manages the stick from is never taken down and up again when the other
    comes or goes.
 
-   The host link is a port of the bridge ``omcibr0``, which ``onu-mgmt start``
-   makes, filtering VLANs, and which omcid puts the GEM ports into (ADR 0023).
-   A management VLAN is a VLAN of the bridge, of which ``sfp`` and the bridge
-   itself are members and never a GEM port. The host link's untagged frames
-   are given VLAN 1, of which the bridge itself is a member, carrying
-   ``DATA_ADDRESS``, the interface ``data`` of the same part; with
-   ``untagged`` (``MGMT_UNTAGGED=1``, the first start after an install from
-   the shipped firmware's page) they are given the management VLAN instead,
-   and management answers untagged::
+   The address on ``sfp`` itself, ``DATA_ADDRESS``, is the interface ``data``
+   of the same part. With ``untagged`` (``MGMT_UNTAGGED=1``, the first start
+   after an install from the shipped firmware's page) the host link's frames
+   without a tag go to management too (ADR 0023): the switch traps them, and
+   those with a priority tag, to the CPU alone, so none reaches the PON, and
+   in software they are given the management VLAN on the way in, whose frames
+   leave ``sfp`` without their tag; management then answers untagged alone,
+   and ``DATA_ADDRESS`` gets none of them::
 
       onu-mgmt start VLAN ADDRESS [DATA_ADDRESS] [untagged]   # at boot
       onu-mgmt add VLAN ADDRESS
