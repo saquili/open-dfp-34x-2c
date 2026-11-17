@@ -393,6 +393,40 @@ static void free_secret(char *s)
 	}
 }
 
+/*
+ * The first sign-in since the start from an address other than the one the
+ * daemon was reached at, in /run/pond/signed-in, as FROM=<address>: proof
+ * that a person reached the panel over the network. The trial of a start
+ * after the shipped firmware waits for it (onu-trial), as its own look at
+ * the daemon, from the stick to itself, proves nothing of the kind.
+ */
+static void mark_person(const struct mg_connection *c)
+{
+	static bool marked;
+	char from[48], path[256], tmp[272];
+	bool ok;
+	int fd;
+
+	if (marked)
+		return;
+	if (c->rem.is_ip6 == c->loc.is_ip6 &&
+	    !memcmp(c->rem.addr.ip, c->loc.addr.ip, c->rem.is_ip6 ? 16 : 4))
+		return;
+	mg_snprintf(from, sizeof(from), "%M", mg_print_ip, &c->rem);
+	prov_path("/run/pond/signed-in", path, sizeof(path));
+	snprintf(tmp, sizeof(tmp), "%s.new", path);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return;
+	ok = dprintf(fd, "FROM=%s\n", from) > 0;
+	if (close(fd))
+		ok = false;
+	if (ok && !rename(tmp, path))
+		marked = true;
+	else
+		unlink(tmp);
+}
+
 /* The answer to a sign-in that ended with @rc, opening session @id. */
 static void login_reply(struct mg_connection *c, int rc, const char *id,
 			int retry, const char *secure)
@@ -419,6 +453,7 @@ static void login_reply(struct mg_connection *c, int rc, const char *id,
 	snprintf(cookie, sizeof(cookie),
 		 "Set-Cookie: pond_sid=%s; Path=/; HttpOnly; SameSite=Strict%s\r\n",
 		 id, secure);
+	mark_person(c);
 	reply_session(c, cookie);
 }
 

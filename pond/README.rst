@@ -102,6 +102,10 @@ comes from the proxy's address.
 A change of password ends every other session. pond keeps the sessions in
 memory alone, each with the address its sign-in came from, which the panel
 lists (``/api/auth/sessions``), and a restart of the daemon ends them all.
+The first sign-in since the start from an address other than the one pond
+was reached at is marked in ``/run/pond/signed-in`` (``FROM=`` and that
+address): ``onu-trial`` keeps a system started on trial only once a person
+has signed in so, or over ssh (``onu-utils/README.rst``).
 
 What a client may hold of the daemon is bounded, so that one that keeps
 connections open, sends its request slowly or sends a long body cannot hold

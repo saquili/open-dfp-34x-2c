@@ -116,6 +116,18 @@ def main():
         cookie = headers.get("Set-Cookie", "")
         check(status == 200 and "pond_sid=" in cookie and "; Secure" in cookie,
               "a sign-in sets a Secure cookie")
+        mark = os.environ["POND_ROOT"] + "/run/pond/signed-in"
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        check(not os.path.exists(mark),
+              "a sign-in from the address the daemon was reached at marks no person")
+        other = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=10,
+                                            source_address=("127.0.0.9", 0))
+        status, _, _ = request(other, "POST", "/api/auth/login",
+                               '{"user":"root","secret":"admin"}',
+                               {"Content-Type": "application/json", "X-Pond": "1"})
+        other.close()
+        check(status == 200 and os.path.exists(mark) and read(mark) == "FROM=127.0.0.9\n",
+              "one from another address marks it in /run/pond/signed-in (onu-trial)")
         status, _, body = request(conn, "GET", "/api/get/tls",
                                   headers={"Authorization": f"Bearer {TOKEN}"})
         check(status == 200 and words[2].encode() in body and b'"port":18443' in body
