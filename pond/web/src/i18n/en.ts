@@ -622,8 +622,8 @@ export const en = {
       land: "The source address is the same as the destination address.",
       blat: "The source port is the same as the destination port. Two servers of some protocols, such as NTP, use one port at both ends, and would be cut.",
       syn_fin: "The two flags that no real connection sets together.",
-      xmas: "A TCP packet of the kind a port scan sends.",
-      null_scan: "A TCP packet with no flag set.",
+      xmas: "A TCP packet with FIN, URG and PSH set and a sequence number of 0, the kind a port scan sends.",
+      null_scan: "A TCP packet with no flag set and a sequence number of 0.",
       syn_low_port:
         "A connection started from a privileged port, which clients rarely do. A few programs do.",
       tcp_short: "A TCP packet whose header is shorter than TCP allows.",

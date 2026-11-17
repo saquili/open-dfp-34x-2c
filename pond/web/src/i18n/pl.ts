@@ -614,8 +614,8 @@ export const pl: Dictionary = {
       land: "Adres źródłowy jest taki sam jak docelowy.",
       blat: "Port źródłowy jest taki sam jak docelowy. Serwery niektórych protokołów, np. NTP, używają jednego portu po obu stronach i zostałyby odcięte.",
       syn_fin: "Dwie flagi, których żadne prawdziwe połączenie nie ustawia naraz.",
-      xmas: "Pakiet TCP takiego rodzaju, jaki wysyła skaner portów.",
-      null_scan: "Pakiet TCP bez żadnej flagi.",
+      xmas: "Pakiet TCP z flagami FIN, URG i PSH i numerem sekwencyjnym 0, taki, jaki wysyła skaner portów.",
+      null_scan: "Pakiet TCP bez żadnej flagi, z numerem sekwencyjnym 0.",
       syn_low_port:
         "Połączenie rozpoczęte z portu uprzywilejowanego, czego klienci prawie nie robią. Nieliczne programy tak robią.",
       tcp_short: "Pakiet TCP z nagłówkiem krótszym, niż TCP dopuszcza.",
