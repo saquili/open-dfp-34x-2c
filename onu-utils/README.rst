@@ -441,9 +441,11 @@ by its whole path where procd starts it.
       onu-nl filter del DEV pref N
       onu-nl filter prefs DEV
       onu-nl param NAME [VALUE]
-      onu-nl link set DEV [up|down] [mtu N] [address MAC]
+      onu-nl link set DEV [up|down] [mtu N] [address MAC] [master BRIDGE]
       onu-nl link add vlan DEV NAME VID
+      onu-nl link add bridge NAME
       onu-nl link del DEV
+      onu-nl vlan add|del DEV VID [pvid] [untagged] [self]
       onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]
 
    A filter is on the ingress of DEV: without ``vlan`` it takes every frame
@@ -457,10 +459,16 @@ by its whole path where procd starts it.
    in decimal (or hexadecimal after ``0x``), ``true`` or ``false``, or a
    string (``Documentation/networking/devlink/rtl9602c.rst`` in the kernel
    lists them). ``link set`` takes DEV up or down and sets its MTU (68 to
-   65535) and its MAC address, whichever it is given, once each, in any order,
-   and leaves the rest as it is; ``link add vlan`` makes the interface NAME of
-   VLAN VID, 1 to 4094, on DEV, and is refused when NAME is taken; ``link
-   del`` removes DEV. ``addr-wait`` returns when DEV has the IPv4 address with that
+   65535), its MAC address and the bridge it is a port of, whichever it is
+   given, once each, in any order, and leaves the rest as it is; ``link add
+   vlan`` makes the interface NAME of VLAN VID, 1 to 4094, on DEV, and is
+   refused when NAME is taken; ``link add bridge`` makes the bridge NAME,
+   which filters VLANs from the start and gives a new port no VLAN of its
+   own (ADR 0023); ``link del`` removes DEV. ``vlan add`` makes DEV, a port
+   of a bridge, a member of VLAN VID, as ``bridge vlan add`` does: ``pvid``
+   gives the port's untagged frames that VLAN, ``untagged`` has the port send
+   the VLAN's frames untagged, and ``self`` names the bridge itself, whose
+   membership is the CPU's; ``vlan del`` takes the membership away. ``addr-wait`` returns when DEV has the IPv4 address with that
    prefix length, at once if it has it, else when the kernel announces it, and
    fails after SECONDS (10): it listens and does not look in a loop. When the
    kernel refuses, its own message follows the error.

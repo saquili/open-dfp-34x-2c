@@ -3,11 +3,15 @@
 
 /*
  * The links the stick's scripts set, as route netlink requests: an interface
- * up or down, its MTU and its MAC address, a VLAN interface on another, and
- * the removal of an interface. The requests are those ip makes for
+ * up or down, its MTU, its MAC address and its bridge, a VLAN interface on
+ * another, a bridge that filters VLANs, the VLANs of a bridge's port or of
+ * the bridge itself, and the removal of an interface. The requests are those
+ * ip and bridge make for
  *
- *   ip link set DEV [up|down] [mtu N] [address MAC]
+ *   ip link set DEV [up|down] [mtu N] [address MAC] [master BRIDGE]
  *   ip link add link DEV name NAME type vlan id VID
+ *   ip link add name NAME type bridge vlan_filtering 1 vlan_default_pvid 0
+ *   bridge vlan add|del dev DEV vid VID [pvid] [untagged] [self]
  *   ip link del DEV
  *
  * so that the kernel takes them as it takes ip's, with no iproute2 and no
@@ -32,6 +36,7 @@
  * @mtu: that MTU
  * @has_mac: its MAC address is set
  * @mac: that address
+ * @master: the bridge it becomes a port of, by interface index; 0 for none
  */
 struct link_set {
 	int ifindex;
@@ -41,6 +46,23 @@ struct link_set {
 	uint32_t mtu;
 	bool has_mac;
 	uint8_t mac[6];
+	int master;
+};
+
+/**
+ * struct bridge_vlan - A VLAN of a bridge's port, or of the bridge itself.
+ * @ifindex: the port, or the bridge with @self
+ * @vid: the VLAN, 1 to 4094
+ * @pvid: the VLAN the port gives the untagged frames it receives
+ * @untagged: the port sends the VLAN's frames untagged
+ * @self: @ifindex is the bridge, which is the member: the CPU's side of it
+ */
+struct bridge_vlan {
+	int ifindex;
+	uint16_t vid;
+	bool pvid;
+	bool untagged;
+	bool self;
 };
 
 /*
@@ -56,5 +78,16 @@ struct nlmsghdr *link_vlan_add_msg(char *buf, int link_ifindex, const char *name
 				   uint16_t vid, uint32_t seq);
 
 struct nlmsghdr *link_del_msg(char *buf, int ifindex, uint32_t seq);
+
+/*
+ * A bridge @name that filters VLANs from the start and gives a new port no
+ * VLAN of its own (a default PVID of 0); it is refused when the name is
+ * taken.
+ */
+struct nlmsghdr *link_bridge_add_msg(char *buf, const char *name, uint32_t seq);
+
+/* The VLAN @v added to its port or bridge, or with @add false removed. */
+struct nlmsghdr *bridge_vlan_msg(char *buf, const struct bridge_vlan *v, bool add,
+				 uint32_t seq);
 
 #endif

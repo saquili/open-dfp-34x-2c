@@ -201,9 +201,11 @@ static int help(void)
 		"       onu-nl filter del DEV pref N\n"
 		"       onu-nl filter prefs DEV\n"
 		"       onu-nl param NAME [VALUE]\n"
-		"       onu-nl link set DEV [up|down] [mtu N] [address MAC]\n"
+		"       onu-nl link set DEV [up|down] [mtu N] [address MAC] [master BRIDGE]\n"
 		"       onu-nl link add vlan DEV NAME VID\n"
+		"       onu-nl link add bridge NAME\n"
 		"       onu-nl link del DEV\n"
+		"       onu-nl vlan add|del DEV VID [pvid] [untagged] [self]\n"
 		"       onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]\n");
 	return 2;
 }
@@ -476,12 +478,18 @@ static bool name_arg(const char *s)
 	       !s[strspn(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")];
 }
 
-/* DEV [up|down] [mtu N] [address MAC], into @s: each once, one at least. */
+/* DEV [up|down] [mtu N] [address MAC] [master BRIDGE], into @s: each once, one at least. */
 static bool link_set_args(int argc, char **argv, struct link_set *s)
 {
 	unsigned long v;
 
 	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "master") && !s->master && i + 1 < argc) {
+			s->master = ifindex_of(argv[++i]);
+			if (!s->master)
+				return false;
+			continue;
+		}
 		if ((!strcmp(argv[i], "up") || !strcmp(argv[i], "down")) && !s->has_state) {
 			s->has_state = true;
 			s->up = !strcmp(argv[i], "up");
@@ -498,7 +506,7 @@ static bool link_set_args(int argc, char **argv, struct link_set *s)
 			return false;
 		}
 	}
-	return s->has_state || s->has_mtu || s->has_mac;
+	return s->has_state || s->has_mtu || s->has_mac || s->master;
 }
 
 static int link_cmd(int argc, char **argv)
@@ -517,6 +525,16 @@ static int link_cmd(int argc, char **argv)
 		if (!link_set_args(argc - 1, argv + 1, &s))
 			return help();
 		what = "link not set";
+	} else if (!strcmp(argv[0], "add") && argc == 3 && !strcmp(argv[1], "bridge")) {
+		if (!name_arg(argv[2]))
+			return help();
+		nl = open_bus(NETLINK_ROUTE);
+		if (!nl)
+			return 1;
+		nlh = link_bridge_add_msg(buf, argv[2], ++g_seq);
+		err = talk(nl, nlh, NULL, NULL, 0, "bridge not added");
+		mnl_socket_close(nl);
+		return err ? 1 : 0;
 	} else if (!strcmp(argv[0], "add")) {
 		if (argc != 5 || strcmp(argv[1], "vlan") || !name_arg(argv[3]) ||
 		    !decimal(argv[4], 1, 4094, &vid))
@@ -543,6 +561,43 @@ static int link_cmd(int argc, char **argv)
 		nlh = link_del_msg(buf, ifindex, ++g_seq);
 	}
 	err = talk(nl, nlh, NULL, NULL, 0, what);
+	mnl_socket_close(nl);
+	return err ? 1 : 0;
+}
+
+/* vlan add|del DEV VID [pvid] [untagged] [self]: each word once, in any order. */
+static int vlan_cmd(int argc, char **argv)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct bridge_vlan v = { 0 };
+	struct mnl_socket *nl;
+	unsigned long vid;
+	bool add;
+	int err;
+
+	if (argc < 3 || (strcmp(argv[0], "add") && strcmp(argv[0], "del")) ||
+	    !decimal(argv[2], 1, 4094, &vid))
+		return help();
+	add = !strcmp(argv[0], "add");
+	for (int i = 3; i < argc; i++) {
+		if (!strcmp(argv[i], "pvid") && !v.pvid && add)
+			v.pvid = true;
+		else if (!strcmp(argv[i], "untagged") && !v.untagged && add)
+			v.untagged = true;
+		else if (!strcmp(argv[i], "self") && !v.self)
+			v.self = true;
+		else
+			return help();
+	}
+	v.ifindex = ifindex_of(argv[1]);
+	if (!v.ifindex)
+		return 1;
+	v.vid = (uint16_t)vid;
+	nl = open_bus(NETLINK_ROUTE);
+	if (!nl)
+		return 1;
+	err = talk(nl, bridge_vlan_msg(buf, &v, add, ++g_seq), NULL, NULL, 0,
+		   add ? "VLAN not added" : "VLAN not removed");
 	mnl_socket_close(nl);
 	return err ? 1 : 0;
 }
@@ -685,5 +740,7 @@ int main(int argc, char **argv)
 		return param(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "link"))
 		return link_cmd(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "vlan"))
+		return vlan_cmd(argc - 2, argv + 2);
 	return help();
 }

@@ -11,6 +11,7 @@
 
 #include <libmnl/libmnl.h>
 #include <linux/if.h>
+#include <linux/if_bridge.h>
 #include <linux/if_link.h>
 #include <linux/rtnetlink.h>
 
@@ -151,12 +152,99 @@ static void test_del(void)
 	CHECK(count_top(nlh) == 0);
 }
 
+/* ip link set sfp master omcibr0 */
+static void test_master(void)
+{
+	struct link_set s = { .ifindex = 3, .master = 7 };
+	struct nlmsghdr *nlh = link_set_msg(buf, &s, 27);
+	const struct nlattr *a;
+
+	CHECK(nlh->nlmsg_type == RTM_NEWLINK);
+	CHECK(ifi_of(nlh)->ifi_index == 3 && ifi_of(nlh)->ifi_change == 0);
+	a = top(nlh, IFLA_MASTER);
+	CHECK(a && mnl_attr_validate(a, MNL_TYPE_U32) == 0 && mnl_attr_get_u32(a) == 7);
+	CHECK(count_top(nlh) == 1);
+}
+
+/* ip link add name omcibr0 type bridge vlan_filtering 1 vlan_default_pvid 0 */
+static void test_bridge_add(void)
+{
+	struct nlmsghdr *nlh = link_bridge_add_msg(buf, "omcibr0", 28);
+	const struct nlattr *info, *data, *a;
+
+	CHECK(nlh->nlmsg_type == RTM_NEWLINK);
+	CHECK(nlh->nlmsg_flags ==
+	      (NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL));
+	CHECK(ifi_of(nlh)->ifi_family == AF_UNSPEC && ifi_of(nlh)->ifi_index == 0);
+	a = top(nlh, IFLA_IFNAME);
+	CHECK(a && !strcmp(mnl_attr_get_str(a), "omcibr0"));
+	info = top(nlh, IFLA_LINKINFO);
+	a = in(info, IFLA_INFO_KIND);
+	CHECK(a && !strcmp(mnl_attr_get_str(a), "bridge"));
+	data = in(info, IFLA_INFO_DATA);
+	a = in(data, IFLA_BR_VLAN_FILTERING);
+	CHECK(a && mnl_attr_validate(a, MNL_TYPE_U8) == 0 && mnl_attr_get_u8(a) == 1);
+	a = in(data, IFLA_BR_VLAN_DEFAULT_PVID);
+	CHECK(a && mnl_attr_validate(a, MNL_TYPE_U16) == 0 && mnl_attr_get_u16(a) == 0);
+	CHECK(count_top(nlh) == 2);
+}
+
+/* The VLAN information of a bridge VLAN request, and its flags attribute. */
+static const struct bridge_vlan_info *vinfo(const struct nlmsghdr *nlh,
+					    const struct nlattr **flags)
+{
+	const struct nlattr *spec = top(nlh, IFLA_AF_SPEC), *a;
+
+	*flags = in(spec, IFLA_BRIDGE_FLAGS);
+	a = in(spec, IFLA_BRIDGE_VLAN_INFO);
+	if (!a || mnl_attr_get_payload_len(a) != sizeof(struct bridge_vlan_info))
+		return NULL;
+	return mnl_attr_get_payload(a);
+}
+
+/* bridge vlan add dev sfp vid 4094 pvid untagged; ... del; ... add dev omcibr0 vid 4094 self */
+static void test_bridge_vlan(void)
+{
+	struct bridge_vlan v = { .ifindex = 3, .vid = 4094, .pvid = true, .untagged = true };
+	const struct bridge_vlan_info *i;
+	const struct nlattr *flags;
+	struct nlmsghdr *nlh;
+
+	nlh = bridge_vlan_msg(buf, &v, true, 29);
+	CHECK(nlh->nlmsg_type == RTM_SETLINK);
+	CHECK(nlh->nlmsg_flags == (NLM_F_REQUEST | NLM_F_ACK));
+	CHECK(ifi_of(nlh)->ifi_family == AF_BRIDGE && ifi_of(nlh)->ifi_index == 3);
+	i = vinfo(nlh, &flags);
+	CHECK(i && i->vid == 4094 &&
+	      i->flags == (BRIDGE_VLAN_INFO_PVID | BRIDGE_VLAN_INFO_UNTAGGED));
+	CHECK(flags == NULL);
+	CHECK(count_top(nlh) == 1);
+
+	v.pvid = v.untagged = false;
+	nlh = bridge_vlan_msg(buf, &v, false, 30);
+	CHECK(nlh->nlmsg_type == RTM_DELLINK);
+	i = vinfo(nlh, &flags);
+	CHECK(i && i->vid == 4094 && i->flags == 0 && flags == NULL);
+
+	v.ifindex = 7;
+	v.self = true;
+	nlh = bridge_vlan_msg(buf, &v, true, 31);
+	CHECK(ifi_of(nlh)->ifi_index == 7);
+	i = vinfo(nlh, &flags);
+	CHECK(i && i->vid == 4094 && i->flags == 0);
+	CHECK(flags && mnl_attr_validate(flags, MNL_TYPE_U16) == 0 &&
+	      mnl_attr_get_u16(flags) == BRIDGE_FLAGS_SELF);
+}
+
 int main(void)
 {
 	test_up_and_down();
 	test_mtu_and_address();
 	test_vlan_add();
 	test_del();
+	test_master();
+	test_bridge_add();
+	test_bridge_vlan();
 	printf("test_linkmsg: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
