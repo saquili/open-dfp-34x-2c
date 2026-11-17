@@ -60,7 +60,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       let node: unknown = DICTIONARIES[lang];
       for (const part of key.split(".")) node = (node as Record<string, unknown>)[part];
       let text = typeof node === "string" ? node : key;
-      if (vars) for (const [k, v] of Object.entries(vars)) text = text.replace(`{${k}}`, String(v));
+      if (vars)
+        for (const [k, v] of Object.entries(vars)) text = text.replaceAll(`{${k}}`, String(v));
       return text;
     },
     [lang],
