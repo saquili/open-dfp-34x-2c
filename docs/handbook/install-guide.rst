@@ -216,8 +216,15 @@ What follows comes by itself:
    bank the one that starts for good (``updating.rst``, "From the shipped
    firmware's web page").
 3. The stick restarts, and starts this system on trial. In the test of the
-   first release this system reached O5 about 10 s after its kernel started,
-   and kept its bank by itself.
+   first release this system reached O5 about 10 s after its kernel started.
+
+**Sign in within five minutes.** This system keeps its bank only once
+someone has signed in to its panel (Step 5) or over ssh from the host's
+side, within 300 seconds of its start: that is how it knows it can be
+reached as it will be managed, which its own checks from inside cannot tell.
+If nobody signs in by then, it restarts into the shipped firmware by itself,
+which runs as before; the install can be made again. So have Step 4 ready
+while the page writes, and sign in as soon as the stick answers.
 
 The time the page takes to write has not been measured. Leave the stick in
 its cage until it has restarted.

@@ -175,7 +175,13 @@ one process across two looks five seconds apart (procd starts one that
 crashed again after 2 s), for the status daemon to answer on the host link,
 and for the PON to reach O5, operation, unless the receiver has no light or
 the OLT keeps the ONU disabled, in O7: then the PON says nothing about the new
-system. When all hold it runs ``onu-update commit``, which sets ``sw_commit``
+system. And it waits for a person: a sign-in to the panel (which the status
+daemon marks in ``/run/pond/signed-in``) or an ssh login, from an address
+other than the stick's own. Its own look at the status daemon comes from the
+stick itself and proves nothing of the kind; a sign-in proves that the stick
+is reached from the host's side, as it will be managed. After an update from
+the panel, sign in again once the stick answers.
+When all hold it runs ``onu-update commit``, which sets ``sw_commit``
 to the running bank, removes the trial's mark and switches the loader's
 multicast listener off (``mupgrade_en``). When they do not hold within 300
 seconds it restarts the stick, and forces the restart when procd has not
@@ -288,8 +294,9 @@ back against the digests that ``mkweb.py`` wrote into it, and then sets
 bank, as ``onu-update`` does. It exits 1 on purpose, and the page says the
 update failed: the shipped firmware then leaves ``sw_commit`` on its own
 bank, and the boot loader starts this system once. ``onu-trial`` commits it
-when it is up; a system that does not come up within its 300 seconds is
-restarted into the shipped firmware, and one that hangs in the kernel before
+when it is up and a person has signed in to its panel or over ssh from the
+host's side; a system that does not come up, or that nobody reaches, within
+its 300 seconds is restarted into the shipped firmware, and one that hangs in the kernel before
 the boot script starts needs a power cycle (``boot-contract.rst``, "A trial
 boot").
 

@@ -90,8 +90,11 @@ What it does
   the PTP master of the host link while it hears no better clock (`timed
   <timed/README.rst>`__).
 * **Updates safely.** An update goes into the other flash bank and starts on
-  trial; the stick keeps it once it has come up, and goes back to the old
-  one otherwise. Until the first update the other bank keeps the shipped
+  trial; the stick keeps it once it has come up and you have signed in to
+  its panel, or over ssh, from your computer, within five minutes of its
+  start, and goes back to the old one otherwise: a new system that nobody
+  reaches goes back by itself, to the shipped firmware after the install
+  from its page. Until the first update the other bank keeps the shipped
   firmware, and the panel goes back to it with one button. A change of the
   settings is tried the same way and undone after 90 seconds unless the
   panel confirms it.

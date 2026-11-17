@@ -175,6 +175,12 @@ Shared by two components
      - ``pond`` (``-t``), at each request that has no session
      - The token of scripts, 64 hexadecimal characters; for the account
        ``pond`` alone (``pond/README.rst``, "The token of scripts").
+   * - ``/run/pond/signed-in``
+     - ``pond``, at the first sign-in since the start from an address other
+       than the one it was reached at
+     - ``onu-trial``, in the trial of a start
+     - ``FROM=`` and the address of that sign-in; mode 0600, account
+       ``pond``. Its presence is the proof that a person reached the panel.
    * - ``/run/dhcp6d/pdN``
      - ``dhcp6d`` (``-b``)
      - ``dhcp6d``, started again; ``onu-config pd N``
