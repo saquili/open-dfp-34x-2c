@@ -55,6 +55,8 @@ static void test_the_table(void)
 		while (m->params[params].name)
 			params++;
 		CHECK(fixed <= ACT_FIXED_MAX && params <= ACT_PARAMS_MAX);
+		/* The list ends within its room: onu-act takes no value beyond. */
+		CHECK(m->params[ACT_PARAMS_MAX].name == NULL);
 		for (size_t k = 0; k < params; k++) {
 			CHECK(m->params[k].max > 0 && m->params[k].max <= ACT_VALUE_MAX);
 			/* An optional value is the last one. */

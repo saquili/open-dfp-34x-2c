@@ -18,7 +18,7 @@
 #include <stddef.h>
 
 /* The most values of a method, fixed arguments, and the longest value. */
-#define ACT_PARAMS_MAX 2
+#define ACT_PARAMS_MAX 3
 #define ACT_FIXED_MAX 2
 #define ACT_VALUE_MAX 64
 #define ACT_ARGV_MAX (2 + ACT_FIXED_MAX + ACT_PARAMS_MAX)
