@@ -313,7 +313,15 @@ class ServersOnTheHostSide(unittest.TestCase):
 
     def test_the_host_link_may_have_no_address(self):
         text = read(RCS)
-        self.assertIn('[ -z "$DATA_ADDRESS" ] || onu-net wait sfp "$DATA_ADDRESS" 10', text)
+        self.assertIn('[ -z "$DATA_ADDRESS" ] || onu-net wait omcibr0 "$DATA_ADDRESS" 10', text)
+
+    def test_a_new_stick_sends_untagged_frames_to_management(self):
+        # MGMT_UNTAGGED=1, which onu-config load stores on a new stick, has
+        # onu-mgmt start give management the host link's untagged frames.
+        text = read(RCS)
+        self.assertIn('[ "$value" = 1 ] && MGMT_UNTAGGED=untagged', text)
+        self.assertLess(text.index("\nonu-config load"), text.index("MGMT_UNTAGGED=untagged"))
+        self.assertIn('onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" $MGMT_UNTAGGED', text)
 
     def test_the_trial_is_watched_from_the_first_step(self):
         # onu-trial starts before anything that could hang, and finds the
@@ -326,7 +334,7 @@ class ServersOnTheHostSide(unittest.TestCase):
     def test_the_addresses_are_there_before_a_server_listens(self):
         text = read(RCS)
         start = text.index("onu-svc start ssh ")
-        self.assertLess(text.index('onu-net wait sfp "$DATA_ADDRESS" 10'), start)
+        self.assertLess(text.index('onu-net wait omcibr0 "$DATA_ADDRESS" 10'), start)
         self.assertLess(text.index('onu-net wait mgmt "$MGMT_ADDRESS" 10'), start)
 
     def test_dhcp6d_has_a_directory_for_its_binding_before_the_store_is_read(self):
