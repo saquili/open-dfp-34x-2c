@@ -510,6 +510,85 @@ static void mgmt_vlan_clash(void)
 	CHECK(omci_hw_kernel_ops.bridge_apply(NULL, 0, NULL) == OMCI_OK);
 }
 
+/* Whether `bridge vlan show dev @dev` lists VID @vid, with @flags when not NULL. */
+static bool bridge_has(const char *dev, unsigned int vid, const char *flags)
+{
+	char cmd[128], line[256];
+	bool found = false;
+	FILE *p;
+
+	snprintf(
+		cmd, sizeof(cmd),
+		"bridge -color=never -compressvlans vlan show dev %s 2>/dev/null",
+		dev);
+	p = popen(cmd, "r");
+	while (p && fgets(line, sizeof(line), p)) {
+		char *s = line, *end;
+		unsigned long from, to;
+
+		/* "dev  1 PVID Egress Untagged", "dev  2-4093" or "  2-4093" */
+		if (line[0] != ' ' && line[0] != '\t')
+			s += strcspn(s, " \t");
+		s += strspn(s, " \t");
+		from = strtoul(s, &end, 10);
+		if (end == s)
+			continue;
+		to = from;
+		if (*end == '-') {
+			s = end + 1;
+			to = strtoul(s, &end, 10);
+			if (end == s)
+				continue;
+		}
+		if (vid >= from && vid <= to && (!flags || strstr(end, flags)))
+			found = true;
+	}
+	if (p)
+		pclose(p);
+	return found;
+}
+
+static void bridge_filters_always(void)
+{
+	struct omci_hw_bridge_port ports[2] = {
+		{ .bridge = 1, .port_id = OMCI_HW_BRIDGE_UNI },
+		{ .bridge = 1, .port_id = 257 },
+	};
+	FILE *f;
+
+	puts("the host link's bridge filters VLANs, and a port without a filter carries every VLAN but the stick's own");
+	sh("ip link del omcibr0 2>/dev/null");
+	sh("ip link add gem257 type dummy && ip link set gem257 up");
+	if (sh("ip link add omcibr0 type bridge vlan_filtering 1 vlan_default_pvid 0") !=
+		    0 ||
+	    sh("ip link set omcibr0 up") != 0 ||
+	    sh("ip link set sfp master omcibr0") != 0 ||
+	    sh("bridge vlan add dev sfp vid 1 pvid untagged") != 0) {
+		puts("(no VLAN-filtering bridge: skipped)");
+		sh("ip link del omcibr0 2>/dev/null; ip link del gem257 2>/dev/null");
+		return;
+	}
+	f = fopen("/run/onu-mgmt", "w");
+	CHECK(f != NULL);
+	if (f) {
+		fputs("VLAN=4094\nADDRESS=192.0.2.1/30\n", f);
+		fclose(f);
+	}
+	CHECK(omci_hw_kernel_ops.bridge_apply(ports, 2, NULL) == OMCI_OK);
+	CHECK(sh("ip -d link show omcibr0 | grep -q 'vlan_filtering 1'") == 0);
+	CHECK(bridge_has("gem257", 1, "PVID") &&
+	      bridge_has("gem257", 1, "Untagged"));
+	CHECK(bridge_has("gem257", 2, NULL) &&
+	      bridge_has("gem257", 4093, NULL));
+	CHECK(!bridge_has("gem257", 4094, NULL));
+	CHECK(bridge_has("sfp", 4093, NULL) && !bridge_has("sfp", 4094, NULL));
+	/* The untagged VLAN of sfp is onu-mgmt's: omcid leaves its flags alone. */
+	CHECK(bridge_has("sfp", 1, "PVID"));
+	unlink("/run/onu-mgmt");
+	CHECK(omci_hw_kernel_ops.bridge_apply(NULL, 0, NULL) == OMCI_OK);
+	sh("ip link set sfp nomaster; ip link del omcibr0; ip link del gem257");
+}
+
 /* What tc shows of the root qdisc of @dev, on one line. */
 static const char *root_qdisc(const char *dev)
 {
@@ -833,6 +912,7 @@ int main(void)
 	mode_applied();
 	time_of_day();
 	mgmt_vlan_clash();
+	bridge_filters_always();
 	if (tbf_qdisc())
 		uni_rate();
 	else
