@@ -225,10 +225,10 @@ bool omci_vlan_phone(uint16_t *fibre, uint16_t *host);
  *	set up on them; 0 without one
  * @host: that service's host VLAN of its own while the PVID is not 1; 0
  *	while it takes the untagged frames
- * @named: a rule of an Ethernet UNI or of the VEIP names untagged frames:
- *	gives them a tag, passes them on or discards them
- * @bridged: no rule names them, and the OLT made a bridge port of a GEM port
- *	or a mapper, which they cross as they are
+ * @dropped: a rule of an Ethernet UNI or of the VEIP discards untagged
+ *	frames
+ * @bridged: no rule gives them a tag or discards them, and the OLT made a
+ *	bridge port of a GEM port or a mapper, which they cross as they are
  *
  * While the PVID is not 1, a rule that gives untagged frames a C-tag becomes
  * a translation from a host VLAN of its own, the fibre's when free, which the
@@ -242,7 +242,7 @@ struct omci_vlan_untagged {
 	uint16_t leads;
 	uint16_t service;
 	uint16_t host;
-	bool named;
+	bool dropped;
 	bool bridged;
 };
 

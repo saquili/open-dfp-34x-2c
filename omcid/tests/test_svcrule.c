@@ -367,6 +367,18 @@ static size_t fates_of(unsigned int fibre, enum omci_vlan_fate f)
 	return k;
 }
 
+/* A rule of the untagged frames of instance @instance: passed as they are, or discarded. */
+static void untagged_rule(struct omci_mib *mib, uint16_t instance, bool discard)
+{
+	uint8_t row[16];
+
+	pack(row, 0xf8000000u, 0xf8000000u, discard ? 0xc00f0000u : 0x000f0000u,
+	     0x000f0000u);
+	CHECK_EQ(omci_mib_table_put(mib, 171u, instance, 6u, row, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+}
+
 /* The rule of the last programming that gives untagged frames VLAN @fibre, or NULL. */
 static const struct omci_hw_vlan_xlate *push_of(unsigned int fibre)
 {
@@ -413,8 +425,8 @@ static void test_untagged(void)
 	omci_hw_host_pvid_set(1u, false);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(!omci_vlan_untagged(&u));
-	CHECK(u.pvid == 1u && u.service == 1501u && u.host == 0u && u.named &&
-	      !u.bridged);
+	CHECK(u.pvid == 1u && u.service == 1501u && u.host == 0u &&
+	      !u.dropped && !u.bridged);
 	CHECK(push_of(1501u) != NULL && xlate_of(1501u) == NULL);
 	CHECK(!omci_hw_untagged_discarded());
 
@@ -470,7 +482,7 @@ static void test_untagged(void)
 	port(mib, 0x101u, OMCI_BRIDGE_TP_PPTP_ETH);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(!omci_vlan_untagged(&u));
-	CHECK(u.service == 0u && !u.named && !u.bridged);
+	CHECK(u.service == 0u && !u.dropped && !u.bridged);
 	port(mib, 0x8001u, OMCI_BRIDGE_TP_GEM_IW);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(omci_vlan_untagged(&u));
@@ -478,6 +490,23 @@ static void test_untagged(void)
 	omci_hw_host_pvid_set(1u, false);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(!omci_vlan_untagged(&u) && u.bridged);
+
+	/*
+	 * A rule that passes the untagged frames as they are leaves them to the
+	 * bridge still; one that discards them does not.
+	 */
+	omci_hw_host_pvid_set(4094u, true);
+	me171(mib, 0x101u, 2u, 0x101u);
+	untagged_rule(mib, 0x101u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u) && u.bridged && !u.dropped);
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x101u), OMCI_OK);
+	me171(mib, 0x101u, 2u, 0x101u);
+	untagged_rule(mib, 0x101u, true);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(!omci_vlan_untagged(&u) && !u.bridged && u.dropped);
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x101u), OMCI_OK);
+	omci_hw_host_pvid_set(1u, false);
 
 	/* An IP host's rule that tags them is no claim: it has a VLAN of its own. */
 	omci_hw_host_pvid_set(4094u, true);

@@ -643,7 +643,7 @@ static uint16_t g_pvid = 1u;
 static bool g_pvid_stick, g_untag_bridge;
 static uint16_t g_untag_service, g_untagging_service;
 static uint16_t g_untag_host, g_untagging_host;
-static bool g_untag_named, g_untagging_named;
+static bool g_untag_dropped, g_untagging_dropped;
 /* The VLAN on the fibre that the PVID leads the untagged frames into, or 0. */
 static uint16_t g_pvid_fibre;
 /* What was last said, so that it is said once. */
@@ -962,7 +962,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 	g_phoning[1] = 0;
 	g_untagging_service = 0;
 	g_untagging_host = 0;
-	g_untagging_named = false;
+	g_untagging_dropped = false;
 
 	bool warned_full = false;
 
@@ -1067,7 +1067,9 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 				}
 
 				if (untagged_out) {
-					g_untagging_named = true;
+					if (d.tags_to_remove ==
+					    VLAN_TAGS_REMOVE_3)
+						g_untagging_dropped = true;
 					if ((d.op == OMCI_VLAN_OP_CVID_PUSH ||
 					     d.op == OMCI_VLAN_OP_SCVID_PUSH) &&
 					    g_untagging_service == 0u) {
@@ -1274,7 +1276,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 		g_phone[1] = g_phoning[1];
 		g_untag_service = g_untagging_service;
 		g_untag_host = g_untagging_host;
-		g_untag_named = g_untagging_named;
+		g_untag_dropped = g_untagging_dropped;
 		if (g_pvid == 1u)
 			g_untag_warned = 0;
 	}
@@ -1357,8 +1359,8 @@ bool omci_vlan_untagged(struct omci_vlan_untagged *out)
 	out->leads = g_pvid_fibre;
 	out->service = g_untag_service;
 	out->host = g_untag_host;
-	out->named = g_untag_named;
-	out->bridged = !g_untag_named && g_untag_bridge;
+	out->dropped = g_untag_dropped;
+	out->bridged = out->service == 0u && !g_untag_dropped && g_untag_bridge;
 	return g_pvid != 1u &&
 	       ((out->service != 0u && g_pvid != out->host) || out->bridged);
 }
