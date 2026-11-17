@@ -356,8 +356,7 @@ board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
 encrypted Port-IDs, and its group "monitor" for their changes, the
 "gem" link kind for the GEM ports, the ethtool statistics of the switch ports
 and the GEM ports for the performance monitoring, the bridge ``omcibr0`` with
-the host link ``sfp``, which ``onu-mgmt`` makes at boot and which always
-filters VLANs (ADR 0023), tc flower rules for the VLAN rules, the multicast
+the host link ``sfp``, tc flower rules for the VLAN rules, the multicast
 traps, tags and counts and the bridge port filters, and a tbf at the root of
 ``sfp`` for the UNI's rate, which the switch carries out::
 
@@ -378,18 +377,8 @@ The VLAN rules into those VLANs stay out of the hardware, and so does a bridge
 port that carries nothing else, such as the GEM ports of an Internet service
 whose PPPoE the stick holds; the subscriber's frames of those VLANs are
 dropped as they come in on ``sfp``. Television and telephone go on crossing
-the bridge.
-
-The daemon gives the bridge ports the VLANs their filters list, and the ports
-of an OLT's bridge without filters every VLAN, but never one of the stick's
-own: the management VLANs of ``/run/onu-mgmt`` and of the pair on trial, the
-held VLANs, and VLAN 1, which the host link's untagged frames are given while
-they do not go to management and which the GEM ports carry untagged, so that
-the OLT's VLAN rules act on them. An OLT's bridge without filters would still
-carry the sessions' VLANs on the host side, and while the stick holds VLANs
-the daemon leaves the GEM ports out of the bridge, as in router mode. It never
-takes the bridge away: it takes the GEM ports out, and from ``sfp`` the VLANs
-it gave it.
+the bridge. A bridge that filters no VLAN would carry the sessions' VLANs too,
+and the stick then leaves it out altogether, as in router mode.
 
 The daemon also writes the OLT's VLAN translations to ``/run/omcid/xlate``: a
 ``SUB NET`` line for each VID it translates from the subscriber's side, with the

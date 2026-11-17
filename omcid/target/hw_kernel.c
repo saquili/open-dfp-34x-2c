@@ -1544,33 +1544,10 @@ static enum omci_status kernel_tcont_apply(const uint16_t *alloc, size_t n,
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
 }
 
-/*
- * The bridge of the OMCI configuration, and whether it filters VLANs (-1:
- * unknown). The bridge is the host link's (ADR 0023): onu-mgmt makes it at
- * boot with the UNI's interface as a port, filtering VLANs, the management
- * VLAN a member of the UNI and of the bridge itself alone, and the VLAN of
- * the UNI's untagged frames, UNTAGGED_VID, its own. omcid puts the GEM ports
- * into it and gives the ports their VLANs, never one of those, and never
- * takes the bridge away; it makes it only where onu-mgmt did not, as for the
- * tests.
- */
+/* The bridge of the OMCI configuration, and whether it filters VLANs (-1: unknown). */
 #define BRIDGE_IFNAME "omcibr0"
 
 static int g_bridge_filtering = -1;
-
-/*
- * The VLAN of the host link's untagged frames that do not go to management
- * (onu-mgmt's UNTAGGED_VID): the GEM ports carry it untagged, so that the
- * subscriber's untagged frames reach the PON as they did while the switch
- * did not filter VLANs, and the OLT's VLAN rules act on them.
- */
-#define UNTAGGED_VID 1u
-
-/* The management pair on trial: its VLAN is onu-mgmt's, as the one in use is (MGMT_PATH). */
-#define MGMT_PENDING_PATH "/run/onu-trial.d/mgmt"
-
-/* The VIDs omcid gave the UNI's port, one bit each, to take away again. */
-static uint8_t g_uni_vids[4096 / 8];
 
 /*
  * The bridge ports and the translations of the VLAN rules last programmed,
@@ -1617,8 +1594,8 @@ static bool g_router_told;
  * subscriber's crosses into them; the rest of what the OLT provisions is
  * bridged as before. A bridge that filters no VLAN would carry the sessions'
  * VLANs too, and the host link's VLAN the sessions hand their addresses on
- * in: while the stick holds VLANs, the GEM ports of such a bridge stay out of
- * it, as in router mode (g_held_unbridged).
+ * in: while the stick holds VLANs, such a bridge stays out of the hardware
+ * altogether, as in router mode (g_held_unbridged).
  */
 #define HELD_PATH "/run/onu-held-vlans"
 #define HELD_MAX 8u
@@ -1930,8 +1907,6 @@ static int bridge_ensure(int *ifindex)
 	if (*ifindex)
 		return 0;
 
-	OMCI_INFO("bridge: %s was not made at boot; omcid makes it",
-		  BRIDGE_IFNAME);
 	dlen = nla_put(data, dlen, IFLA_BR_VLAN_DEFAULT_PVID, &default_pvid,
 		       sizeof(default_pvid));
 	ilen = nla_put(info, ilen, IFLA_INFO_KIND, "bridge", sizeof("bridge"));
@@ -2000,18 +1975,13 @@ static int bridge_set_filtering(int ifindex, bool on)
 	return rtnl_talk(req, off, NULL, 0, NULL);
 }
 
-/*
- * Add the VIDs @from to @to to a bridge port with the VLAN flags @flags
- * (BRIDGE_VLAN_INFO_PVID, _UNTAGGED), or remove them: one VID, or a range
- * in one request.
- */
-static int bridge_vlan_range(int ifindex, uint16_t from, uint16_t to,
-			     uint16_t flags, bool add)
+/* Add a VID to a bridge port, or remove it. */
+static int bridge_vlan(int ifindex, uint16_t vid, bool add)
 {
 	uint8_t req[NL_HDRLEN + sizeof(struct ifinfomsg) + 64] __aligned(4);
 	struct ifinfomsg ifi = { .ifi_family = AF_BRIDGE,
 				 .ifi_index = ifindex };
-	struct bridge_vlan_info vinfo = { .flags = flags, .vid = from };
+	struct bridge_vlan_info vinfo = { .flags = 0, .vid = vid };
 	size_t off, spec;
 
 	memset(req, 0, sizeof(req));
@@ -2023,25 +1993,12 @@ static int bridge_vlan_range(int ifindex, uint16_t from, uint16_t to,
 
 	spec = off;
 	off += NLA_HDRLEN_;
-	if (to > from) {
-		vinfo.flags |= BRIDGE_VLAN_INFO_RANGE_BEGIN;
-		off = nla_put(req, off, IFLA_BRIDGE_VLAN_INFO, &vinfo,
-			      sizeof(vinfo));
-		vinfo.flags = (uint16_t)(flags | BRIDGE_VLAN_INFO_RANGE_END);
-		vinfo.vid = to;
-	}
 	off = nla_put(req, off, IFLA_BRIDGE_VLAN_INFO, &vinfo, sizeof(vinfo));
 	*(uint16_t *)(req + spec) = (uint16_t)(off - spec);
 	*(uint16_t *)(req + spec + 2) = IFLA_AF_SPEC | NLA_F_NESTED;
 
 	*(uint32_t *)&req[0] = (uint32_t)off;
 	return rtnl_talk(req, off, NULL, 0, NULL);
-}
-
-/* Add a VID to a bridge port, or remove it. */
-static int bridge_vlan(int ifindex, uint16_t vid, bool add)
-{
-	return bridge_vlan_range(ifindex, vid, vid, 0, add);
 }
 
 /* The interface of a bridge port: sfp for the UNI, gemN for a GEM port. */
@@ -2210,101 +2167,6 @@ static bool held(uint16_t vid)
 	return vid_in(g_held, g_held_n, vid);
 }
 
-/* The VLANs of the management pairs, in use and on trial: onu-mgmt's alone. */
-static uint16_t g_mgmt[2];
-static size_t g_mgmt_n;
-
-static void mgmt_load(void)
-{
-	static const char *const paths[] = { MGMT_PATH, MGMT_PENDING_PATH };
-
-	g_mgmt_n = 0;
-	for (size_t i = 0; i < ARRAY_SIZE(paths); i++) {
-		FILE *f = fopen(paths[i], "re");
-		char line[64];
-		unsigned int vid;
-
-		if (!f)
-			continue;
-		while (fgets(line, sizeof(line), f))
-			if (sscanf(line, "VLAN=%u", &vid) == 1 && vid >= 1 &&
-			    vid <= 4094)
-				(void)vid_put(g_mgmt, &g_mgmt_n,
-					      ARRAY_SIZE(g_mgmt),
-					      (uint16_t)vid);
-		fclose(f);
-	}
-}
-
-/*
- * Whether @vid is the stick's own, which no port omcid fills is given: a
- * management VLAN, the VLAN of the host link's untagged frames (given the GEM
- * ports untagged alone, kernel_bridge_apply()), or a VLAN the sessions hold.
- */
-static bool reserved(uint16_t vid)
-{
-	return vid == UNTAGGED_VID || vid_in(g_mgmt, g_mgmt_n, vid) ||
-	       held(vid);
-}
-
-static void uni_vid_mark(uint16_t vid)
-{
-	g_uni_vids[vid / 8] |= (uint8_t)(1u << (vid % 8));
-}
-
-static bool uni_vid_has(unsigned int vid)
-{
-	return g_uni_vids[vid / 8] & (1u << (vid % 8));
-}
-
-/* Take the VIDs omcid gave the UNI's port away again, a range at a time. */
-static void uni_vids_clear(void)
-{
-	const int uni = (int)if_nametoindex(UNI_IFNAME);
-
-	for (unsigned int v = 1; v <= 4094; v++) {
-		unsigned int to = v;
-
-		if (!uni_vid_has(v))
-			continue;
-		while (to < 4094 && uni_vid_has(to + 1))
-			to++;
-		if (uni)
-			(void)bridge_vlan_range(uni, (uint16_t)v, (uint16_t)to,
-						0, false);
-		v = to;
-	}
-	memset(g_uni_vids, 0, sizeof(g_uni_vids));
-}
-
-/*
- * Every VLAN but the stick's own, a range at a time, to a port of a bridge
- * whose ports have no VLAN filter: the OLT's bridge then passes every VLAN,
- * which the switch carries once it filters VLANs only as their member.
- */
-static int bridge_vlan_all(int ifindex, bool uni)
-{
-	int err = 0;
-
-	for (unsigned int v = 1; v <= 4094; v++) {
-		unsigned int to = v;
-		int e;
-
-		if (reserved((uint16_t)v))
-			continue;
-		while (to < 4094 && !reserved((uint16_t)(to + 1)))
-			to++;
-		e = bridge_vlan_range(ifindex, (uint16_t)v, (uint16_t)to, 0,
-				      true);
-		if (e && !err)
-			err = e;
-		for (unsigned int w = v; !e && uni && w <= to; w++)
-			uni_vid_mark((uint16_t)w);
-		v = to;
-	}
-	return err;
-}
-
 /*
  * The bridge ports without the held VLANs, in @out: a port that had VLANs
  * and has none left, which carries a held VLAN alone, is left out. Returns
@@ -2380,31 +2242,6 @@ static void bridge_vlans_complete(void)
 			(void)vid_put(all, &n_all, ARRAY_SIZE(all),
 				      g_br_ports[i].vlan[v]);
 
-	/*
-	 * No port has a VLAN filter: the OLT's bridge passes every VLAN, so
-	 * each port is given every one but the stick's own, and the frames
-	 * of the held VLANs are dropped as they come in from the subscriber.
-	 */
-	if (!n_all) {
-		for (size_t i = 0; i < g_br_n; i++) {
-			const unsigned int ifindex =
-				bridge_port_ifindex(&g_br_ports[i]);
-			const bool uni = g_br_ports[i].port_id ==
-					 OMCI_HW_BRIDGE_UNI;
-
-			if (ifindex && bridge_vlan_all((int)ifindex, uni))
-				OMCI_WARN(
-					"bridge: Port-ID %u was not given every VLAN: %s",
-					g_br_ports[i].port_id,
-					omci_hw_last_extack());
-		}
-		if (g_br_n)
-			OMCI_INFO(
-				"bridge: no VLAN filter -- the ports carry every VLAN but the stick's own");
-		uni_discard_sync(g_held, g_held_n);
-		return;
-	}
-
 	for (size_t i = 0; i < g_br_n; i++) {
 		const struct omci_hw_bridge_port *p = &g_br_ports[i];
 		const unsigned int ifindex = bridge_port_ifindex(p);
@@ -2457,11 +2294,9 @@ static void bridge_vlans_complete(void)
 			int err;
 
 			if (vid_in(p->vlan, p->num_vlan, vid) ||
-			    br_extra_has(p->port_id, vid) || reserved(vid))
+			    br_extra_has(p->port_id, vid))
 				continue;
 			err = bridge_vlan((int)ifindex, vid, true);
-			if (!err && p->port_id == OMCI_HW_BRIDGE_UNI)
-				uni_vid_mark(vid);
 			if (err) {
 				OMCI_WARN(
 					"bridge: VLAN %u on %s %u, which its frames need, refused: %s (%s)",
@@ -2548,23 +2383,28 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 		return OMCI_ERR_HW;
 	}
 
-	/*
-	 * The bridge filters VLANs whatever the OLT provisioned (ADR 0023):
-	 * only so does the switch keep the stick's own VLANs, and the host
-	 * link's untagged frames when they go to management, from the PON. A
-	 * port without a VLAN filter passes every VLAN but the stick's own
-	 * (bridge_vlans_complete()).
-	 */
-	mgmt_load();
-	if (g_bridge_filtering != 1) {
-		err = bridge_set_filtering(br, true);
-		if (err)
-			OMCI_WARN(
-				"bridge: VLAN filtering could not be turned on: %s",
-				strerror(-err));
-		else {
-			g_bridge_filtering = 1;
-			OMCI_INFO("bridge: VLAN filtering on");
+	{
+		bool filters = false;
+
+		for (size_t i = 0; i < n; i++)
+			if (ports[i].num_vlan)
+				filters = true;
+
+		if (g_bridge_filtering != (int)filters) {
+			err = bridge_set_filtering(br, filters);
+			if (err)
+				OMCI_WARN(
+					"bridge: VLAN filtering could not be turned %s: %s",
+					filters ? "on" : "off", strerror(-err));
+			else {
+				g_bridge_filtering = (int)filters;
+				OMCI_INFO(
+					"bridge: VLAN filtering %s -- %s",
+					filters ? "on" : "off",
+					filters ?
+						"the OLT provisioned VLAN filters" :
+						"the OLT provisioned none, so every frame is forwarded");
+			}
 		}
 	}
 
@@ -2586,13 +2426,6 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 		}
 
 		for (uint8_t v = 0; v < ports[i].num_vlan; v++) {
-			/* The management VLAN is said once (gem_vlans_publish()). */
-			if (reserved(ports[i].vlan[v])) {
-				OMCI_DEBUG(
-					"bridge: VLAN %u on Port-ID %u is the stick's own and stays out",
-					ports[i].vlan[v], ports[i].port_id);
-				continue;
-			}
 			err = bridge_vlan((int)ifindex, ports[i].vlan[v], true);
 			if (err) {
 				OMCI_WARN(
@@ -2603,27 +2436,8 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 				omci_hw_reject_add(rejected, ports[i].port_id);
 				continue;
 			}
-			if (ports[i].port_id == OMCI_HW_BRIDGE_UNI)
-				uni_vid_mark(ports[i].vlan[v]);
 			OMCI_INFO("bridge: Port-ID %u carries VLAN %u",
 				  ports[i].port_id, ports[i].vlan[v]);
-		}
-		/*
-		 * The host link's untagged frames, in UNTAGGED_VID, reach the
-		 * GEM ports untagged, where the OLT's rules act on them as
-		 * they did while the switch did not filter VLANs.
-		 */
-		if (ports[i].port_id != OMCI_HW_BRIDGE_UNI) {
-			err = bridge_vlan_range(
-				(int)ifindex, UNTAGGED_VID, UNTAGGED_VID,
-				BRIDGE_VLAN_INFO_PVID |
-					BRIDGE_VLAN_INFO_UNTAGGED,
-				true);
-			if (err)
-				OMCI_WARN(
-					"bridge: Port-ID %u takes no untagged frames: %s (%s)",
-					ports[i].port_id, strerror(-err),
-					omci_hw_last_extack());
 		}
 	}
 
@@ -3856,25 +3670,13 @@ static void bridge_remove(void)
 	for (unsigned int k = 0; uni && k < OMCI_HW_VLAN_MAX_RULES; k++)
 		(void)tc_filter_del(uni, TC_PRIO_VLAN_DISCARD + k);
 	uni_discard_sync(NULL, 0);
-	/*
-	 * The bridge stays, the host link's (ADR 0023): the GEM ports leave it,
-	 * which takes their VLANs with them, and the UNI loses the VLANs omcid
-	 * gave it.
-	 */
-	for (size_t i = 0; br && i < g_br_n; i++) {
-		const unsigned int ifindex =
-			bridge_port_ifindex(&g_br_ports[i]);
-
-		if (ifindex && g_br_ports[i].port_id != OMCI_HW_BRIDGE_UNI &&
-		    rtnl_link_master((int)ifindex, 0))
-			OMCI_WARN("bridge: Port-ID %u could not leave %s",
-				  g_br_ports[i].port_id, BRIDGE_IFNAME);
-	}
-	uni_vids_clear();
+	if (br && link_delete(br))
+		OMCI_WARN("bridge: %s could not be removed", BRIDGE_IFNAME);
 	g_br_n = 0;
 	g_br_xlate_n = 0;
 	g_br_sub_n = 0;
 	g_br_extra_n = 0;
+	g_bridge_filtering = -1;
 }
 
 /*
