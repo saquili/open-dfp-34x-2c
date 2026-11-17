@@ -26,6 +26,8 @@
 #include "ram_internal.h"
 
 #define RAMOOPS_KERNMSG_HDR "===="
+/* "===="(4), %lld(20), "."(1), %06lu(6), "-%c\n"(3), and the NUL */
+#define RAMOOPS_KERNMSG_HDR_MAX 36
 #define MIN_MEM_SIZE 4096UL
 
 static ulong record_size = MIN_MEM_SIZE;
@@ -297,7 +299,7 @@ out:
 static size_t ramoops_write_kmsg_hdr(struct persistent_ram_zone *prz,
 				     struct pstore_record *record)
 {
-	char hdr[36]; /* "===="(4), %lld(20), "."(1), %06lu(6), "-%c\n"(3) */
+	char hdr[RAMOOPS_KERNMSG_HDR_MAX];
 	size_t len;
 
 	len = scnprintf(hdr, sizeof(hdr),
@@ -835,10 +837,19 @@ static int ramoops_probe(struct platform_device *pdev)
 	/*
 	 * Since bufsize is only used for dmesg crash dumps, it
 	 * must match the size of the dprz record (after PRZ header
-	 * and ECC bytes have been accounted for).
+	 * and ECC bytes have been accounted for), less the header
+	 * that ramoops_pstore_write() puts in front of the record:
+	 * a dump that fills bufsize would otherwise lose its end,
+	 * where kmsg_dump_get_buffer() puts the newest lines.
 	 */
 	if (cxt->pstore.flags & PSTORE_FLAGS_DMESG) {
-		cxt->pstore.bufsize = cxt->dprzs[0]->buffer_size;
+		if (cxt->dprzs[0]->buffer_size <= RAMOOPS_KERNMSG_HDR_MAX) {
+			pr_err("record size too small for its header\n");
+			err = -EINVAL;
+			goto fail_clear;
+		}
+		cxt->pstore.bufsize = cxt->dprzs[0]->buffer_size -
+				      RAMOOPS_KERNMSG_HDR_MAX;
 		cxt->pstore.buf = kvzalloc(cxt->pstore.bufsize, GFP_KERNEL);
 		if (!cxt->pstore.buf) {
 			pr_err("cannot allocate pstore crash dump buffer\n");
