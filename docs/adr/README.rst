@@ -127,3 +127,6 @@ The index
    * - 0022
      - Sign each release, and say what a file is signed with
      - Accepted
+   * - 0023
+     - Make the host link a port of a bridge that always filters VLANs
+     - Accepted
