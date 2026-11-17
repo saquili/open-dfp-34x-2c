@@ -215,6 +215,78 @@ template among the seven that the ACL shares with the other writers' rules
 when many rules of different fields are on. A rule that finds none is
 reported in ``/run/onu-fw.acl``, with the rules after it.
 
+The switch's checks of malformed frames
+=======================================
+
+The switch can stop sixteen shapes of malformed or hostile frames where they
+enter, among the frames it passes between the operator's side and the host's
+(``linux/Documentation/networking/devlink/rtl9602c.rst``, "DoS checks"). It
+does not judge the frames its rules hand to the stick's own CPU, so the
+management VLAN, the panel and ssh are not behind these checks (M: on the
+management VLAN the shapes the checks drop between the sides all reached the
+CPU). The settings offer fifteen, each its own, all off by default, and the
+firewall's page of the panel sets them; ``onu-apply`` gives them to the switch
+(``onu-utils/README.rst``). ``DOS_SIDE`` says whose frames they judge, and the
+switch has one set of ports for all the checks: the operator's side
+(``internet``, the default), the host's (``host``) or both. A frame a check
+stops is dropped.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 40 38
+
+   * - Setting
+     - What it stops
+     - What else it can stop
+   * - ``DOS_LAND``
+     - An IP source equal to its destination.
+     - Nothing known.
+   * - ``DOS_BLAT``
+     - An L4 source port equal to its destination port, of TCP and of UDP.
+     - Traffic between two servers that use one port at both ends: NTP from
+       port 123 to port 123 is dropped (M).
+   * - ``DOS_SYN_FIN``, ``DOS_XMAS``, ``DOS_NULL_SCAN``
+     - A TCP segment with SYN and FIN both set; an Xmas scan, FIN, URG and PSH
+       set with a sequence number of 0; a null scan, no flag set with a
+       sequence number of 0 (M: with another sequence number both passed).
+     - Nothing known.
+   * - ``DOS_SYN_LOW_PORT``
+     - A SYN from a source port below 1024.
+     - A client that binds a low source port (I: from the protocols).
+   * - ``DOS_TCP_SHORT``, ``DOS_TCP_FRAG``
+     - A TCP header too short, a TCP fragment offset.
+     - Nothing known.
+   * - ``DOS_ICMP_FRAG``, ``DOS_PING_OF_DEATH``
+     - A fragment of ICMP, a fragment whose offset and length go beyond 65535.
+     - A large ping that the sender fragments (I: from the protocols).
+   * - ``DOS_UDP_BOMB``
+     - A UDP length larger than the datagram.
+     - Nothing known.
+   * - ``DOS_SYN_DATA``
+     - A SYN that carries data.
+     - TCP Fast Open (I: from the protocol).
+   * - ``DOS_SYN_FLOOD``, ``DOS_FIN_FLOOD``, ``DOS_ICMP_FLOOD``
+     - The frames of that kind beyond a threshold, 1 to 255, that the switch
+       counts in a window of about a millisecond.
+     - Ordinary bursts, when the threshold is low. ``DOS_ICMP_FLOOD`` counts
+       ICMPv6 too, IPv6's neighbour discovery among it (M: at a threshold of 0
+       it dropped echo requests and neighbour solicitations of IPv6 alike).
+
+The checks were tried on the stick with frames bridged from the host's side
+to the PON, each check dropping every frame of its own shape and none of the
+ordinary frames sent between them, and through the settings as the panel
+sets them: on trial, back by themselves after 90 s, back at once, and kept
+and in force again after a restart (M: ONT-UART on the bench's OLT,
+2026-11-17; ``linux/Documentation/networking/dsa/rtl9602c-acl-qos.rst``). A
+threshold counts in a window of about a millisecond (M: SYNs at 2000 a second
+against a threshold of 1 passed at about 700 a second, of 2 at about 1400, of 3
+or more all of them; at 57,000 a second a threshold of 5 passed about 4,500 a
+second): 255 lets nearly everything through, and the panel starts a flood check
+at 10, some 9,000 frames a second. Not measured: the checks on frames from the
+operator's side, which the bench's OLT cannot send, and whether any check cuts
+good traffic of a real connection to an operator. A setting that is on goes on
+trial like the rest, so one that cuts the panel off goes back in 90 s.
+
 Who owns what
 =============
 

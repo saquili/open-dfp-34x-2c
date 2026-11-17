@@ -1075,6 +1075,24 @@ of a UDP or TCP header, at the start of the IP payload, and never changes them.
        at 0, and, moving them back one group at a time through ``fsel``, slow
        exactly while selector 3 was moved; with selector 3 at 0 and its window
        on 11, 941.
+   * - Selector 2 must keep the value reset leaves it too: pointed at the
+       PPPoE header's octet 2, the session's number, with no rule using it,
+       it stopped the malformed-frame checks that read the TCP flags or the
+       UDP length (see "Malformed-frame (DoS) checks"), which then passed
+       every frame of their shape. So the session's number is compared
+       through ``RTL9602C_FSEL_PPPOE_SID``, selector 12, and setup writes
+       selector 2 back to 0 as it does selector 3.
+     - M, I
+     - M: frames forwarded from ``sfp`` to the PON with checks 1 to 12 on and
+       every check dropping, 300 of each shape at 100 a second: with the
+       PPPoE selectors in place SYN with FIN, Xmas, null scan, SYN from port
+       80 and a UDP length larger than the datagram passed 300 of 300; with
+       selector 2 alone at 0 they were dropped 300 of 300, and with selector
+       2 at 0 and its window on 12, SYN with FIN, Xmas, null scan, SYN from
+       port 80, SYN with data, the UDP bomb and a TCP fragment were dropped
+       300 of 300, and plain SYNs under check 13 at threshold 0 as well. I:
+       that the session's number compares on selector 12 as it did on 2; a
+       ``pppoe_sid`` rule over a session would confirm it.
    * - ``fsel`` (debugfs, mode 0600) lists the 16 selectors as "<n> <origin>
        <offset>"; writing the same three numbers points selector n elsewhere,
        for measurement, and setup restores the driver's selectors.
@@ -2133,11 +2151,13 @@ The checks, in bit order, with the forwarding reason of each:
      - 67
      - M
    * - 4
-     - Xmas scan.
+     - Xmas scan: FIN, URG and PSH set with a sequence number of 0; with
+       another number the segment passes.
      - 68
      - M
    * - 5
-     - Null scan.
+     - Null scan: no flag set with a sequence number of 0; with another
+       number the segment passes.
      - 69
      - M
    * - 6
@@ -2222,10 +2242,15 @@ The checks, in bit order, with the forwarding reason of each:
        ``dos_synflood_thresh`` 0, passed at 255 and dropped again at 0; the
        frame capture on reason 77 caught one at 0, nothing in 15 s at 255, and
        one again at 0.
-   * - A threshold counts frames per a fixed hardware window of unknown length.
-     - I
-     - Not load-bearing. Sweeping the offered rate against a fixed threshold on
-       a quiet link would settle it.
+   * - A threshold counts frames per a hardware window of about a
+       millisecond, 1.1 ms to 1.5 ms by the rates that passed, and the check
+       stops the frames beyond it.
+     - M
+     - SYN frames forwarded from ``sfp`` to the PON: at 2000 a second, a
+       threshold of 1 passed about 690 a second, 2 about 1380 and 3 or more
+       all of them; at 57,000 a second a threshold of 5 passed about 4,560 a
+       second; at about 39,000 a second a threshold of 10 passed about 9,000
+       a second, and so did the FIN flood and the ICMP flood checks at 10.
    * - A read of a threshold register can stall the CPU on the register bus
        until the soft-lockup detector resets the board; a write works. Whether
        every read does is not settled, because one read of all three registers
@@ -2249,6 +2274,21 @@ The checks, in bit order, with the forwarding reason of each:
        different address that was learned on its ingress port also got the
        reason 228. I: that the check fires at all; no frame can show it. Not
        load-bearing.
+   * - The checks judge the frames the switch forwards: a frame that an ACL
+       rule traps to the CPU is not judged, with every check on. A frame a
+       check drops is counted in the ingress port's ``rx_forward_discards``.
+     - M
+     - 1000 frames of each shape at 2000 a second on the management VLAN of
+       ``sfp``, which an ACL rule traps: land, SYN with FIN, Xmas, null scan,
+       a TCP or ICMP fragment and a ping of death all reached the CPU with
+       checks 1 to 12 on. The same frames untagged, bridged to the PON: those
+       of checks 1, 2 and 8 to 10 were dropped, 1000 of 1000, and
+       ``rx_forward_discards`` of ``sfp`` grew by 1000 for each.
+   * - Blat compares the ports of UDP as well as of TCP: a UDP datagram from
+       port 123 to port 123, as NTP sends it, is dropped.
+     - M
+     - 1000 such datagrams bridged from ``sfp`` to the PON with check 2 on: all
+       dropped.
    * - The devlink parameters ``dos_ports``, ``dos_checks`` and ``dos_actions``
        write ``RTL9602C_DOS_PORT_EN`` and the two halves of
        ``RTL9602C_DOS_CHECK_CTRL`` and are read back from the registers; the
@@ -3487,9 +3527,6 @@ Questions the code does not depend on
    * - Whether a zero in ``RTL9602C_SHAPE_PORT_CFG_RATE`` passes nothing ("The
        egress shaper").
      - Writing 0 and watching the port stop.
-   * - Whether the DoS flood thresholds count frames per a hardware window, and
-       of what length ("Malformed-frame (DoS) checks").
-     - Sweeping the offered rate against a fixed threshold on a quiet link.
    * - Whether every read of a flood-threshold register is unsafe
        ("Malformed-frame (DoS) checks").
      - A single read through a driver debug path after a write.

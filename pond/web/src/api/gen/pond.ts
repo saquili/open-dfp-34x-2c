@@ -76,6 +76,8 @@ import type {
   SetChangesBody,
   SetDmz200,
   SetDmzBody,
+  SetDos200,
+  SetDosBody,
   SetFixed200,
   SetFixedBody,
   SetForward200,
@@ -7213,6 +7215,111 @@ export const useSetFw = <TError = Error | UnauthorisedResponse, TContext = unkno
   TContext
 > => {
   return useMutation(getSetFwMutationOptions(options), queryClient);
+};
+
+export const getSetDosUrl = () => {
+  return `/api/set/dos`;
+};
+
+/**
+ * The switch's checks of malformed and hostile frames, and of floods of SYN, FIN and ICMP: each on or off, a flood check off or with its threshold, and whose frames they judge. LAND, BLAT, SYN_FIN, XMAS, NULL_SCAN, SYN_LOW_PORT, TCP_SHORT, TCP_FRAG, ICMP_FRAG, PING_OF_DEATH, UDP_BOMB and SYN_DATA, on or off; SYN_FLOOD, FIN_FLOOD and ICMP_FLOOD, off or a threshold from 1 to 255; SIDE, internet, host or both. A key not given stays as it is. The change goes on trial like the other settings.
+ * @summary Change dos
+ */
+export const setDos = async (
+  setDosBody: SetDosBody,
+  options?: Parameters<typeof pondFetch>[1],
+): Promise<SetDos200> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return pondFetch<SetDos200>(getSetDosUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "text/plain", ...getHeaders(options?.headers) },
+    body: setDosBody,
+  });
+};
+
+export const getSetDosMutationKey = () => ["setDos"] as const;
+
+export const getSetDosMutationOptions = <
+  TError = Error | UnauthorisedResponse,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setDos>>,
+    TError,
+    SetDosMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof pondFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setDos>>,
+  TError,
+  SetDosMutationVariables,
+  TContext
+> => {
+  const mutationKey = getSetDosMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setDos>>,
+    SetDosMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setDos(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetDosMutationResult = NonNullable<Awaited<ReturnType<typeof setDos>>>;
+export type SetDosMutationBody = SetDosBody;
+export type SetDosMutationError = Error | UnauthorisedResponse;
+export type SetDosMutationVariables = { data: SetDosBody };
+
+/**
+ * @summary Change dos
+ */
+export const useSetDos = <TError = Error | UnauthorisedResponse, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setDos>>,
+      TError,
+      SetDosMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof setDos>>,
+  TError,
+  SetDosMutationVariables,
+  TContext
+> => {
+  return useMutation(getSetDosMutationOptions(options), queryClient);
 };
 
 export const getSetServiceRuleUrl = () => {

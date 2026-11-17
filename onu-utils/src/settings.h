@@ -94,6 +94,15 @@
  * IGMP_PRIORITY says what priority the subscriber's IGMP and MLD go up with
  * where the OLT leaves it to the subscriber: auto, the default, one the
  * operator's rules take, which omcid finds; or host, the one the host gave.
+ *
+ * The switch's checks of malformed and hostile frames are DOS_<check>, all
+ * off by default: on or off for LAND, BLAT, SYN_FIN, XMAS, NULL_SCAN,
+ * SYN_LOW_PORT, TCP_SHORT, TCP_FRAG, ICMP_FRAG, PING_OF_DEATH, UDP_BOMB and
+ * SYN_DATA; off or the threshold, 1 to 255, that the switch counts matching
+ * frames against, for SYN_FLOOD, FIN_FLOOD and ICMP_FLOOD. A frame a check
+ * stops is dropped. DOS_SIDE says whose frames the checks judge, as they
+ * enter the switch: internet, the default, the frames from the operator's
+ * side; host, those from the host; or both.
  */
 
 #ifndef SETTINGS_H
@@ -194,6 +203,31 @@ enum settings_fkey {
 	SETTINGS_NFKEYS
 };
 
+/*
+ * The switch's checks of malformed and hostile frames, DOS_<suffix>, in the
+ * order of the checks' bits in the switch, 1 to 15 (check 0 never fires, and
+ * has no key), then whose frames they judge.
+ */
+enum settings_dkey {
+	SET_D_LAND,
+	SET_D_BLAT,
+	SET_D_SYN_FIN,
+	SET_D_XMAS,
+	SET_D_NULL_SCAN,
+	SET_D_SYN_LOW_PORT,
+	SET_D_TCP_SHORT,
+	SET_D_TCP_FRAG,
+	SET_D_ICMP_FRAG,
+	SET_D_PING_OF_DEATH,
+	SET_D_UDP_BOMB,
+	SET_D_SYN_DATA,
+	SET_D_SYN_FLOOD,
+	SET_D_FIN_FLOOD,
+	SET_D_ICMP_FLOOD,
+	SET_D_SIDE,
+	SETTINGS_NDKEYS
+};
+
 /* A fixed address: FIXEDn, "L/MAC/IP", and FIXEDn_NAME; empty for none. */
 struct settings_fixed {
 	char spec[48];
@@ -230,6 +264,8 @@ struct settings_account {
  * @rule: the firewall's rules, in their order
  * @svc: the rules of the services, SVCn: "FIBRE/ACTION[/HOST]", empty for none
  * @fw: what the firewall does where no rule decides, allow or block
+ * @dos: the switch's checks of malformed and hostile frames, on or off, a
+ *       flood check's threshold or off, and whose frames they judge
  * @igmp_priority: IGMP_PRIORITY, auto or host
  * @legacy_lan: LAN_VLAN, the one link of before, when @had_legacy_lan
  * @had_legacy_lan: whether the set named LAN_VLAN
@@ -246,6 +282,7 @@ struct settings {
 	struct settings_rule rule[SETTINGS_RULES];
 	char svc[SETTINGS_SVCS][16];
 	char fw[SETTINGS_NFKEYS][8];
+	char dos[SETTINGS_NDKEYS][12];
 	char igmp_priority[8];
 	char legacy_lan[SETTINGS_VALUE_MAX];
 	bool had_legacy_lan;

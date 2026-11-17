@@ -8,6 +8,7 @@
 
 import type { Family, GemPort, LeaseInfo, Live, Port } from "../api/types";
 import type { Lang } from "../i18n";
+import { DOS_OFF } from "./dos";
 import { dbm } from "./format";
 
 export type Tone = "good" | "warn" | "bad" | "info" | "neutral";
@@ -519,6 +520,11 @@ export function fwDefaults(live: Live | undefined) {
   return live?.settings?.fw ?? { out: "allow" as const, between: "block" as const };
 }
 
+/** The switch's checks of malformed frames, all off where the stick says nothing. */
+export function dosChecks(live: Live | undefined) {
+  return live?.settings?.dos ?? DOS_OFF;
+}
+
 /** The connections' DMZ hosts. */
 export function dmzs(live: Live | undefined) {
   return live?.settings?.dmz ?? [];
@@ -530,7 +536,7 @@ export function fixed(live: Live | undefined) {
 }
 
 /** The parts of the settings that come with the software of a stick that does the routing. */
-export type Served = "ipoe" | "lans" | "forwards" | "rules";
+export type Served = "ipoe" | "lans" | "forwards" | "rules" | "dos";
 
 /**
  * Whether the stick serves @part of its settings. A stick whose software has

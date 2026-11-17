@@ -214,6 +214,14 @@ TRIAL=$RUN/onu-trial.d/settings
 TRIAL_LIMIT=${TRIAL_LIMIT:-90}
 # Tenths of a second to wait for omcid to say that it changed its mode.
 APPLIED_TENTHS=${APPLIED_TENTHS:-50}
+# The switch's checks of malformed and hostile frames (dos_switch()), as the
+# settings DOS_<name> name them, each with its bit in dos_checks: the ones that
+# are on or off, then the flood checks, which are off or have a threshold, with
+# the name of the parameter of the threshold.
+DOS_ONOFF="LAND:1 BLAT:2 SYN_FIN:3 XMAS:4 NULL_SCAN:5 SYN_LOW_PORT:6 TCP_SHORT:7 \
+TCP_FRAG:8 ICMP_FRAG:9 PING_OF_DEATH:10 UDP_BOMB:11 SYN_DATA:12"
+DOS_FLOODS="SYN_FLOOD:13:dos_synflood_thresh FIN_FLOOD:14:dos_finflood_thresh \
+ICMP_FLOOD:15:dos_icmpflood_thresh"
 
 log() {
 	echo "onu-apply: $*" >&2
@@ -254,7 +262,10 @@ load() {
 		eval "LAN${n}_IPV6= LAN${n}_IPV6_SUBNET="
 		n=$((n + 1))
 	done
-	FW_OUT= FW_BETWEEN= FW_PING_IN= FW_PING_LANS=
+	FW_OUT= FW_BETWEEN= FW_PING_IN= FW_PING_LANS= DOS_SIDE=
+	for dos_c in $DOS_ONOFF $DOS_FLOODS; do
+		eval "DOS_${dos_c%%:*}="
+	done
 	defaults=$(onu-config defaults) || {
 		log "the defaults of the settings are not known: onu-config does not say them"
 		defaults=
@@ -304,6 +315,11 @@ load_file() {
 		# The firewall's defaults and the pings answered; its rules are
 		# read where they are needed (rules_fw()).
 		FW_OUT | FW_BETWEEN | FW_PING_IN | FW_PING_LANS) ;;
+		# The switch's checks of malformed and hostile frames.
+		DOS_LAND | DOS_BLAT | DOS_SYN_FIN | DOS_XMAS | DOS_NULL_SCAN | \
+			DOS_SYN_LOW_PORT | DOS_TCP_SHORT | DOS_TCP_FRAG | DOS_ICMP_FRAG | \
+			DOS_PING_OF_DEATH | DOS_UDP_BOMB | DOS_SYN_DATA | DOS_SYN_FLOOD | \
+			DOS_FIN_FLOOD | DOS_ICMP_FLOOD | DOS_SIDE) ;;
 		# Name servers, one blank apart.
 		IPOE[1-7]_DNS)
 			case $value in
@@ -2115,6 +2131,71 @@ ttl_decrement() {
 		log "the switch did not take l3_ttl_decrement $1"
 }
 
+# The switch's checks of malformed and hostile frames, as DOS_* say
+# (Documentation/networking/devlink/rtl9602c.rst, "DoS checks"): the frames
+# of the ports DOS_SIDE names are judged, each check on dropping what it
+# stops, and a flood check counting against its threshold. A flood check is
+# on with its threshold or off, since a threshold of 0 stops the first frame.
+# What is in force is kept in $RUN/onu-dos, so that a run that changes nothing
+# writes nothing, and a stick that never had a check on is left as the switch
+# starts, with none. The frames are judged only once the rest is in place, and
+# a parameter the switch does not take leaves them not judged at all.
+dos_switch() {
+	ds_mask=0
+	ds_th=
+	for ds_c in $DOS_ONOFF; do
+		eval "ds_v=\$DOS_${ds_c%%:*}"
+		[ "$ds_v" != on ] || ds_mask=$((ds_mask | 1 << ${ds_c#*:}))
+	done
+	for ds_c in $DOS_FLOODS; do
+		eval "ds_v=\$DOS_${ds_c%%:*}"
+		case $ds_v in
+		"" | off) continue ;;
+		*[!0-9]* | 0*)
+			log "DOS_${ds_c%%:*}: not a threshold; the check stays off"
+			continue
+			;;
+		esac
+		[ "$ds_v" -le 255 ] || {
+			log "DOS_${ds_c%%:*}: not a threshold; the check stays off"
+			continue
+		}
+		ds_bit=${ds_c#*:}
+		ds_mask=$((ds_mask | 1 << ${ds_bit%%:*}))
+		ds_th="$ds_th ${ds_c##*:}=$ds_v"
+	done
+	# Port 0 is the host's, port 2 the operator's.
+	case $DOS_SIDE in
+	host) ds_ports=1 ;;
+	both) ds_ports=5 ;;
+	*) ds_ports=4 ;;
+	esac
+	[ "$ds_mask" -ne 0 ] || ds_ports=0
+	ds_want="$ds_ports $ds_mask$ds_th"
+	ds_have=
+	[ -r "$RUN/onu-dos" ] && read -r ds_have <"$RUN/onu-dos"
+	[ "$ds_want" != "${ds_have:-0 0}" ] || return 0
+	onu-nl param dos_ports 0 || {
+		log "the switch did not take dos_ports 0: its checks stay as they were"
+		return 0
+	}
+	for ds_t in $ds_th; do
+		onu-nl param "${ds_t%%=*}" "${ds_t#*=}" || {
+			log "the switch did not take ${ds_t%%=*} ${ds_t#*=}: its checks are off"
+			rm -f "$RUN/onu-dos"
+			return 0
+		}
+	done
+	onu-nl param dos_actions 0 && onu-nl param dos_checks "$ds_mask" &&
+		onu-nl param dos_ports "$ds_ports" || {
+		log "the switch did not take its checks: they are off"
+		onu-nl param dos_ports 0 2>/dev/null
+		rm -f "$RUN/onu-dos"
+		return 0
+	}
+	echo "$ds_want" >"$RUN/onu-dos"
+}
+
 # Passthrough mode: the links to the host, one for each VLAN the sessions
 # hand their addresses down in, a VLAN on the host link or the host link
 # itself, with the stick's address on each; the sessions' addresses come
@@ -2286,6 +2367,7 @@ apply() {
 	log "$MODE mode"
 	sync_all
 	guard_fw
+	dos_switch
 }
 
 # The settings in force, /run/onu.conf and the sessions' accounts, copied

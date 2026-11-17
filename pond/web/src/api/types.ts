@@ -33,6 +33,7 @@ export type {
   Clock,
   Cpu,
   DmzInfo,
+  DosChecks,
   Family,
   FdbEntry,
   Firmware,

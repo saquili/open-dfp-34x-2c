@@ -13,28 +13,31 @@
  * where traffic comes from and goes to (the internet or a part of it, every
  * local network, one, or a device of one), its protocol and ports, IPv4,
  * IPv6 or both, and whether it lets it through or blocks it. The forms come
- * in at the list's right (components/SidePanel).
+ * in at the list's right (components/SidePanel). Under the defaults is the
+ * protection from attacks: the switch's checks of malformed packets and of
+ * floods, each its own, off until turned on, and whose packets they judge.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronDown, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useFwChange, useLeases, useRuleChange } from "../api/config";
+import { useDosChange, useFwChange, useLeases, useRuleChange } from "../api/config";
 import { useLive } from "../api/live";
-import type { FwDefaults, RuleInfo } from "../api/types";
+import type { DosChecks, FwDefaults, RuleInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { QueryNote } from "../components/Read";
 import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
 import { Badge, Dot, NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
+import { CHECKS, type Check, dosOn, FLOOD_START, FLOODS, type Flood, isLimit } from "../lib/dos";
 import { type End, lanOf, readEnd } from "../lib/fw";
 import { ip4, net4 } from "../lib/ipv4";
 import { ip6, prefix6 } from "../lib/ipv6";
 import { readPorts } from "../lib/ports";
 import { upTo, z } from "../lib/schemas";
-import { fwDefaults, MAX_RULES, rules, served } from "../lib/state";
+import { dosChecks, fwDefaults, MAX_RULES, rules, served } from "../lib/state";
 import { Sub, type T } from "./internet/shared";
 import { Choices, type Device, type Net, netName, useDevices, useNets } from "./Lan";
 
@@ -195,6 +198,145 @@ function DefaultsForm({ d, onClose }: { d: FwDefaults; onClose: () => void }) {
             field={form.register("ping_lans")}
             options={both}
           />
+        </div>
+        <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-base-300 px-4 py-2.5">
+          <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
+            {t("internet.save")}
+          </button>
+          <SaveState {...state} />
+        </div>
+      </form>
+    </PanelCard>
+  );
+}
+
+/** The side the checks judge, in words. */
+const SIDE_TEXT = {
+  internet: "dos.sideInternet",
+  host: "dos.sideHost",
+  both: "dos.sideBoth",
+} as const;
+
+/** What the switch drops of malformed packets and floods, and the button that changes it. */
+function ProtectionBar({ d, onEdit }: { d: DosChecks; onEdit: () => void }) {
+  const { t } = useI18n();
+  const n = dosOn(d);
+  return (
+    <section
+      aria-label={t("dos.title")}
+      className="flex shrink-0 flex-wrap items-center gap-x-8 gap-y-2 rounded-box border border-base-300 bg-base-100 px-4 py-2.5 text-sm"
+    >
+      <span className="font-semibold">{t("dos.title")}</span>
+      {n === 0 ? (
+        <span className="text-base-content/70">{t("dos.off")}</span>
+      ) : (
+        <>
+          <span>{t("dos.summary", { n, all: CHECKS.length + FLOODS.length })}</span>
+          <span>
+            <span className="text-base-content/70">{t("dos.side")}:</span> {t(SIDE_TEXT[d.side])}
+          </span>
+        </>
+      )}
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs btn-square ml-auto text-base-content/70"
+        onClick={onEdit}
+        aria-label={t("dos.edit")}
+        title={t("dos.edit")}
+      >
+        <Pencil className="size-4" />
+      </button>
+    </section>
+  );
+}
+
+/* The protection's form: a switch for each check, a limit for each flood, and whose packets. */
+type ProtectionValues = { side: DosChecks["side"] } & Record<Check | Flood, boolean> &
+  Record<`${Flood}_limit`, string>;
+
+function protectionValues(d: DosChecks): ProtectionValues {
+  const v: Record<string, boolean | string> = { side: d.side };
+  for (const k of CHECKS) v[k] = d[k] === "on";
+  for (const k of FLOODS) {
+    v[k] = d[k] !== "off";
+    v[`${k}_limit`] = d[k] !== "off" ? d[k] : FLOOD_START;
+  }
+  return v as ProtectionValues;
+}
+
+/** A switch with the name of a check and what it stops under it. */
+function CheckRow({ k, field }: { k: Check | Flood; field: UseFormRegisterReturn }) {
+  const { t } = useI18n();
+  return (
+    <label className="flex cursor-pointer items-start gap-3">
+      <input type="checkbox" className="toggle toggle-sm mt-0.5 shrink-0" {...field} />
+      <span className="grid gap-0.5">
+        <span className="text-sm font-semibold">{t(`dos.check.${k}`)}</span>
+        <span className="text-xs text-base-content/70">{t(`dos.checkHint.${k}`)}</span>
+      </span>
+    </label>
+  );
+}
+
+/** The protection's form: whose packets the switch judges, its checks, and the limits of the floods. */
+function ProtectionForm({ d, onClose }: { d: DosChecks; onClose: () => void }) {
+  const { t } = useI18n();
+  const change = useDosChange();
+  const state = useChangeState(change);
+  const form = useForm<ProtectionValues>({ defaultValues: protectionValues(d) });
+  const { isDirty, errors } = form.formState;
+  const side = [
+    { value: "internet" as const, label: t("dos.internet") },
+    { value: "host" as const, label: t("dos.host") },
+    { value: "both" as const, label: t("dos.both") },
+  ];
+  return (
+    <PanelCard id="dos" title={t("dos.title")} line={t("dos.line")} onClose={onClose}>
+      <form
+        onSubmit={form.handleSubmit((v) => {
+          const body: Record<string, string> = { SIDE: v.side };
+          for (const k of CHECKS) body[k.toUpperCase()] = v[k] ? "on" : "off";
+          for (const k of FLOODS) body[k.toUpperCase()] = v[k] ? v[`${k}_limit`].trim() : "off";
+          change.mutate(body, { onSuccess: onClose });
+        })}
+        noValidate
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <div className="grid min-h-0 flex-1 content-start gap-4 p-4 xl:overflow-auto">
+          <Choices
+            label={t("dos.sideTitle")}
+            hint={t("dos.sideHint")}
+            field={form.register("side")}
+            options={side}
+          />
+          <div className="grid gap-1">
+            <span className="text-sm font-semibold">{t("dos.malformedTitle")}</span>
+            <p className="text-xs text-base-content/70">{t("dos.malformedHint")}</p>
+          </div>
+          {CHECKS.map((k) => (
+            <CheckRow key={k} k={k} field={form.register(k)} />
+          ))}
+          <div className="grid gap-1">
+            <span className="text-sm font-semibold">{t("dos.floodsTitle")}</span>
+            <p className="text-xs text-base-content/70">{t("dos.floodsHint")}</p>
+          </div>
+          {FLOODS.map((k) => (
+            <div key={k} className="grid gap-2">
+              <CheckRow k={k} field={form.register(k)} />
+              {form.watch(k) && (
+                <Field
+                  label={t("dos.limit")}
+                  inputMode="numeric"
+                  maxLength={3}
+                  className="ml-10 max-w-40"
+                  error={errors[`${k}_limit`]?.message}
+                  {...form.register(`${k}_limit`, {
+                    validate: (val, all) => !all[k] || isLimit(val.trim()) || t("dos.limitBad"),
+                  })}
+                />
+              )}
+            </div>
+          ))}
         </div>
         <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-base-300 px-4 py-2.5">
           <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
@@ -576,8 +718,8 @@ function RuleCard({
   );
 }
 
-/** What the panel at the list's right is open on: a rule (none for a new one), or the defaults. */
-type Open = { rule: RuleInfo | null } | { defaults: true };
+/** What the panel at the list's right is open on: a rule (none for a new one), the defaults, or the protection. */
+type Open = { rule: RuleInfo | null } | { defaults: true } | { protection: true };
 
 /** The firewall: the defaults, the rules in order, and their forms. */
 function Firewall() {
@@ -587,6 +729,7 @@ function Firewall() {
   const list = rules(live);
   const full = list.length >= MAX_RULES;
   const d = fwDefaults(live);
+  const dos = dosChecks(live);
   const devices = useDevices(nets.map((p) => p.lan.id));
   /* The devices' names and addresses come from their leases. */
   const leases = useLeases();
@@ -602,6 +745,7 @@ function Firewall() {
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <QueryNote reads={leases} aside />
       <DefaultsBar d={d} onEdit={() => show({ defaults: true })} />
+      {served(live, "dos") && <ProtectionBar d={dos} onEdit={() => show({ protection: true })} />}
       <div className={withPanel(open != null)}>
         <section aria-labelledby="rules" className="@container flex flex-col xl:h-full xl:min-h-0">
           <div className="mt-px flex min-h-14 shrink-0 items-center gap-3 pt-4 pb-2">
@@ -658,6 +802,8 @@ function Firewall() {
           <SidePanel ref={form} onClose={close}>
             {"defaults" in open ? (
               <DefaultsForm key="defaults" d={d} onClose={close} />
+            ) : "protection" in open ? (
+              <ProtectionForm key="protection" d={dos} onClose={close} />
             ) : (
               <RuleForm
                 key={`rule:${open.rule?.id ?? "new"}`}

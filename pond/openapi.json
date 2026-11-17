@@ -4511,6 +4511,130 @@
         "operationId": "setFw"
       }
     },
+    "/api/set/dos": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "summary": "Change dos",
+        "description": "The switch's checks of malformed and hostile frames, and of floods of SYN, FIN and ICMP: each on or off, a flood check off or with its threshold, and whose frames they judge. LAND, BLAT, SYN_FIN, XMAS, NULL_SCAN, SYN_LOW_PORT, TCP_SHORT, TCP_FRAG, ICMP_FRAG, PING_OF_DEATH, UDP_BOMB and SYN_DATA, on or off; SYN_FLOOD, FIN_FLOOD and ICMP_FLOOD, off or a threshold from 1 to 255; SIDE, internet, host or both. A key not given stays as it is. The change goes on trial like the other settings.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XPond"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "KEY=VALUE lines, one per line",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "LAND": {
+                    "type": "string"
+                  },
+                  "BLAT": {
+                    "type": "string"
+                  },
+                  "SYN_FIN": {
+                    "type": "string"
+                  },
+                  "XMAS": {
+                    "type": "string"
+                  },
+                  "NULL_SCAN": {
+                    "type": "string"
+                  },
+                  "SYN_LOW_PORT": {
+                    "type": "string"
+                  },
+                  "TCP_SHORT": {
+                    "type": "string"
+                  },
+                  "TCP_FRAG": {
+                    "type": "string"
+                  },
+                  "ICMP_FRAG": {
+                    "type": "string"
+                  },
+                  "PING_OF_DEATH": {
+                    "type": "string"
+                  },
+                  "UDP_BOMB": {
+                    "type": "string"
+                  },
+                  "SYN_DATA": {
+                    "type": "string"
+                  },
+                  "SYN_FLOOD": {
+                    "type": "string"
+                  },
+                  "FIN_FLOOD": {
+                    "type": "string"
+                  },
+                  "ICMP_FLOOD": {
+                    "type": "string"
+                  },
+                  "SIDE": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "dos"
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The change is refused, and why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "403": {
+            "description": "No X-Pond header, or the default password is in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "setDos"
+      }
+    },
     "/api/set/service_rule": {
       "post": {
         "tags": [
@@ -6729,6 +6853,9 @@
           },
           "fw": {
             "$ref": "#/components/schemas/FwDefaults"
+          },
+          "dos": {
+            "$ref": "#/components/schemas/DosChecks"
           },
           "mode": {
             "type": [
@@ -9418,6 +9545,94 @@
             }
           ]
         }
+      },
+      "DosSwitch": {
+        "description": "A check of the switch, on or off.",
+        "type": "string",
+        "enum": [
+          "on",
+          "off"
+        ]
+      },
+      "DosChecks": {
+        "description": "The switch's checks of malformed and hostile frames, and of floods. Each of the twelve checks is on or off; a flood check, SYN, FIN or ICMP, is off or has its threshold, 1 to 255, which the switch counts matching frames against in a window of its own. side says whose frames the checks judge: those from the operator's side (internet, the default), from the host's, or both. A frame a check stops is dropped. All off by default.",
+        "type": "object",
+        "properties": {
+          "land": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "blat": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "syn_fin": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "xmas": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "null_scan": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "syn_low_port": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "tcp_short": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "tcp_frag": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "icmp_frag": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "ping_of_death": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "udp_bomb": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "syn_data": {
+            "$ref": "#/components/schemas/DosSwitch"
+          },
+          "syn_flood": {
+            "type": "string",
+            "pattern": "^(off|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$"
+          },
+          "fin_flood": {
+            "type": "string",
+            "pattern": "^(off|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$"
+          },
+          "icmp_flood": {
+            "type": "string",
+            "pattern": "^(off|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "internet",
+              "host",
+              "both"
+            ]
+          }
+        },
+        "required": [
+          "land",
+          "blat",
+          "syn_fin",
+          "xmas",
+          "null_scan",
+          "syn_low_port",
+          "tcp_short",
+          "tcp_frag",
+          "icmp_frag",
+          "ping_of_death",
+          "udp_bomb",
+          "syn_data",
+          "syn_flood",
+          "fin_flood",
+          "icmp_flood",
+          "side"
+        ]
       }
     }
   }

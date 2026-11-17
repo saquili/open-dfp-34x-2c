@@ -33,6 +33,8 @@ enum kind {
 	K_CIDR6,
 	K_IPV6_OPT,
 	K_PREFIX6,
+	K_FLOOD,
+	K_DOS_SIDE,
 };
 
 /*
@@ -416,6 +418,11 @@ static bool valid(enum kind kind, const char *v)
 		return !*v || ipv6(v, NULL);
 	case K_PREFIX6:
 		return !*v || prefix6(v);
+	case K_FLOOD:
+		return !strcmp(v, "off") || number(v, 1, 255, NULL);
+	case K_DOS_SIDE:
+		return !strcmp(v, "internet") || !strcmp(v, "host") ||
+		       !strcmp(v, "both");
 	}
 	return false;
 }
@@ -844,6 +851,34 @@ static const struct {
 	[SET_F_PING_LANS] = { "FW_PING_LANS", "block" },
 };
 
+/*
+ * The switch's checks of malformed and hostile frames, DOS_<suffix>, and
+ * their defaults: every check off, and the checks judge the frames from the
+ * operator's side. A flood check is off or has its threshold.
+ */
+static const struct {
+	const char *suffix;
+	enum kind kind;
+	const char *dflt;
+} g_dkeys[SETTINGS_NDKEYS] = {
+	[SET_D_LAND] = { "LAND", K_ONOFF, "off" },
+	[SET_D_BLAT] = { "BLAT", K_ONOFF, "off" },
+	[SET_D_SYN_FIN] = { "SYN_FIN", K_ONOFF, "off" },
+	[SET_D_XMAS] = { "XMAS", K_ONOFF, "off" },
+	[SET_D_NULL_SCAN] = { "NULL_SCAN", K_ONOFF, "off" },
+	[SET_D_SYN_LOW_PORT] = { "SYN_LOW_PORT", K_ONOFF, "off" },
+	[SET_D_TCP_SHORT] = { "TCP_SHORT", K_ONOFF, "off" },
+	[SET_D_TCP_FRAG] = { "TCP_FRAG", K_ONOFF, "off" },
+	[SET_D_ICMP_FRAG] = { "ICMP_FRAG", K_ONOFF, "off" },
+	[SET_D_PING_OF_DEATH] = { "PING_OF_DEATH", K_ONOFF, "off" },
+	[SET_D_UDP_BOMB] = { "UDP_BOMB", K_ONOFF, "off" },
+	[SET_D_SYN_DATA] = { "SYN_DATA", K_ONOFF, "off" },
+	[SET_D_SYN_FLOOD] = { "SYN_FLOOD", K_FLOOD, "off" },
+	[SET_D_FIN_FLOOD] = { "FIN_FLOOD", K_FLOOD, "off" },
+	[SET_D_ICMP_FLOOD] = { "ICMP_FLOOD", K_FLOOD, "off" },
+	[SET_D_SIDE] = { "SIDE", K_DOS_SIDE, "internet" },
+};
+
 /* The priority of the subscriber's IGMP where the OLT leaves it, and its default. */
 #define IGMP_PRIORITY "IGMP_PRIORITY"
 #define IGMP_PRIORITY_DEFAULT "auto"
@@ -853,6 +888,8 @@ void settings_defaults(struct settings *s)
 	memset(s, 0, sizeof(*s));
 	for (int k = 0; k < SETTINGS_NFKEYS; k++)
 		snprintf(s->fw[k], sizeof(s->fw[k]), "%s", g_fkeys[k].dflt);
+	for (int k = 0; k < SETTINGS_NDKEYS; k++)
+		snprintf(s->dos[k], sizeof(s->dos[k]), "%s", g_dkeys[k].dflt);
 	snprintf(s->igmp_priority, sizeof(s->igmp_priority), "%s",
 		 IGMP_PRIORITY_DEFAULT);
 	for (int k = 0; k < SETTINGS_NKEYS; k++)
@@ -1018,6 +1055,18 @@ int settings_line(struct settings *s, const char *line, char *err,
 		}
 		snprintf(s->fw[k], sizeof(s->fw[k]), "%s", v);
 		return 0;
+	}
+	if (!strncmp(key, "DOS_", 4)) {
+		for (k = 0; k < SETTINGS_NDKEYS; k++) {
+			if (strcmp(key + 4, g_dkeys[k].suffix))
+				continue;
+			if (!valid(g_dkeys[k].kind, v)) {
+				snprintf(err, errcap, "%s: not a value of it", key);
+				return -1;
+			}
+			snprintf(s->dos[k], sizeof(s->dos[k]), "%s", v);
+			return 0;
+		}
 	}
 	if (!strcmp(key, IGMP_PRIORITY)) {
 		if (strcmp(v, "auto") && strcmp(v, "host")) {
@@ -1709,6 +1758,10 @@ size_t settings_format_defaults(char *out, size_t cap)
 		len += (size_t)snprintf(out + (len < cap ? len : cap),
 					len < cap ? cap - len : 0, "%s=%s\n",
 					g_fkeys[k].name, g_fkeys[k].dflt);
+	for (int k = 0; k < SETTINGS_NDKEYS; k++)
+		len += (size_t)snprintf(out + (len < cap ? len : cap),
+					len < cap ? cap - len : 0, "DOS_%s=%s\n",
+					g_dkeys[k].suffix, g_dkeys[k].dflt);
 	len += (size_t)snprintf(out + (len < cap ? len : cap),
 				len < cap ? cap - len : 0, "%s=%s\n",
 				IGMP_PRIORITY, IGMP_PRIORITY_DEFAULT);
@@ -1810,6 +1863,12 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 			len += (size_t)snprintf(out + (len < cap ? len : cap),
 						len < cap ? cap - len : 0, "%s=%s\n",
 						g_fkeys[k].name, s->fw[k]);
+	/* The switch's checks, when not their default. */
+	for (int k = 0; k < SETTINGS_NDKEYS; k++)
+		if (strcmp(s->dos[k], g_dkeys[k].dflt))
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0, "DOS_%s=%s\n",
+						g_dkeys[k].suffix, s->dos[k]);
 	if (strcmp(s->igmp_priority, IGMP_PRIORITY_DEFAULT))
 		len += (size_t)snprintf(out + (len < cap ? len : cap),
 					len < cap ? cap - len : 0, "%s=%s\n",

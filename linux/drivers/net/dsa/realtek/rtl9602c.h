@@ -1052,7 +1052,7 @@ enum rtl9602c_ptp_tc {
  * 20, destination at 24, and, for a header of five words, the L4 ports at 28
  * and 30.
  */
-#define RTL9602C_FSEL_PPPOE_SID		2
+#define RTL9602C_FSEL_PPPOE_SID		12
 #define RTL9602C_FSEL_PPP_PROTO		4
 #define RTL9602C_FSEL_PPPOE_TTL_PROTO	5
 #define RTL9602C_FSEL_PPPOE_SRC_HI	6
@@ -1063,11 +1063,14 @@ enum rtl9602c_ptp_tc {
 #define RTL9602C_FSEL_PPPOE_DPORT	11
 
 /*
- * Selector 3 is kept as reset leaves it, origin and offset 0, and setup
- * writes it so: pointed elsewhere, with any other selector unchanged, it had
- * the L3 engine hand every frame it routed to the CPU with forwarding reason 8
- * (measured).
+ * Selectors 2 and 3 are kept as reset leaves them, origin and offset 0, and
+ * setup writes them so (measured): pointed elsewhere, with every other
+ * selector unchanged, selector 2 stopped the malformed-frame checks that read
+ * the TCP flags or the UDP length, which then passed every frame of their
+ * shape, and selector 3 had the L3 engine hand every frame it routed to the
+ * CPU with forwarding reason 8.
  */
+#define RTL9602C_FSEL_KEEP_DOS		2
 #define RTL9602C_FSEL_KEEP		3
 
 /*

@@ -56,6 +56,10 @@
  * address as a forward's does, which the switch's ACL judges it by; a
  * network removed takes the rules that name it or a device of it with it,
  * and a fixed address taken away the rules that go to its device.
+ *
+ * So are the switch's checks of malformed and hostile frames, DOS_*, which
+ * onu-apply gives the switch: each on or off, the three flood checks off or
+ * with a threshold, and DOS_SIDE, whose frames they judge.
  */
 
 #define _GNU_SOURCE
@@ -912,6 +916,76 @@ static void pv_fw(struct prov_buf *out, const char *text)
 	pv_close(out, '}');
 }
 
+/*
+ * The switch's checks of malformed and hostile frames: the key of the
+ * settings after DOS_, its name in the panel's JSON, the shape of its value
+ * and its default (onu-utils' settings.h). A flood check is off or has its
+ * threshold.
+ */
+enum dos_kind { DK_ONOFF, DK_FLOOD, DK_SIDE };
+
+static const struct {
+	const char *key;
+	const char *json;
+	enum dos_kind kind;
+	const char *dflt;
+} g_dos[] = {
+	{ "LAND", "land", DK_ONOFF, "off" },
+	{ "BLAT", "blat", DK_ONOFF, "off" },
+	{ "SYN_FIN", "syn_fin", DK_ONOFF, "off" },
+	{ "XMAS", "xmas", DK_ONOFF, "off" },
+	{ "NULL_SCAN", "null_scan", DK_ONOFF, "off" },
+	{ "SYN_LOW_PORT", "syn_low_port", DK_ONOFF, "off" },
+	{ "TCP_SHORT", "tcp_short", DK_ONOFF, "off" },
+	{ "TCP_FRAG", "tcp_frag", DK_ONOFF, "off" },
+	{ "ICMP_FRAG", "icmp_frag", DK_ONOFF, "off" },
+	{ "PING_OF_DEATH", "ping_of_death", DK_ONOFF, "off" },
+	{ "UDP_BOMB", "udp_bomb", DK_ONOFF, "off" },
+	{ "SYN_DATA", "syn_data", DK_ONOFF, "off" },
+	{ "SYN_FLOOD", "syn_flood", DK_FLOOD, "off" },
+	{ "FIN_FLOOD", "fin_flood", DK_FLOOD, "off" },
+	{ "ICMP_FLOOD", "icmp_flood", DK_FLOOD, "off" },
+	{ "SIDE", "side", DK_SIDE, "internet" },
+};
+
+/* Whether @v is a value of a key of the kind @kind. */
+static bool dos_value(enum dos_kind kind, const char *v)
+{
+	size_t n = strlen(v);
+
+	switch (kind) {
+	case DK_ONOFF:
+		return !strcmp(v, "on") || !strcmp(v, "off");
+	case DK_FLOOD:
+		if (!strcmp(v, "off"))
+			return true;
+		return n && n <= 3 && *v != '0' && strspn(v, "0123456789") == n &&
+		       strtoul(v, NULL, 10) <= 255;
+	case DK_SIDE:
+		return !strcmp(v, "internet") || !strcmp(v, "host") || !strcmp(v, "both");
+	}
+	return false;
+}
+
+/*
+ * The switch's checks of malformed and hostile frames, each as the settings
+ * name it, or its default where they name none.
+ */
+static void pv_dos(struct prov_buf *out, const char *text)
+{
+	char key[32], v[VALUE_MAX];
+
+	pv_open(out, '{');
+	for (size_t i = 0; i < ARRAY_SIZE(g_dos); i++) {
+		snprintf(key, sizeof(key), "DOS_%s", g_dos[i].key);
+		if (i)
+			pv_comma(out);
+		pv_key(out, g_dos[i].json);
+		pv_str(out, line_value(text, key, v, sizeof(v)) ? v : g_dos[i].dflt);
+	}
+	pv_close(out, '}');
+}
+
 /* The ports forwarded from the internet, each with its name. */
 static void pv_forwards(struct prov_buf *out, const char *text)
 {
@@ -1086,6 +1160,9 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 	pv_key(out, "fw");
 	pv_fw(out, text);
+	pv_comma(out);
+	pv_key(out, "dos");
+	pv_dos(out, text);
 	pv_comma(out);
 	explicit_bzero(acct, sizeof(acct));
 
@@ -2178,6 +2255,42 @@ int prov_fw_set(const char *val, char *err, size_t errcap)
 	struct prov_wait w = { .err = err, .errcap = errcap };
 
 	return prov_wait(prov_fw_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * The switch's checks of malformed and hostile frames: LAND, BLAT, SYN_FIN,
+ * XMAS, NULL_SCAN, SYN_LOW_PORT, TCP_SHORT, TCP_FRAG, ICMP_FRAG,
+ * PING_OF_DEATH, UDP_BOMB and SYN_DATA, on or off; SYN_FLOOD, FIN_FLOOD and
+ * ICMP_FLOOD, off or a threshold from 1 to 255; and SIDE, whose frames they
+ * judge, internet, host or both; one not given stays as it is (onu-utils'
+ * settings.h).
+ */
+int prov_dos_write(const char *val, char *err, size_t errcap, prov_done done, void *ctx)
+{
+	char change[VALUE_MAX * ARRAY_SIZE(g_dos)], v[VALUE_MAX];
+	size_t len = 0;
+
+	change[0] = '\0';
+	for (size_t x = 0; x < ARRAY_SIZE(g_dos); x++) {
+		if (!line_value(val, g_dos[x].key, v, sizeof(v)))
+			continue;
+		if (!dos_value(g_dos[x].kind, v)) {
+			snprintf(err, errcap, "%s: %s", g_dos[x].key,
+				 g_dos[x].kind == DK_ONOFF ? "on or off" :
+				 g_dos[x].kind == DK_FLOOD ? "off, or a threshold from 1 to 255" :
+							     "internet, host or both");
+			return -EINVAL;
+		}
+		append(change, sizeof(change), &len, "DOS_%s=%s\n", g_dos[x].key, v);
+	}
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_dos_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_dos_write(val, err, errcap, prov_waited, &w), &w);
 }
 
 /*

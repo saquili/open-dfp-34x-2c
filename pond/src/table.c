@@ -69,6 +69,10 @@ const struct prov pond_provs[] = {
 	  "What the firewall does where no rule decides: to the internet and "
 	  "between the local networks; and whether the stick answers a ping from "
 	  "the internet and from the local networks", NULL, prov_fw_write, 0 },
+	{ "dos", "Mode",
+	  "The switch's checks of malformed and hostile frames, and of floods of "
+	  "SYN, FIN and ICMP: each on or off, a flood check off or with its "
+	  "threshold, and whose frames they judge", NULL, prov_dos_write, 0 },
 	{ "settings", "Mode",
 	  "The data path: the sessions and where they hand their addresses down, "
 	  "kept in the configuration store",

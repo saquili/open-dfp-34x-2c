@@ -3082,7 +3082,8 @@ void rtl9602c_fsel_pppoe_setup(struct rtl9602c_priv *p)
 {
 	unsigned int i;
 
-	/* As reset leaves it, also after a kernel that moved it. */
+	/* As reset leaves them, also after a kernel that moved them. */
+	rtl9602c_w(p, RTL9602C_FIELDSEL_CFG + 4 * RTL9602C_FSEL_KEEP_DOS, 0);
 	rtl9602c_w(p, RTL9602C_FIELDSEL_CFG + 4 * RTL9602C_FSEL_KEEP, 0);
 	for (i = 0; i < ARRAY_SIZE(rtl9602c_fsel_pppoe); i++)
 		rtl9602c_w(p, RTL9602C_FIELDSEL_CFG +

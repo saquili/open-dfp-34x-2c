@@ -575,6 +575,21 @@ by its whole path where procd starts it.
    management VLAN alone, in bridge mode, in passthrough and with local
    networks alike.
 
+   The switch's checks of malformed and hostile frames are the settings
+   ``DOS_<check>`` (``src/settings.h``), all off by default, and ``apply``
+   gives them to the switch through the parameters ``dos_checks``,
+   ``dos_ports``, ``dos_actions`` and the three thresholds of the flood checks
+   (``onu-nl param``): the thresholds first, the ports that are judged last
+   (``DOS_SIDE``: the operator's, the host's or both), so that a check never
+   judges before it is whole, and a frame a check stops is dropped. What is in
+   force is the line of ``/run/onu-dos``, port mask, check mask and
+   thresholds; a run that changes nothing writes nothing, and a stick whose
+   checks were never on is not written to at all. A parameter the switch
+   refuses leaves its checks off and is tried again at the next run. A change
+   on trial goes back with the rest of the settings. The checks are described
+   in Documentation/networking/devlink/rtl9602c.rst ("DoS checks"), and
+   ``tests/test_onu_apply.sh`` runs ``apply`` against a stand-in of ``onu-nl``.
+
 ``onu-mgmt``
    the VLAN and the address the stick is managed on from the host side, and a
    change of them that cannot lock anyone out. ``onu-mgmt start`` records the

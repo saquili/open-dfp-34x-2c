@@ -2967,6 +2967,11 @@ static void test_rules(void)
 		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\","
 				"\"ping_in\":\"block\",\"ping_lans\":\"block\"}"),
 	      "a stick without rules serves none, and the defaults: out allowed, between blocked, no ping answered");
+	check(strstr(s, "\"dos\":{\"land\":\"off\",\"blat\":\"off\",\"syn_fin\":\"off\",\"xmas\":\"off\","
+			"\"null_scan\":\"off\",\"syn_low_port\":\"off\",\"tcp_short\":\"off\",\"tcp_frag\":\"off\","
+			"\"icmp_frag\":\"off\",\"ping_of_death\":\"off\",\"udp_bomb\":\"off\",\"syn_data\":\"off\","
+			"\"syn_flood\":\"off\",\"fin_flood\":\"off\",\"icmp_flood\":\"off\",\"side\":\"internet\"}"),
+	      "a stick without any of the switch's checks serves them all off, on the operator's side");
 
 	/* The printer of network 1, with an hour of its lease left. */
 	for (int i = 0; i < 8; i++)
@@ -3109,6 +3114,46 @@ static void test_rules(void)
 		      strstr(s, "\"fw\":{\"out\":\"allow\",\"between\":\"block\","
 				"\"ping_in\":\"block\",\"ping_lans\":\"block\"}"),
 	      "the defaults again are not written");
+
+	/* The switch's checks of malformed frames: one on, a flood check with its threshold, the side. */
+	rc = prov_dos_set("LAND=on\nSYN_FLOOD=40\nSIDE=both\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "DOS_LAND=on") &&
+		      file_has("/run/onu.conf", "DOS_SYN_FLOOD=40") &&
+		      file_has("/run/onu.conf", "DOS_SIDE=both") &&
+		      strstr(s, "\"dos\":{\"land\":\"on\",\"blat\":\"off\",") &&
+		      strstr(s, "\"syn_flood\":\"40\",\"fin_flood\":\"off\",\"icmp_flood\":\"off\","
+				"\"side\":\"both\"}"),
+	      "LAND=on, SYN_FLOOD=40 and SIDE=both turn a check on, give a flood its threshold and the host's side too");
+	rc = prov_dos_set("BLAT=on\nSYN_FLOOD=off\nSIDE=internet\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "DOS_LAND=on") && file_has("/run/onu.conf", "DOS_BLAT=on") &&
+		      !file_has("/run/onu.conf", "DOS_SYN_FLOOD") && !file_has("/run/onu.conf", "DOS_SIDE") &&
+		      strstr(s, "\"land\":\"on\",\"blat\":\"on\",") &&
+		      strstr(s, "\"syn_flood\":\"off\",") && strstr(s, "\"side\":\"internet\"}"),
+	      "a key not given stays, and a flood check off and the default side are not written");
+	check(prov_dos_set("LAND=maybe\n", err, sizeof(err)) == -EINVAL && !strcmp(err, "LAND: on or off"),
+	      "a check that is neither on nor off is refused");
+	check(prov_dos_set("SYN_FLOOD=0\n", err, sizeof(err)) == -EINVAL &&
+		      !strcmp(err, "SYN_FLOOD: off, or a threshold from 1 to 255"),
+	      "a threshold of 0, which stops the first frame, is refused");
+	check(prov_dos_set("ICMP_FLOOD=256\n", err, sizeof(err)) == -EINVAL &&
+		      prov_dos_set("FIN_FLOOD=on\n", err, sizeof(err)) == -EINVAL &&
+		      prov_dos_set("FIN_FLOOD=1000\n", err, sizeof(err)) == -EINVAL &&
+		      prov_dos_set("FIN_FLOOD=012\n", err, sizeof(err)) == -EINVAL,
+	      "a threshold beyond 255, or no number, or with a leading zero, is refused");
+	check(prov_dos_set("SIDE=lan\n", err, sizeof(err)) == -EINVAL &&
+		      !strcmp(err, "SIDE: internet, host or both"),
+	      "a side that is none is refused");
+	rc = prov_dos_set("LAND=off\nBLAT=off\nICMP_FLOOD=255\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "DOS_ICMP_FLOOD=255") && !file_has("/run/onu.conf", "DOS_LAND") &&
+		      !file_has("/run/onu.conf", "DOS_BLAT") && strstr(s, "\"icmp_flood\":\"255\","),
+	      "the highest threshold is taken, and checks off again are not written");
+	rc = prov_dos_set("ICMP_FLOOD=off\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "DOS_"),
+	      "the checks all off again leave nothing in the settings");
 
 	/* A fixed address taken away takes the rules that go to its device. */
 	rc = prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a3\nIP=\n", err, sizeof(err));
