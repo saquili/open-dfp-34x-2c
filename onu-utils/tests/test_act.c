@@ -72,6 +72,8 @@ static void test_the_table(void)
 static void test_values_in_their_places(void)
 {
 	const char *const lane[] = { "2500basex" };
+	const char *const pvid[] = { "4094" };
+	const char *const notpvid[] = { "-1" };
 	const char *const pair[] = { "100", "192.0.2.10/30" };
 	const char *const here[] = { "fe80::1" };
 	const char *const none[] = { NULL };
@@ -82,6 +84,9 @@ static void test_values_in_their_places(void)
 	puts("values in their places");
 	CHECK(!strcmp(run("lane_try", lane, &bad), "/usr/lib/onu/onu-lane try 2500basex"));
 	CHECK(!strcmp(run("lane_status", NULL, &bad), "/usr/lib/onu/onu-lane status"));
+	CHECK(!strcmp(run("pvid_try", pvid, &bad), "/usr/lib/onu/onu-pvid try 4094"));
+	CHECK(!strcmp(run("pvid_keep", NULL, &bad), "/usr/lib/onu/onu-pvid keep"));
+	CHECK(!*run("pvid_try", notpvid, &bad) && bad && !strcmp(bad, "pvid"));
 	CHECK(!strcmp(run("mgmt_add", pair, &bad),
 		      "/usr/lib/onu/onu-mgmt add 100 192.0.2.10/30"));
 	CHECK(!strcmp(run("changes_confirm", here, &bad),

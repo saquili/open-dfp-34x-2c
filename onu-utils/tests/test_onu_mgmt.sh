@@ -45,6 +45,9 @@ setup() {
 	for c in onu-nl logger onu-apply; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
+	# onu-pvid: the PVID of the file pvid, 1 without it.
+	printf '#!/bin/sh\necho "onu-pvid $*" >>"$LOG"\n[ "$1" = status ] && echo "PVID=$(cat "%s/pvid" 2>/dev/null || echo 1)"\nexit 0\n' \
+		"$T" >"$T/bin/onu-pvid"
 	printf '#!/bin/sh\necho "onu-net $*" >>"$LOG"\ncase $1 in\nset) cat >"%s/part" ;;\nwait) [ ! -e "%s/no-address" ] ;;\nesac\n' \
 		"$T" "$T" >"$T/bin/onu-net"
 	printf '#!/bin/sh\necho "dropbear $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -P ] && echo 22 >"$2"; shift; done\n' \
@@ -95,10 +98,6 @@ check 'in_part "device mgmt 4094"'
 check 'in_part "interface mgmt mgmt 198.51.100.2/30"'
 # The address on the SFP port is netifd's too, as the interface "data".
 check 'in_part "interface data sfp 192.0.2.2/30"'
-# Without "untagged" the host link's untagged frames go where the switch
-# forwards them: no rule of untagged management stays.
-check 'grep -qx UNTAGGED=0 "$ONU_ROOT/run/onu-mgmt"'
-check 'logged "onu-nl filter del sfp pref 3" && ! grep -q "untagged" "$LOG"'
 check '[ "$(part | wc -l)" -eq 3 ]'
 # The sessions keep their packets off the pair's networks.
 check 'logged "onu-apply guard"'
@@ -119,34 +118,18 @@ check 'echo "$out" | grep -qx ADDRESS=198.51.100.2/30'
 check '! echo "$out" | grep -q PENDING_'
 teardown
 
-echo "with untagged, the host link's untagged frames go to management"
+echo "a pair in another VLAN, confirmed through it, has a PVID of the old VLAN go back to 1"
 setup
-run start 4094 198.51.100.2/30 "" untagged
-check '[ $rc -eq 0 ] && grep -qx UNTAGGED=1 "$ONU_ROOT/run/onu-mgmt"'
-check 'logged "onu-nl filter add sfp pref 4 untagged sw push 4094"'
-check 'logged "onu-nl filter add sfp pref 5 vlan 0 sw modify 4094"'
-check 'logged "onu-nl filter add sfp egress pref 3 vlan 4094 sw pop"'
-check 'logged "onu-nl filter add sfp pref 3 untagged hw trap"'
-# The software's rules come before the switch's trap.
-check '[ "$(grep -n "untagged sw push" "$LOG" | cut -d: -f1)" -lt "$(grep -n "untagged hw trap" "$LOG" | cut -d: -f1)" ]'
-run status
-check 'echo "$out" | grep -qx UNTAGGED=1'
-run start 4094 198.51.100.2/30 "" tagged
-check '[ $rc -eq 2 ]'
-teardown
-
-echo "a pair in another VLAN, confirmed through it, keeps it tagged"
-setup
-run start 4094 198.51.100.2/30 "" untagged
+echo 4094 >"$T/pvid"
 run add 100 192.0.2.6/30
-check '[ $rc -eq 0 ] && logged "onu-nl filter add sfp pref 2 vlan 100 hw trap"'
-: >"$LOG"
 run commit
-check '[ $rc -eq 0 ] && grep -qx MGMT_UNTAGGED=0 "$T/stored" && grep -qx MGMT_VLAN=100 "$T/stored"'
-check 'logged "onu-nl filter del sfp pref 3" && logged "onu-nl filter del sfp egress pref 3"'
-check '! grep -q "filter add" "$LOG"'
-run status
-check 'echo "$out" | grep -qx UNTAGGED=0 && echo "$out" | grep -qx VLAN=100'
+check '[ $rc -eq 0 ] && logged "onu-pvid set 1"'
+teardown
+setup
+echo 35 >"$T/pvid"
+run add 100 192.0.2.6/30
+run commit
+check '[ $rc -eq 0 ] && ! logged "onu-pvid set 1"'
 teardown
 
 echo "what is not a pair does not start"

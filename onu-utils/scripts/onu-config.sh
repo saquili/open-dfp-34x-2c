@@ -24,7 +24,7 @@
 #   onu-config auth HASH a hash of root's password made elsewhere, the same way
 #   onu-config system    the stick's own settings of the KEY=VALUE lines of the
 #                        standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
-#                        MGMT_UNTAGGED, SFP_LANE, NTP_SERVER, LOG_SERVER,
+#                        SFP_LANE, SFP_PVID, NTP_SERVER, LOG_SERVER,
 #                        PRODUCT_NAME) into
 #                        the store and into /run/onu-system; an empty value
 #                        removes the key
@@ -446,9 +446,8 @@ system() {
 			exit 1
 		if (k == "MGMT_ADDRESS" && v !~ /^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+)?$/)
 			exit 1
-		# Whether the untagged frames of the host link go to management
-		# (1) or not (0, as when the key is not there): ADR 0023.
-		if (k == "MGMT_UNTAGGED" && v !~ /^[01]?$/)
+		# The PVID of the SFP port, 1 to 4094 (ADR 0023, onu-pvid).
+		if (k == "SFP_PVID" && (v !~ /^([1-9][0-9]*)?$/ || v + 0 > 4094))
 			exit 1
 		if (k == "SFP_LANE" && v !~ /^(auto|2500basex|1000basex-an|1000basex|2500basex-an)?$/)
 			exit 1
@@ -465,7 +464,7 @@ system() {
 		if (k == "PRODUCT_NAME" &&
 		    (length(v) > 20 || v !~ /^([A-Za-z0-9]([A-Za-z0-9 .-]*[A-Za-z0-9])?)?$/))
 			exit 1
-		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|MGMT_UNTAGGED|SFP_LANE|NTP_SERVER|LOG_SERVER|PRODUCT_NAME)$/)
+		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE|SFP_PVID|NTP_SERVER|LOG_SERVER|PRODUCT_NAME)$/)
 			exit 1
 		print "SYS_" k "=" v
 	}') || return 1
@@ -581,16 +580,16 @@ first_password() {
 	log "root's password is the shipped firmware's administrator's"
 }
 
-# At the first start, while the store holds nothing yet, the host link's
-# untagged frames go to management (ADR 0023): a stick installed from the
-# shipped firmware's page answers at the address that page had, with no VLAN
+# At the first start, while the store holds nothing yet, the SFP port's PVID
+# is the management VLAN, 4094 (ADR 0023): a stick installed from the shipped
+# firmware's page answers untagged at the address that page had, with no VLAN
 # set on the router. A stick updated from an earlier build of this system
-# keeps its store, without the key, and management on its VLAN alone.
+# keeps its store, without the key, and the PVID 1, the PON side's.
 first_management() {
 	[ -n "$STORE" ] || return 0
-	echo SYS_MGMT_UNTAGGED=1 | onu-config --store "$STORE" import || return 0
-	echo MGMT_UNTAGGED=1 >>"$SYSTEM.new"
-	log "the host link's untagged frames go to management, as on a new stick"
+	echo SYS_SFP_PVID=4094 | onu-config --store "$STORE" import || return 0
+	echo SFP_PVID=4094 >>"$SYSTEM.new"
+	log "the SFP port's PVID is the management VLAN, 4094, as on a new stick"
 }
 
 # Root's new password, the line of the standard input: 8 to 128 characters

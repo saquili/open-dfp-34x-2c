@@ -1,0 +1,214 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-pvid: the SFP port's PVID, as on an 802.1Q switch (ADR 0023): the VLAN
+# the host's untagged frames get, whose frames go back to the host untagged.
+# 1 is the PON side's, the OLT's untagged traffic, so the untagged frames go
+# to the OLT as they are; the management VLAN's, as a new stick starts, has
+# them reach management; a service's host VLAN gives them to that service.
+#
+#   onu-pvid status       PVID and, on trial, TRIAL_PVID, TRIAL_PREVIOUS and
+#                         TRIAL_UNTIL, as KEY=VALUE lines
+#   onu-pvid try PVID     the PVID on trial: back to the one of before after
+#                         TRIAL_LIMIT seconds (600) unless kept
+#   onu-pvid keep         keep the PVID on trial, in the store as well
+#   onu-pvid revert       end the trial now, back to the PVID of before
+#   onu-pvid set PVID     the PVID at once and in the store, with no trial
+#   onu-pvid apply        at boot, after onu-mgmt start: the store's PVID
+#                         (SFP_PVID of /run/onu-system), 1 without one
+#
+# The PVID is in /run/onu-pvid, which omcid reads at each programming of the
+# VLAN rules, and which this script alone writes. When the PVID is a VLAN of
+# the stick's own, management's or a VLAN device on sfp, this script has the
+# switch trap the untagged frames, and those with a priority tag, to the CPU
+# alone, so that none reaches the PON, and in software gives them the tag of
+# that VLAN on sfp's ingress and takes it away from the VLAN's frames on its
+# egress. A service's VLAN, or one that leads nowhere, omcid takes care of:
+# a rule of the classifier that gives the untagged frames the service's VLAN
+# on the fibre, or a drop. The management of the stick may come untagged, so
+# a PVID that cuts it off goes back by itself unless kept. TRIAL_UNTIL is in
+# seconds of /proc/uptime. ONU_ROOT, when set, is put in front of /run and
+# /proc, for the tests, and TRIAL_LIMIT names another length of the trial.
+
+set -u
+ROOT=${ONU_ROOT:-}
+RUN=$ROOT/run
+STATE=$RUN/onu-pvid
+TRIAL=$RUN/onu-trial.d/pvid
+SYSTEM=$RUN/onu-system
+MGMT=$RUN/onu-mgmt
+LIMIT=${TRIAL_LIMIT:-600}
+# The priorities of its rules on sfp: the switch's trap (TC_PRIO_PVID of
+# omcid/target/tcprio.h), and in software the tag given to untagged frames
+# and the VID given to a priority tag; on sfp's egress, the tag taken away.
+PVID_TRAP=3
+PVID_PUSH=4
+PVID_PRIO=5
+PVID_POP=3
+
+log() {
+	echo "onu-pvid: $*" >&2
+	logger -t onu-pvid "$*" 2>/dev/null
+	return 0
+}
+
+valid() {
+	case $1 in
+	"" | *[!0-9]* | 0*) return 1 ;;
+	esac
+	[ "$1" -ge 1 ] && [ "$1" -le 4094 ]
+}
+
+field() {
+	sed -n "s/^$1=//p" "$2" 2>/dev/null | head -n 1
+}
+
+uptime_s() {
+	cut -d. -f1 "$ROOT/proc/uptime"
+}
+
+current() {
+	p=$(field PVID "$STATE")
+	valid "$p" && echo "$p" || echo 1
+}
+
+# Whether VLAN $1 is the stick's own on the host link: management's, or a
+# VLAN device on sfp, of onu-apply's.
+stick_vlan() {
+	[ "$(field VLAN "$MGMT")" = "$1" ] && return 0
+	awk -F'|' -v vid="$1" 'NR > 2 {
+		gsub(/[ \t]/, "", $2)
+		gsub(/[ \t]/, "", $3)
+		if ($2 == vid && $3 == "sfp")
+			found = 1
+	} END { exit !found }' "$ROOT/proc/net/vlan/config" 2>/dev/null
+}
+
+# The rules of a PVID of the stick's own taken away: the trap first, so that
+# no trapped frame meets the bridge without its tag.
+rules_off() {
+	onu-nl filter del sfp pref "$PVID_TRAP" 2>/dev/null
+	onu-nl filter del sfp pref "$PVID_PUSH" 2>/dev/null
+	onu-nl filter del sfp pref "$PVID_PRIO" 2>/dev/null
+	onu-nl filter del sfp egress pref "$PVID_POP" 2>/dev/null
+	return 0
+}
+
+# The rules of the PVID $1 of the stick's own: the software's first, then
+# the switch's trap.
+rules_on() {
+	onu-nl clsact add sfp &&
+		onu-nl filter add sfp pref "$PVID_PUSH" untagged sw push "$1" &&
+		onu-nl filter add sfp pref "$PVID_PRIO" vlan 0 sw modify "$1" &&
+		onu-nl filter add sfp egress pref "$PVID_POP" vlan "$1" sw pop &&
+		onu-nl filter add sfp pref "$PVID_TRAP" untagged hw trap
+}
+
+# The PVID $1 in force: recorded for omcid, and the rules of the stick's own
+# VLAN when it is one.
+use() {
+	printf 'PVID=%s\n' "$1" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
+	rules_off
+	if [ "$1" != 1 ] && stick_vlan "$1"; then
+		rules_on "$1" || {
+			log "the untagged frames do not reach VLAN $1 of the stick's"
+			return 1
+		}
+	fi
+	return 0
+}
+
+store() {
+	printf 'SFP_PVID=%s\n' "$1" | onu-config system ||
+		log "the PVID $1 is kept until the next start only"
+}
+
+status() {
+	echo "PVID=$(current)"
+	if [ -r "$TRIAL" ]; then
+		echo "TRIAL_PVID=$(field PVID "$TRIAL")"
+		echo "TRIAL_PREVIOUS=$(field PREVIOUS "$TRIAL")"
+		echo "TRIAL_UNTIL=$(field UNTIL "$TRIAL")"
+	fi
+}
+
+# End the trial named by @1, its token, back to the PVID of before.
+expire() {
+	[ -r "$TRIAL" ] && [ "$(field TOKEN "$TRIAL")" = "$1" ] || return 0
+	previous=$(field PREVIOUS "$TRIAL")
+	rm -f "$TRIAL"
+	use "$previous" || return 1
+	log "the trial of the PVID ended unkept; back to $previous"
+}
+
+try() {
+	valid "$1" || {
+		log "not a PVID: $1"
+		return 2
+	}
+	[ -e "$TRIAL" ] && {
+		log "a trial runs already"
+		return 1
+	}
+	previous=$(current)
+	[ "$previous" = "$1" ] && return 0
+	token=$$
+	until=$(($(uptime_s) + LIMIT))
+	mkdir -p "${TRIAL%/*}" || return 1
+	printf 'PVID=%s\nPREVIOUS=%s\nUNTIL=%s\nTOKEN=%s\n' "$1" "$previous" \
+		"$until" "$token" >"$TRIAL.new" && mv "$TRIAL.new" "$TRIAL" || return 1
+	use "$1" || {
+		rm -f "$TRIAL"
+		use "$previous"
+		return 1
+	}
+	log "the PVID $1 on trial for $LIMIT s; before it $previous"
+	# The keeper of the deadlines (onu-change watch) takes it back.
+}
+
+keep() {
+	[ -r "$TRIAL" ] || return 0
+	pvid=$(field PVID "$TRIAL")
+	rm -f "$TRIAL"
+	store "$pvid"
+	log "the PVID $pvid kept"
+}
+
+revert() {
+	[ -r "$TRIAL" ] || return 0
+	expire "$(field TOKEN "$TRIAL")"
+}
+
+set_now() {
+	valid "$1" || {
+		log "not a PVID: $1"
+		return 2
+	}
+	rm -f "$TRIAL"
+	use "$1" && store "$1"
+}
+
+apply() {
+	pvid=$(field SFP_PVID "$SYSTEM")
+	[ -n "$pvid" ] || pvid=1
+	valid "$pvid" || {
+		log "the store's PVID is not one: $pvid; 1 instead"
+		pvid=1
+	}
+	use "$pvid"
+}
+
+case ${1:-} in
+status) status ;;
+try) try "${2:-}" ;;
+keep) keep ;;
+revert) revert ;;
+expire) expire "${2:-}" ;;
+set) set_now "${2:-}" ;;
+apply) apply ;;
+*)
+	echo "usage: onu-pvid status|try PVID|keep|revert|set PVID|apply" >&2
+	exit 2
+	;;
+esac

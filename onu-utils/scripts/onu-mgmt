@@ -7,17 +7,15 @@
 # added beside the old one, and replaces it only when confirmed, which a
 # person can do only once the new pair answers.
 #
-#   onu-mgmt start VLAN ADDRESS [DATA_ADDRESS] [untagged]
+#   onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]
 #                          the pair of the boot, on the interface mgmt, and
-#                          the address on the host link itself, if any:
+#                          the address on the SFP port itself, if any:
 #                          recorded, given to netifd, and its VLAN kept from
-#                          the PON by the switch's rules; with "untagged" the
-#                          host link's untagged frames go to management too;
-#                          what is not a pair fails and changes nothing
-#   onu-mgmt status        VLAN, ADDRESS, IFACE, DATA_ADDRESS, UNTAGGED
-#                          and, while a change waits, PENDING_VLAN,
-#                          PENDING_ADDRESS and PENDING_UNTIL, as KEY=VALUE
-#                          lines
+#                          the PON by the switch's rules; what is not a pair
+#                          fails and changes nothing
+#   onu-mgmt status        VLAN, ADDRESS, IFACE, DATA_ADDRESS and, while a
+#                          change waits, PENDING_VLAN, PENDING_ADDRESS and
+#                          PENDING_UNTIL, as KEY=VALUE lines
 #   onu-mgmt add VLAN ADDRESS
 #                          add the new pair beside the old: an interface (or
 #                          the old one's, in the same VLAN), the switch's
@@ -27,21 +25,14 @@
 #   onu-mgmt commit        the new pair replaces the old, in the store too
 #   onu-mgmt cancel        the new pair goes, the old one stays
 #
-# With "untagged" (ADR 0023) the switch traps the host link's frames without
-# a tag, and those with a priority tag, to the CPU alone, so that none of
-# them reaches the PON; in software they are given the management VLAN on the
-# way in, and the management VLAN's frames leave sfp without their tag.
-#
 # The pair in use is recorded in /run/onu-mgmt (VLAN, ADDRESS, IFACE, the
 # VLAN's interface, NAME, the pair's interface of netifd, PREF, the priority
-# of its switch rules, UNTAGGED, 1 when the host link's untagged frames go
-# to management, and DATA_ADDRESS, the address on the host link itself, if
-# any), by start and again by each commit. netifd brings the pairs up: this
-# script writes them as its part "mgmt" of netifd's configuration
-# (onu-net), the pair in use and, while a change waits, the new one, with
-# the address on the host link itself as the interface "data", and waits
-# for the new address before it starts the ssh server on it. The status
-# daemon listens on the addresses itself.
+# of its switch rules, and DATA_ADDRESS, the address on the SFP port itself,
+# if any), by start and again by each commit. netifd brings the pairs up: this script writes them as its part
+# "mgmt" of netifd's configuration (onu-net), the pair in use and, while a
+# change waits, the new one, with the address on the SFP port as the
+# interface "data", and waits for the new address before it starts the ssh
+# server on it. The status daemon listens on the addresses itself.
 # ONU_ROOT, when set, is put in front of /run and /proc, for the tests.
 
 set -u
@@ -59,13 +50,6 @@ LIMIT=${PENDING_LIMIT:-600}
 PREF_A=1
 PREF_B=2
 KEY=$RUN/dropbear/host_key
-# The priorities of the rules that send the host link's untagged frames to
-# management: the switch's trap, and in software the tag given to them, the
-# VID given to a priority tag, and, on sfp's egress, the tag taken away.
-UNTAGGED_TRAP=3
-UNTAGGED_PUSH=4
-UNTAGGED_PRIO=5
-UNTAGGED_POP=3
 
 log() {
 	echo "onu-mgmt: $*" >&2
@@ -92,27 +76,6 @@ vlan_ok() {
 address_ok() {
 	echo "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|30)$' &&
 		echo "${1%/*}" | awk -F. '{ for (i = 1; i <= 4; i++) if ($i > 255) exit 1 }'
-}
-
-# The host link's untagged frames to the management VLAN $1 (ADR 0023): the
-# software's rules first, so that no frame the switch traps reaches the
-# bridge without the tag, then the switch's trap.
-untagged_on() {
-	untagged_off
-	onu-nl filter add sfp pref "$UNTAGGED_PUSH" untagged sw push "$1" &&
-		onu-nl filter add sfp pref "$UNTAGGED_PRIO" vlan 0 sw modify "$1" &&
-		onu-nl filter add sfp egress pref "$UNTAGGED_POP" vlan "$1" sw pop &&
-		onu-nl filter add sfp pref "$UNTAGGED_TRAP" untagged hw trap
-}
-
-# The host link's untagged frames back to where the switch forwards them: the
-# trap goes first.
-untagged_off() {
-	onu-nl filter del sfp pref "$UNTAGGED_TRAP" 2>/dev/null
-	onu-nl filter del sfp pref "$UNTAGGED_PUSH" 2>/dev/null
-	onu-nl filter del sfp pref "$UNTAGGED_PRIO" 2>/dev/null
-	onu-nl filter del sfp egress pref "$UNTAGGED_POP" 2>/dev/null
-	return 0
 }
 
 # The switch's rules for a management VLAN, at a priority of their own: on
@@ -177,9 +140,8 @@ iface_conf() {
 # its addresses change, leaves the one alone when the other comes or goes:
 # the address a person manages the stick from never goes away under them.
 # Two pairs in one VLAN are two interfaces on one device. The address on the
-# host link itself is the interface "data": netifd takes away from a device
-# it holds what it did not put there, and the port may be a link of the
-# sessions too.
+# SFP port is the interface "data": netifd takes away from a device it holds
+# what it did not put there, and the port may be a link of the sessions too.
 net_apply() {
 	data=$(field DATA_ADDRESS "$STATE")
 	{
@@ -202,33 +164,19 @@ start() {
 		log "not a VLAN and an address with its prefix: $1 $2"
 		return 2
 	}
-	case ${4:-} in
-	untagged) untagged=1 ;;
-	"") untagged=0 ;;
-	*)
-		log "not untagged: $4"
-		return 2
-		;;
-	esac
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=mgmt\nNAME=mgmt\nPREF=%s\nDATA_ADDRESS=%s\nUNTAGGED=%s\n' \
-		"$1" "$2" "$PREF_A" "$3" "$untagged" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=mgmt\nNAME=mgmt\nPREF=%s\nDATA_ADDRESS=%s\n' \
+		"$1" "$2" "$PREF_A" "$3" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
 	rm -f "$PENDING"
 	# The pair's rules, whatever an earlier start of this script left.
 	rules_del "$PREF_A"
 	if ! { onu-nl clsact add sfp && onu-nl clsact add pon && rules_add "$1" "$PREF_A"; }; then
 		log "frames of VLAN $1 can go out to the PON or come in from it"
 	fi
-	if [ "$untagged" = 1 ]; then
-		untagged_on "$1" ||
-			log "the host link's untagged frames do not reach management"
-	else
-		untagged_off
-	fi
 	net_apply
 }
 
 status() {
-	for k in VLAN ADDRESS IFACE DATA_ADDRESS UNTAGGED; do
+	for k in VLAN ADDRESS IFACE DATA_ADDRESS; do
 		echo "$k=$(field "$k" "$STATE")"
 	done
 	if [ -r "$PENDING" ]; then
@@ -321,28 +269,25 @@ commit() {
 	iface=$(field IFACE "$PENDING")
 	name=$(field NAME "$PENDING")
 	pref=$(field PREF "$PENDING")
+	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\n' "$vlan" "$address" | onu-config system ||
+		log "the management address $address is kept until the next start only"
 	old_vlan=$(field VLAN "$STATE")
 	old_iface=$(field IFACE "$STATE")
 	old_pref=$(field PREF "$STATE")
 	data=$(field DATA_ADDRESS "$STATE")
-	untagged=$(field UNTAGGED "$STATE")
-	# A pair in another VLAN was confirmed through that VLAN, tagged, and is
-	# kept so: the host link's untagged frames no longer go to management.
-	keep=
-	if [ "$vlan" != "$old_vlan" ] && [ "${untagged:-0}" = 1 ]; then
-		untagged=0
-		keep=MGMT_UNTAGGED=0
-	fi
-	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\n%s\n' "$vlan" "$address" "$keep" |
-		grep -v '^$' | onu-config system ||
-		log "the management address $address is kept until the next start only"
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nDATA_ADDRESS=%s\nUNTAGGED=%s\n' \
-		"$vlan" "$address" "$iface" "$name" "$pref" "$data" "${untagged:-0}" >"$STATE.new" &&
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nDATA_ADDRESS=%s\n' \
+		"$vlan" "$address" "$iface" "$name" "$pref" "$data" >"$STATE.new" &&
 		mv "$STATE.new" "$STATE"
 	rm -f "$PENDING"
-	[ -z "$keep" ] || untagged_off
 	net_apply || log "netifd was not told that the old management address goes"
 	[ "$iface" = "$old_iface" ] || rules_del "$old_pref"
+	# A pair in another VLAN was confirmed through that VLAN, tagged, and is
+	# kept so: an SFP PVID of the old VLAN's goes back to the PON side's, 1
+	# (onu-pvid, ADR 0023).
+	if [ "$vlan" != "$old_vlan" ] &&
+		[ "$(onu-pvid status 2>/dev/null | sed -n 's/^PVID=//p')" = "$old_vlan" ]; then
+		onu-pvid set 1 || log "the SFP port's PVID stays $old_vlan, a VLAN no longer the stick's"
+	fi
 	# One ssh server again, on the new address and the data path's: procd
 	# starts the server of the boot again (onu-run) once it ends, with the
 	# pair that is now in use.
@@ -365,14 +310,14 @@ cancel() {
 }
 
 case ${1:-} in
-start) start "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+start) start "${2:-}" "${3:-}" "${4:-}" ;;
 status) status ;;
 add) add "${2:-}" "${3:-}" ;;
 commit) commit ;;
 cancel) cancel ;;
 expire) drop_pending "${2:-}" ;;
 *)
-	echo "usage: onu-mgmt start VLAN ADDRESS [DATA_ADDRESS] [untagged]|status|add VLAN ADDRESS|commit|cancel" >&2
+	echo "usage: onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]|status|add VLAN ADDRESS|commit|cancel" >&2
 	exit 2
 	;;
 esac

@@ -383,13 +383,13 @@ printf 'admin_password=admin\n' >"$T/ponid.asked"
 run load
 check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ "$(root_hash)" = "$DEFAULT_HASH" ]'
 # The first start keeps one thing: the untagged frames go to management (ADR 0023).
-check '[ "$(cat "$ONU_STORE")" = SYS_MGMT_UNTAGGED=1 ]'
+check '[ "$(cat "$ONU_STORE")" = SYS_SFP_PVID=4094 ]'
 printf 'admin_password=tab\tinside\n' >"$T/ponid.asked"
 run load
-check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ "$(cat "$ONU_STORE")" = SYS_MGMT_UNTAGGED=1 ]'
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ "$(cat "$ONU_STORE")" = SYS_SFP_PVID=4094 ]'
 rm -f "$T/ponid.asked"
 run load
-check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ "$(cat "$ONU_STORE")" = SYS_MGMT_UNTAGGED=1 ]'
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-auth" ] && [ "$(cat "$ONU_STORE")" = SYS_SFP_PVID=4094 ]'
 teardown
 
 echo "a password set over the default ends the ssh server that took keys only"
@@ -541,26 +541,27 @@ printf 'PRODUCT_NAME=\n' | "$STORE_SCRIPT" system 2>/dev/null
 check '! grep -q PRODUCT_NAME "$ONU_ROOT/run/onu-system"'
 check 'grep -q -x MGMT_VLAN=100 "$ONU_ROOT/run/onu-system"'
 teardown
-# A new stick's first start sends the host link's untagged frames to
-# management, and keeps that; a store of before, without the key, keeps them
-# where they went, and leaves no file behind at boot.
+# A new stick's first start makes the SFP port's PVID the management VLAN,
+# and keeps it; a store of before, without the key, keeps the PVID 1.
 setup
 run load
-check '[ "$(cat "$ONU_ROOT/run/onu-system")" = MGMT_UNTAGGED=1 ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-system")" = SFP_PVID=4094 ]'
 run load
-check '[ "$(cat "$ONU_ROOT/run/onu-system")" = MGMT_UNTAGGED=1 ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-system")" = SFP_PVID=4094 ]'
 teardown
 setup
 echo SYS_HOSTNAME=x | onu-config --store "$ONU_STORE" import
 run load
-check '! grep -q MGMT_UNTAGGED "$ONU_ROOT/run/onu-system" && ! grep -q MGMT_UNTAGGED "$ONU_STORE"'
+check '! grep -q SFP_PVID "$ONU_ROOT/run/onu-system" && ! grep -q SFP_PVID "$ONU_STORE"'
 teardown
 setup
-printf 'MGMT_UNTAGGED=2\n' | "$STORE_SCRIPT" system 2>/dev/null
-rc=$?
-check '[ $rc -ne 0 ]'
-printf 'MGMT_UNTAGGED=0\n' | "$STORE_SCRIPT" system 2>/dev/null
-check 'grep -q -x MGMT_UNTAGGED=0 "$ONU_ROOT/run/onu-system"'
+for bad in 0 4095 01 x; do
+	printf 'SFP_PVID=%s\n' "$bad" | "$STORE_SCRIPT" system 2>/dev/null
+	rc=$?
+	check '[ $rc -ne 0 ]'
+done
+printf 'SFP_PVID=35\n' | "$STORE_SCRIPT" system 2>/dev/null
+check 'grep -q -x SFP_PVID=35 "$ONU_ROOT/run/onu-system"'
 teardown
 
 echo "the host a session delegates its IPv6 prefix to, kept across a restart"

@@ -9,7 +9,7 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 ``onu-apply``, ``onu-update``, ``onu-svc``, ``pon``, ``onu-nl`` and
 ``passwd``, which are in ``/usr/sbin`` and ``/usr/bin``. The others only other
 programs run, and they are in ``/usr/lib/onu``, out of a person's way (ADR
-0012): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``,
+0012): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-pvid``,
 ``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call``,
 ``onu-fw``, ``onu-dhcpc`` and ``onu-config.sh``. A script that runs one of them finds it there, and names it
 by its whole path where procd starts it.
@@ -616,19 +616,37 @@ by its whole path where procd starts it.
    comes or goes.
 
    The address on ``sfp`` itself, ``DATA_ADDRESS``, is the interface ``data``
-   of the same part. With ``untagged`` (``MGMT_UNTAGGED=1``, the first start
-   after an install from the shipped firmware's page) the host link's frames
-   without a tag go to management too (ADR 0023): the switch traps them, and
-   those with a priority tag, to the CPU alone, so none reaches the PON, and
-   in software they are given the management VLAN on the way in, whose frames
-   leave ``sfp`` without their tag; management then answers untagged alone,
-   and ``DATA_ADDRESS`` gets none of them::
+   of the same part. A pair in another VLAN, confirmed through that VLAN,
+   sets the SFP port's PVID back to 1 when it was the old VLAN's
+   (``onu-pvid``)::
 
-      onu-mgmt start VLAN ADDRESS [DATA_ADDRESS] [untagged]   # at boot
+      onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]   # at boot
       onu-mgmt add VLAN ADDRESS
       onu-mgmt commit
       onu-mgmt cancel
       onu-mgmt status
+
+``onu-pvid``
+   the SFP port's PVID, as on an 802.1Q switch (ADR 0023): the VLAN the
+   host's untagged frames get, whose frames go back to the host untagged. 1
+   is the PON side's, so the untagged frames go to the OLT as they are; a
+   new stick starts with the management VLAN, 4094, so its panel answers
+   untagged (``SFP_PVID`` of the settings, which ``onu-config`` stores at
+   the first start); a service's host VLAN gives them to that service. When
+   the PVID is a VLAN of the stick's own, management's or a VLAN device on
+   ``sfp``, the switch traps the untagged frames, and those with a priority
+   tag, to the CPU alone, and software gives them that VLAN's tag on ``sfp``'s
+   ingress and takes it away on its egress (filters 3 to 5 of
+   ``omcid/target/tcprio.h``); a service's VLAN, or one that leads nowhere,
+   omcid takes care of, which reads ``/run/onu-pvid``. A change runs on trial
+   and goes back after ten minutes unless kept, as the lane's does::
+
+      onu-pvid apply          # at boot, after onu-mgmt start
+      onu-pvid status
+      onu-pvid try PVID
+      onu-pvid keep
+      onu-pvid revert
+      onu-pvid set PVID       # at once, with no trial
 
 ``onu-change``
    the changes on trial (ADR 0011), whichever program made them: the

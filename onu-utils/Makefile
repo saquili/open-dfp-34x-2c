@@ -168,6 +168,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	python3 -I tests/test_acl.py $(abspath ..)
 	sh tests/test_onu_trial.sh
 	sh tests/test_onu_lane.sh
+	sh tests/test_onu_pvid.sh
 	sh tests/test_onu_change.sh
 	sh tests/test_onu_mgmt.sh
 	sh tests/test_onu_net.sh
