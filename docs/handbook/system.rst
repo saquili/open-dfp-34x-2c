@@ -246,7 +246,9 @@ stops is dropped.
      - Traffic between two servers that use one port at both ends: NTP from
        port 123 to port 123 is dropped (M).
    * - ``DOS_SYN_FIN``, ``DOS_XMAS``, ``DOS_NULL_SCAN``
-     - A TCP segment with SYN and FIN both set, an Xmas scan, a null scan.
+     - A TCP segment with SYN and FIN both set; an Xmas scan, FIN, URG and PSH
+       set with a sequence number of 0; a null scan, no flag set with a
+       sequence number of 0 (M: with another sequence number both passed).
      - Nothing known.
    * - ``DOS_SYN_LOW_PORT``
      - A SYN from a source port below 1024.
@@ -272,7 +274,9 @@ stops is dropped.
 
 The checks were tried on the stick with frames bridged from the host's side
 to the PON, each check dropping every frame of its own shape and none of the
-ordinary frames sent between them (M: ONT-UART on the bench's OLT,
+ordinary frames sent between them, and through the settings as the panel
+sets them: on trial, back by themselves after 90 s, back at once, and kept
+and in force again after a restart (M: ONT-UART on the bench's OLT,
 2026-11-17; ``linux/Documentation/networking/dsa/rtl9602c-acl-qos.rst``). A
 threshold counts in a window of about a millisecond (M: SYNs at 2000 a second
 against a threshold of 1 passed at about 700 a second, of 2 at about 1400, of 3
