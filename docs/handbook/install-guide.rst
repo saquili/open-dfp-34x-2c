@@ -182,8 +182,9 @@ them from the shipped firmware's files:
   the default, ``admin``, set the one you want on the shipped page now: the
   default is not taken, and the panel would then ask for a new password at
   the first sign-in instead (ADR 0009).
-* **Its LAN address becomes the panel's**, on VLAN 4094, at every start
-  until the panel moves the stick to an address of its own. If you gave the
+* **Its LAN address becomes the panel's**, without a VLAN tag as the page
+  had it, and on VLAN 4094, at every start until the panel moves the stick
+  to an address of its own. If you gave the
   page another address, the panel is at that one, and the router needs an
   address of its network in the steps below.
 
@@ -223,8 +224,8 @@ someone has signed in to its panel (Step 5) or over ssh from the host's
 side, within 300 seconds of its start: that is how it knows it can be
 reached as it will be managed, which its own checks from inside cannot tell.
 If nobody signs in by then, it restarts into the shipped firmware by itself,
-which runs as before; the install can be made again. So have Step 4 ready
-while the page writes, and sign in as soon as the stick answers.
+which runs as before; the install can be made again. The router needs no
+change for Step 4: sign in as soon as the stick answers.
 
 The time the page takes to write has not been measured. Leave the stick in
 its cage until it has restarted.
@@ -232,18 +233,10 @@ its cage until it has restarted.
 Step 4: Reach the panel
 =======================
 
-This system answers on VLAN 4094 of the host link, at the address the shipped
-firmware's page had; the host link itself has no address of the stick's
-(README, "Reaching the panel"). Move the router's address onto the VLAN::
-
-    ip address del 192.168.1.2/24 dev eth1
-    ip link add link eth1 name eth1.4094 type vlan id 4094
-    ip address add 192.168.1.2/24 dev eth1.4094
-    ip link set eth1.4094 up
-
-Keep that network on the VLAN alone: the same network on both ``eth1`` and
-``eth1.4094`` leaves the router two routes to it. Some half a minute after its
-restart the stick answers::
+This system answers at the address the shipped firmware's page had, without
+a VLAN tag as the page did, and on VLAN 4094 of the host link (README,
+"Reaching the panel"). The router's address stays on the port. Some half a
+minute after its restart the stick answers::
 
     ping -c 3 192.168.1.1
 
@@ -543,14 +536,13 @@ update:
    is where it was before this system was installed." From now on every start
    is the shipped firmware's, with its own settings; this system stays in the
    other bank.
-3. Move the router's address back onto the port itself::
+3. Open ``192.168.1.1``: the shipped firmware's page, which signs you in as
+   before the install. Its link may go down for about a minute at a time
+   while it tries the lane's modes, as in step 2. A router that reached the
+   panel on VLAN 4094 moves its address back onto the port itself first::
 
        ip link delete eth1.4094
        ip address add 192.168.1.2/24 dev eth1
-
-   Open ``192.168.1.1``: the shipped firmware's page, which signs you in as
-   before the install. Its link may go down for about a minute at a time
-   while it tries the lane's modes, as in step 2.
 
 In the test of the first release the stick restarted into the shipped
 firmware with its own settings, and its page answered at ``192.168.1.1``
@@ -621,18 +613,18 @@ When something fails
      - It is not a release's ``web-install.tar``, or it is damaged (step 1).
    * - The shipped firmware's page says the update failed
      - Expected (step 3). Wait for the restart, then step 4.
-   * - After the install the panel does not answer on VLAN 4094, and the
-       shipped firmware's page answers again without a tag
+   * - After the install the shipped firmware's page answers at its
+       address again, not the panel
      - The stick runs the shipped firmware: the package's script refused the
        stick, whose partitions are not those of this stick's shipped firmware,
        or this system did not come up and its trial gave way after at most
        300 seconds. The shipped firmware's bank was not written. Install once
        more; if it ends the same way, the console shows why
        (``recovery.rst``).
-   * - Nothing answers, five minutes after the restart: neither the panel on
-       VLAN 4094 nor the shipped firmware's page without a tag
+   * - Nothing answers, five minutes after the restart: neither the panel
+       nor the shipped firmware's page
      - Check the router's side first: the port's link and its mode (step 2),
-       ``eth1.4094`` up with its address. Then take the stick out of the cage
+       and its address on the port. Then take the stick out of the cage
        and put it back: the boot loader starts the bank that starts by
        default. If still nothing answers, go to the serial console:
        ``recovery.rst``, "Where the stick is".

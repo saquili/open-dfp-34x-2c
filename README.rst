@@ -433,10 +433,12 @@ Before you install
   writes the flash from the boot loader's prompt over the serial console
   (`flashing.rst <docs/handbook/flashing.rst>`__). Either way the shipped
   firmware stays in the other bank, as the way back, with its settings.
-* **The panel is on VLAN 4094**, at the address where the shipped firmware's
-  page was, ``192.168.1.1/24`` unless it was changed there (`Reaching the
-  panel`_). The host link itself has no address of the stick's: the OLT's
-  services may put it in a bridge.
+* **The panel answers without a VLAN tag**, at the address where the
+  shipped firmware's page was, ``192.168.1.1/24`` unless it was changed
+  there, and on VLAN 4094 (`Reaching the panel`_). The router's frames
+  without a tag then go to the panel, not to the OLT's services. A stick
+  updated from an earlier build of this system keeps the panel on VLAN 4094
+  alone.
 * **Copy the whole flash right after the install**, before the first
   ``update.bin``. Take it over ssh and compare its SHA-256 digest with the
   stick's, the way that was tried on a stick (`backup.rst
@@ -493,12 +495,20 @@ Before you install
 Reaching the panel
 ------------------
 
-The stick answers on VLAN 4094 of its host link, which its switch keeps away
-from the PON, at the address the shipped firmware's page had. Give the
-router's SFP port that VLAN and an address of the same network, then open
-``https://192.168.1.1/`` (or the address you had given the shipped
-firmware) and sign in as ``root``. On a Linux router whose SFP port is
-``eth1``::
+The stick answers at the address the shipped firmware's page had, on VLAN
+4094 of its host link, which its switch keeps away from the PON. Installed
+from the shipped firmware's page, it answers there without a VLAN tag too:
+the router's frames without a tag go to the panel and nowhere else, so give
+the router's SFP port an address of the same network, open
+``https://192.168.1.1/`` (or the address you had given the shipped firmware)
+and sign in as ``root``. An OLT's service on the subscriber's frames without
+a tag gets none of them meanwhile (ADR 0023,
+`docs/adr/0023-untagged-frames-to-management.rst
+<docs/adr/0023-untagged-frames-to-management.rst>`__).
+
+A stick updated from an earlier build of this system answers on VLAN 4094
+alone: give the router's SFP port that VLAN and an address of the same
+network. On a Linux router whose SFP port is ``eth1``::
 
     ip link add link eth1 name eth1.4094 type vlan id 4094
     ip address add 192.168.1.2/24 dev eth1.4094

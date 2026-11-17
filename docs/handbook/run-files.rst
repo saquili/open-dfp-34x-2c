@@ -127,13 +127,15 @@ Shared by two components
      - ``onu-mgmt``
      - ``onu-apply``, ``onu-trial``, ``onu-config``, ``omcid``
      - The management pair in use: ``VLAN``, ``ADDRESS``, ``IFACE``, ``NAME``,
-       ``PREF`` and ``DATA_ADDRESS``.
+       ``PREF``, ``DATA_ADDRESS`` and ``UNTAGGED``, 1 when the host link's
+       untagged frames go to management.
    * - ``/run/onu-system``
      - ``onu-config``
      - the boot script, ``onu-run``, ``onu-lane``, ``pond``
      - The stick's own settings, ``NAME=value``: ``HOSTNAME``, ``MGMT_VLAN``,
-       ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER``, ``LOG_SERVER``,
-       ``PRODUCT_NAME`` (``pond``, which takes ``BuchOS`` without it).
+       ``MGMT_ADDRESS``, ``MGMT_UNTAGGED``, ``SFP_LANE``, ``NTP_SERVER``,
+       ``LOG_SERVER``, ``PRODUCT_NAME`` (``pond``, which takes ``BuchOS``
+       without it).
    * - ``/run/onu-auth``
      - ``onu-config``
      - ``onu-config``, ``onu-run``, ``onu-mgmt``, the console's profile
