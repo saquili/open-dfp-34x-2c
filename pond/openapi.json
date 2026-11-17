@@ -1294,6 +1294,16 @@
                         }
                       ]
                     },
+                    "sfp_pvid": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/SfpPvid"
+                        },
+                        {
+                          "$ref": "#/components/schemas/Error"
+                        }
+                      ]
+                    },
                     "mgmt": {
                       "anyOf": [
                         {
@@ -1931,6 +1941,53 @@
           }
         },
         "operationId": "getSfpLane"
+      }
+    },
+    "/api/get/sfp_pvid": {
+      "get": {
+        "tags": [
+          "values"
+        ],
+        "summary": "The value sfp_pvid",
+        "description": "The SFP port's PVID, the VLAN of the host's untagged frames, and a change on trial",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "sfp_pvid"
+                    },
+                    "value": {
+                      "$ref": "#/components/schemas/SfpPvid"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "value"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "500": {
+            "description": "The value cannot be read, or is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getSfpPvid"
       }
     },
     "/api/get/mgmt": {
@@ -3571,6 +3628,94 @@
         "operationId": "setSfpLane"
       }
     },
+    "/api/set/sfp_pvid": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "summary": "Change sfp_pvid",
+        "description": "The SFP port's PVID on trial, or the trial kept or taken back: one of the three keys.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XPond"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "KEY=VALUE lines, one per line",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "PVID": {
+                    "type": "string",
+                    "description": "1 to 4094: the PVID on trial"
+                  },
+                  "KEEP": {
+                    "type": "string",
+                    "description": "1: keep the PVID on trial"
+                  },
+                  "REVERT": {
+                    "type": "string",
+                    "description": "1: go back to the PVID before"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "sfp_pvid"
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The change is refused, and why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "403": {
+            "description": "No X-Pond header, or the default password is in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "setSfpPvid"
+      }
+    },
     "/api/set/identity": {
       "post": {
         "tags": [
@@ -4901,7 +5046,7 @@
         ],
         "requestBody": {
           "required": true,
-          "description": "KEY=VALUE lines: VLAN (1 to 4094, or untagged), ADDRESS and GATEWAY (empty for none), or COMMIT=1, or CANCEL=1",
+          "description": "KEY=VALUE lines: VLAN (1 to 4094), ADDRESS and GATEWAY (empty for none), or COMMIT=1, or CANCEL=1",
           "content": {
             "text/plain": {
               "schema": {
@@ -8206,7 +8351,7 @@
         ]
       },
       "ServiceRules": {
-        "description": "pond's value \"service_rules\": the rules in force, the stick's and the person's.",
+        "description": "pond's value \"service_rules\": the rules in force, the stick's and the person's, and what became of the host's untagged frames.",
         "type": "object",
         "properties": {
           "rules": {
@@ -8214,10 +8359,63 @@
             "items": {
               "$ref": "#/components/schemas/ServiceRule"
             }
+          },
+          "untagged": {
+            "type": "object",
+            "description": "What became of the host link's untagged frames at the last programming of the OLT's VLAN rules (ADR 0023).",
+            "properties": {
+              "pvid": {
+                "type": "number",
+                "description": "The SFP port's PVID: 1 while the untagged frames are the OLT's, as they come."
+              },
+              "stick": {
+                "type": "boolean",
+                "description": "The stick itself takes the PVID's VLAN: management, or a VLAN of its own."
+              },
+              "leads": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The VLAN on the fibre the PVID leads the untagged frames into, a service's; null for none."
+              },
+              "service": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "The VLAN on the fibre of the service the OLT set up on untagged frames; null without one."
+              },
+              "host": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "That service's VLAN towards the host while the PVID is not 1; null while it takes the untagged frames."
+              },
+              "bridged": {
+                "type": "boolean",
+                "description": "No rule of the OLT's names untagged frames while it made a bridge port of a GEM port: they cross its bridge as they are."
+              },
+              "clash": {
+                "type": "boolean",
+                "description": "The OLT set up a service on untagged frames, or lets them cross its bridge, but the PVID leads them elsewhere."
+              }
+            },
+            "required": [
+              "pvid",
+              "stick",
+              "leads",
+              "service",
+              "host",
+              "bridged",
+              "clash"
+            ]
           }
         },
         "required": [
-          "rules"
+          "rules",
+          "untagged"
         ]
       },
       "Iptv": {
@@ -8770,11 +8968,8 @@
         "type": "object",
         "properties": {
           "vlan": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "description": "The management VLAN, 1 to 4094, or null: untagged, on the host link itself, as a new stick starts."
+            "type": "number",
+            "description": "The management VLAN, 1 to 4094."
           },
           "address": {
             "type": [
@@ -8803,10 +8998,7 @@
             ],
             "properties": {
               "vlan": {
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "address": {
                 "type": "string"
@@ -9654,6 +9846,44 @@
           "fin_flood",
           "icmp_flood",
           "side"
+        ]
+      },
+      "SfpPvid": {
+        "description": "The SFP port's PVID (pond's value \"sfp_pvid\", ADR 0023): the VLAN the host's untagged frames get, whose frames go back to the host untagged, as on an 802.1Q switch, and a change on trial.",
+        "type": "object",
+        "properties": {
+          "pvid": {
+            "type": "number",
+            "description": "The PVID in force, 1 to 4094: 1 is the PON side's, so the untagged frames go to the OLT as they are; a new stick starts with the management VLAN."
+          },
+          "trial": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A PVID on trial, which goes back unless kept.",
+            "properties": {
+              "pvid": {
+                "type": "number"
+              },
+              "previous": {
+                "type": "number"
+              },
+              "until_s": {
+                "type": "number",
+                "description": "When it goes back, in seconds of the stick's uptime."
+              }
+            },
+            "required": [
+              "pvid",
+              "previous",
+              "until_s"
+            ]
+          }
+        },
+        "required": [
+          "pvid",
+          "trial"
         ]
       }
     }

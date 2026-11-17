@@ -388,6 +388,103 @@ int prov_mgmt(struct prov_buf *out)
 	return 0;
 }
 
+/*
+ * The SFP port's PVID (ADR 0023): the one in force, and a change on trial, as
+ * onu-pvid says.
+ */
+int prov_sfp_pvid(struct prov_buf *out)
+{
+	char text[256], v[16];
+
+	if (bus_act("pvid_status", NULL, NULL, 0, NULL, text, sizeof(text)))
+		return -EIO;
+	pv_open(out, '{');
+	pv_key(out, "pvid");
+	pv_line_num(out, text, "PVID");
+	pv_comma(out);
+	pv_key(out, "trial");
+	if (line_of(text, "TRIAL_PVID", v, sizeof(v))) {
+		pv_open(out, '{');
+		pv_key(out, "pvid");
+		pv_line_num(out, text, "TRIAL_PVID");
+		pv_comma(out);
+		pv_key(out, "previous");
+		pv_line_num(out, text, "TRIAL_PREVIOUS");
+		pv_comma(out);
+		pv_key(out, "until_s");
+		pv_line_num(out, text, "TRIAL_UNTIL");
+		pv_close(out, '}');
+	} else {
+		pv_null(out);
+	}
+	pv_close(out, '}');
+	return 0;
+}
+
+/* A change of the PVID: a trial, a keep or a revert. */
+static struct prov_change g_pvid;
+
+/* What onu-pvid said of a change: 0, or why it was refused. */
+static int pvid_result(int code, const char *output, char *err, size_t errcap)
+{
+	if (code == 2 || code == -EINVAL) {
+		snprintf(err, errcap, "not a PVID: 1 to 4094");
+		return -EINVAL;
+	}
+	if (code) {
+		snprintf(err, errcap, "%s", *output ? output : "the PVID was not changed");
+		err[strcspn(err, "\n")] = '\0';
+		return -EBUSY;
+	}
+	return 0;
+}
+
+static void pvid_changed(void *ctx, int code, const char *output)
+{
+	char err[256];
+	int rc = pvid_result(code, output, err, sizeof(err));
+
+	(void)ctx;
+	prov_change_end(&g_pvid, rc, err);
+}
+
+int prov_sfp_pvid_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx)
+{
+	static const char *const names[] = { "pvid" };
+	char pvid[8], v[8];
+	const char *const values[] = { pvid };
+	const char *method;
+	int rc;
+
+	if (line_of(val, "PVID", pvid, sizeof(pvid))) {
+		method = "pvid_try";
+	} else if (line_of(val, "KEEP", v, sizeof(v))) {
+		method = "pvid_keep";
+	} else if (line_of(val, "REVERT", v, sizeof(v))) {
+		method = "pvid_revert";
+	} else {
+		snprintf(err, errcap, "PVID=1 to 4094, KEEP=1 or REVERT=1");
+		return -EINVAL;
+	}
+	rc = prov_change_take(&g_pvid, done, ctx, err, errcap);
+	if (rc)
+		return rc;
+	rc = bus_act_begin(method, names, values, 1, NULL, pvid_changed, NULL);
+	if (rc) {
+		prov_change_drop(&g_pvid);
+		return pvid_result(rc, "", err, errcap);
+	}
+	return -EINPROGRESS;
+}
+
+int prov_sfp_pvid_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_sfp_pvid_write(val, err, errcap, prov_waited, &w), &w);
+}
+
 /* A flag of KEY= in @text, 0 or 1, as JSON, or null. */
 static void pv_line_bool(struct prov_buf *out, const char *text, const char *key)
 {

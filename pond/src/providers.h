@@ -35,6 +35,10 @@ int prov_sfp_lane(struct prov_buf *out);
 int prov_sfp_lane_write(const char *val, char *err, size_t errcap,
 			prov_done done, void *ctx);
 int prov_sfp_lane_set(const char *val, char *err, size_t errcap);
+int prov_sfp_pvid(struct prov_buf *out);
+int prov_sfp_pvid_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx);
+int prov_sfp_pvid_set(const char *val, char *err, size_t errcap);
 int prov_tls(struct prov_buf *out);
 
 /*

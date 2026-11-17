@@ -26,6 +26,9 @@ const struct prov pond_provs[] = {
 	{ "sfp_lane", "System",
 	  "The SFP lane's setting, the one it runs in, and a change on trial",
 	  prov_sfp_lane, prov_sfp_lane_write, PROV_VOLATILE },
+	{ "sfp_pvid", "System",
+	  "The SFP port's PVID, the VLAN of the host's untagged frames, and a "
+	  "change on trial", prov_sfp_pvid, prov_sfp_pvid_write, PROV_VOLATILE },
 	{ "mgmt", "System",
 	  "The management VLAN, address and gateway, and a new pair that waits "
 	  "to be confirmed from it", prov_mgmt, NULL, PROV_VOLATILE },

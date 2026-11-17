@@ -3274,6 +3274,18 @@ static const char mgmt_stub[] =
 	" printf 'PENDING_VLAN=100\\nPENDING_ADDRESS=192.0.2.6/30\\nPENDING_GATEWAY=\\nPENDING_UNTIL=1100\\n'\n"
 	"exit 0\n";
 
+/* A stand-in of onu-pvid: its PVID, a trial while the file pvid.trial is. */
+static const char pvid_stub[] =
+	"#!/bin/sh\n"
+	"echo \"$*\" >>\"$POND_ROOT/pvid.log\"\n"
+	"case $1 in\n"
+	"status) echo PVID=4094\n"
+	"  [ -e \"$POND_ROOT/pvid.trial\" ] &&"
+	" printf 'TRIAL_PVID=35\\nTRIAL_PREVIOUS=4094\\nTRIAL_UNTIL=1600\\n' ;;\n"
+	"try) [ \"$2\" = 0 ] && exit 2 ;;\n"
+	"esac\n"
+	"exit 0\n";
+
 static const char system_store_stub[] =
 	"#!/bin/sh\n[ \"$1\" = system ] && cat >\"$POND_ROOT/stored-system\"\n";
 
@@ -3339,6 +3351,25 @@ static void test_system(void)
 			      "\"gateway\":null,\"until_s\":1100}") != NULL,
 	      "a new pair that waits, and when it goes unless confirmed");
 	unsetenv("POND_ONU_MGMT");
+
+	put("/pvid-stub", pvid_stub, 0755);
+	setenv("POND_ONU_PVID", prov_path("/pvid-stub", stub, sizeof(stub)), 1);
+	s = render(prov_sfp_pvid, buf, sizeof(buf), &e);
+	check(!e && !strcmp(s, "{\"pvid\":4094,\"trial\":null}"), "the SFP port's PVID");
+	put("/pvid.trial", "", 0644);
+	s = render(prov_sfp_pvid, buf, sizeof(buf), &e);
+	check(!e && strstr(s, "\"trial\":{\"pvid\":35,\"previous\":4094,\"until_s\":1600}") != NULL,
+	      "a PVID on trial, the one of before and when it ends");
+	check(prov_sfp_pvid_set("PVID=35\n", err, sizeof(err)) == 0 &&
+		      prov_sfp_pvid_set("KEEP=1\n", err, sizeof(err)) == 0 &&
+		      prov_sfp_pvid_set("REVERT=1\n", err, sizeof(err)) == 0 &&
+		      file_has("/pvid.log", "status\nstatus\ntry 35\nkeep\nrevert\n"),
+	      "a trial, a keep and a revert go to onu-pvid");
+	check(prov_sfp_pvid_set("PVID=0\n", err, sizeof(err)) == -EINVAL,
+	      "a PVID that is none is refused");
+	check(prov_sfp_pvid_set("SPEED=1\n", err, sizeof(err)) == -EINVAL,
+	      "a change that is none of them is refused");
+	unsetenv("POND_ONU_PVID");
 
 	put("/system-store", system_store_stub, 0755);
 	put("/hostname-stub", hostname_stub, 0755);

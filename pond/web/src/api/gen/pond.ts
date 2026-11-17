@@ -58,6 +58,7 @@ import type {
   GetServiceRules200,
   GetSettings200,
   GetSfpLane200,
+  GetSfpPvid200,
   GetSsh200,
   GetTcRules200,
   GetTconts200,
@@ -107,6 +108,8 @@ import type {
   SetSettingsBody,
   SetSfpLane200,
   SetSfpLaneBody,
+  SetSfpPvid200,
+  SetSfpPvidBody,
   SshHostKey200,
   SshKeys200,
   SshKeysOnlyBody,
@@ -2762,6 +2765,120 @@ export function useGetSfpLane<
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
   const queryOptions = getGetSfpLaneQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getGetSfpPvidUrl = () => {
+  return `/api/get/sfp_pvid`;
+};
+
+/**
+ * The SFP port's PVID, the VLAN of the host's untagged frames, and a change on trial
+ * @summary The value sfp_pvid
+ */
+export const getSfpPvid = async (
+  options?: Parameters<typeof pondFetch>[1],
+): Promise<GetSfpPvid200> => {
+  return pondFetch<GetSfpPvid200>(getGetSfpPvidUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetSfpPvidQueryKey = () => {
+  return [`/api/get/sfp_pvid`] as const;
+};
+
+export const getGetSfpPvidQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSfpPvid>>,
+  TError = UnauthorisedResponse | Error,
+>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getSfpPvid>>, TError, TData>>;
+  request?: SecondParameter<typeof pondFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetSfpPvidQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getSfpPvid>>> = ({ signal }) =>
+    getSfpPvid({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSfpPvid>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetSfpPvidQueryResult = NonNullable<Awaited<ReturnType<typeof getSfpPvid>>>;
+export type GetSfpPvidQueryError = UnauthorisedResponse | Error;
+
+export function useGetSfpPvid<
+  TData = Awaited<ReturnType<typeof getSfpPvid>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof getSfpPvid>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSfpPvid>>,
+          TError,
+          Awaited<ReturnType<typeof getSfpPvid>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetSfpPvid<
+  TData = Awaited<ReturnType<typeof getSfpPvid>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getSfpPvid>>, TError, TData>> &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSfpPvid>>,
+          TError,
+          Awaited<ReturnType<typeof getSfpPvid>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetSfpPvid<
+  TData = Awaited<ReturnType<typeof getSfpPvid>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getSfpPvid>>, TError, TData>>;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary The value sfp_pvid
+ */
+
+export function useGetSfpPvid<
+  TData = Awaited<ReturnType<typeof getSfpPvid>>,
+  TError = UnauthorisedResponse | Error,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getSfpPvid>>, TError, TData>>;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetSfpPvidQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -6271,6 +6388,111 @@ export const useSetSfpLane = <TError = Error | UnauthorisedResponse, TContext = 
   TContext
 > => {
   return useMutation(getSetSfpLaneMutationOptions(options), queryClient);
+};
+
+export const getSetSfpPvidUrl = () => {
+  return `/api/set/sfp_pvid`;
+};
+
+/**
+ * The SFP port's PVID on trial, or the trial kept or taken back: one of the three keys.
+ * @summary Change sfp_pvid
+ */
+export const setSfpPvid = async (
+  setSfpPvidBody: SetSfpPvidBody,
+  options?: Parameters<typeof pondFetch>[1],
+): Promise<SetSfpPvid200> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return pondFetch<SetSfpPvid200>(getSetSfpPvidUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "text/plain", ...getHeaders(options?.headers) },
+    body: setSfpPvidBody,
+  });
+};
+
+export const getSetSfpPvidMutationKey = () => ["setSfpPvid"] as const;
+
+export const getSetSfpPvidMutationOptions = <
+  TError = Error | UnauthorisedResponse,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setSfpPvid>>,
+    TError,
+    SetSfpPvidMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof pondFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setSfpPvid>>,
+  TError,
+  SetSfpPvidMutationVariables,
+  TContext
+> => {
+  const mutationKey = getSetSfpPvidMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setSfpPvid>>,
+    SetSfpPvidMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setSfpPvid(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetSfpPvidMutationResult = NonNullable<Awaited<ReturnType<typeof setSfpPvid>>>;
+export type SetSfpPvidMutationBody = SetSfpPvidBody;
+export type SetSfpPvidMutationError = Error | UnauthorisedResponse;
+export type SetSfpPvidMutationVariables = { data: SetSfpPvidBody };
+
+/**
+ * @summary Change sfp_pvid
+ */
+export const useSetSfpPvid = <TError = Error | UnauthorisedResponse, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setSfpPvid>>,
+      TError,
+      SetSfpPvidMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof pondFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof setSfpPvid>>,
+  TError,
+  SetSfpPvidMutationVariables,
+  TContext
+> => {
+  return useMutation(getSetSfpPvidMutationOptions(options), queryClient);
 };
 
 export const getSetIdentityUrl = () => {

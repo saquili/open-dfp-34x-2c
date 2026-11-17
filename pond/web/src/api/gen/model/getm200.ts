@@ -27,6 +27,7 @@ import type { Port } from "./port.ts";
 import type { ServiceRules } from "./serviceRules.ts";
 import type { Settings } from "./settings.ts";
 import type { SfpLane } from "./sfpLane.ts";
+import type { SfpPvid } from "./sfpPvid.ts";
 import type { Ssh } from "./ssh.ts";
 import type { Tcont } from "./tcont.ts";
 import type { TcRules } from "./tcRules.ts";
@@ -45,6 +46,7 @@ export type Getm200 = {
   product?: string | Error;
   clock?: Clock | Error;
   sfp_lane?: SfpLane | Error;
+  sfp_pvid?: SfpPvid | Error;
   mgmt?: Mgmt | Error;
   tls?: Tls | Error;
   ssh?: Ssh | Error;

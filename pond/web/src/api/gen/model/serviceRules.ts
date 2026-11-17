@@ -6,10 +6,13 @@
  * OpenAPI spec version: 1
  */
 import type { ServiceRule } from "./serviceRule.ts";
+import type { ServiceRulesUntagged } from "./serviceRulesUntagged.ts";
 
 /**
- * pond's value "service_rules": the rules in force, the stick's and the person's.
+ * pond's value "service_rules": the rules in force, the stick's and the person's, and what became of the host's untagged frames.
  */
 export interface ServiceRules {
   rules: ServiceRule[];
+  /** What became of the host link's untagged frames at the last programming of the OLT's VLAN rules (ADR 0023). */
+  untagged: ServiceRulesUntagged;
 }

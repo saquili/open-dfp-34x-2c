@@ -11,11 +11,8 @@ import type { MgmtPending } from "./mgmtPending.ts";
  * The management VLAN, address and gateway (pond's value "mgmt"), and a new set added beside them that waits to be confirmed from a panel opened at it.
  */
 export interface Mgmt {
-  /**
-   * The management VLAN, 1 to 4094, or null: untagged, on the host link itself, as a new stick starts.
-   * @nullable
-   */
-  vlan: number | null;
+  /** The management VLAN, 1 to 4094. */
+  vlan: number;
   /** @nullable */
   address: string | null;
   /**
