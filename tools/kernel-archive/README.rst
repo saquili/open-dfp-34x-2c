@@ -21,7 +21,7 @@ Usage
 
 Run inside the repository. It writes ``DIR/linux-<release>-<tree>.tar.xz`` and
 prints the path. ``<release>`` is the kernel's version as ``linux/Makefile``
-gives it (``6.18.63``), and ``<tree>`` is the first twelve digits of the id of
+gives it (``6.18.64``), and ``<tree>`` is the first twelve digits of the id of
 the ``linux/`` tree in ``REV``, the commit to archive (default ``HEAD``). ``DIR``
 defaults to ``build/kernel``.
 
