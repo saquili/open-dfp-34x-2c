@@ -13,10 +13,26 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, CircleAlert, ExternalLink, Info, RotateCcw, Undo2 } from "lucide-react";
+import {
+  Check,
+  CircleAlert,
+  ExternalLink,
+  Info,
+  RotateCcw,
+  TriangleAlert,
+  Undo2,
+} from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { useLaneChange, useMgmt, useMgmtChange, useSfpLane } from "../api/config";
+import {
+  useLaneChange,
+  useMgmt,
+  useMgmtChange,
+  usePvidChange,
+  useServiceRules,
+  useSfpLane,
+  useSfpPvid,
+} from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { LaneMode } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
@@ -30,6 +46,7 @@ import { bitrate, integer } from "../lib/format";
 import { ip4, net4 } from "../lib/ipv4";
 import { vlan, z } from "../lib/schemas";
 import { hostLink, laneMode, linkSpeed, port } from "../lib/state";
+import { hostSide, useStickServices } from "./internet/shared";
 
 /*
  * The lane's modes: the stick's own search, and the four it keeps to, each
@@ -238,21 +255,18 @@ function gatewayFits(gateway: string, cidr: string) {
 function MgmtCard() {
   const { t } = useI18n();
   const mgmt = useMgmt();
+  const pvid = useSfpPvid();
   const change = useMgmtChange();
   const state = useChangeState(change);
   const m = mgmt.data;
   const schema = z
     .object({
-      tagged: z.boolean(),
       vlan: vlan(t),
       address: z.string().check(z.trim(), z.refine(isCidr, t("sfp.mgmtAddressRule"))),
       gateway: z.string().check(z.trim()),
     })
     .check(
-      z.refine((v) => !v.tagged || v.vlan !== "", {
-        message: t("sfp.mgmtVlanRequired"),
-        path: ["vlan"],
-      }),
+      z.refine((v) => v.vlan !== "", { message: t("sfp.mgmtVlanRequired"), path: ["vlan"] }),
       z.refine((v) => v.gateway === "" || !isCidr(v.address) || gatewayFits(v.gateway, v.address), {
         message: t("sfp.mgmtGatewayRule"),
         path: ["gateway"],
@@ -262,19 +276,17 @@ function MgmtCard() {
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     values: {
-      tagged: m?.vlan != null,
       vlan: m?.vlan != null ? String(m.vlan) : "",
       address: m?.address ?? "",
       gateway: m?.gateway ?? "",
     },
   });
   const { errors, isDirty } = form.formState;
-  const tagged = form.watch("tagged");
   const here = window.location.hostname;
   const pending = m?.pending;
   const onNew = pending && here === pending.address.split("/")[0];
-  const where = (v: number | null) =>
-    v == null ? t("sfp.mgmtUntaggedValue") : t("sfp.mgmtPendingVlan", { vlan: v });
+  /* The panel answers untagged too while the port's PVID is the management VLAN. */
+  const untagged = m != null && pvid.data?.pvid === m.vlan;
 
   return (
     <Card title={t("sfp.mgmtTitle")}>
@@ -283,7 +295,7 @@ function MgmtCard() {
       {m && (
         <Facts
           rows={[
-            [t("sfp.mgmtVlan"), m.vlan ?? t("sfp.mgmtUntaggedValue")],
+            [t("sfp.mgmtVlan"), untagged ? t("sfp.mgmtVlanAndUntagged", { vlan: m.vlan }) : m.vlan],
             [
               t("sfp.mgmtAddress"),
               <span key="a" className="tabular">
@@ -319,7 +331,7 @@ function MgmtCard() {
               : t("sfp.mgmtPending", {
                   address: pending.address,
                   where:
-                    where(pending.vlan) +
+                    t("sfp.mgmtPendingVlan", { vlan: pending.vlan }) +
                     (pending.gateway
                       ? t("sfp.mgmtPendingGateway", { gateway: pending.gateway })
                       : ""),
@@ -363,46 +375,20 @@ function MgmtCard() {
         <form
           onSubmit={form.handleSubmit((v) => {
             if (!window.confirm(t("sfp.mgmtConfirm"))) return;
-            change.mutate({
-              VLAN: v.tagged ? v.vlan : "untagged",
-              ADDRESS: v.address,
-              GATEWAY: v.gateway,
-            });
+            change.mutate({ VLAN: v.vlan, ADDRESS: v.address, GATEWAY: v.gateway });
           })}
           noValidate
           className="grid gap-3"
         >
-          <fieldset className="grid gap-1">
-            <legend className="mb-1 text-sm font-medium">{t("sfp.mgmtTagging")}</legend>
-            <div className="join">
-              {([false, true] as const).map((v) => (
-                <button
-                  key={String(v)}
-                  type="button"
-                  disabled={!m}
-                  aria-pressed={tagged === v}
-                  className={`btn join-item btn-sm ${tagged === v ? "btn-active" : ""}`}
-                  onClick={() => form.setValue("tagged", v, { shouldDirty: true })}
-                >
-                  {t(v ? "sfp.mgmtTagged" : "sfp.mgmtUntagged")}
-                </button>
-              ))}
-            </div>
-            {!tagged && (
-              <span className="text-xs text-base-content/70">{t("sfp.mgmtUntaggedHint")}</span>
-            )}
-          </fieldset>
           <div className="grid gap-3 sm:grid-cols-2">
-            {tagged && (
-              <Field
-                label={t("sfp.mgmtVlan")}
-                hint={t("sfp.mgmtVlanHint")}
-                inputMode="numeric"
-                error={errors.vlan?.message}
-                disabled={!m}
-                {...form.register("vlan")}
-              />
-            )}
+            <Field
+              label={t("sfp.mgmtVlan")}
+              hint={t("sfp.mgmtVlanHint")}
+              inputMode="numeric"
+              error={errors.vlan?.message}
+              disabled={!m}
+              {...form.register("vlan")}
+            />
             <Field
               label={t("sfp.mgmtAddress")}
               hint={t("sfp.mgmtAddressHint")}
@@ -437,6 +423,250 @@ function MgmtCard() {
   );
 }
 
+/** A VLAN of the stick's switch view: its members, each tagged or not, and what it is. */
+interface VlanRow {
+  vlan: number;
+  what: string;
+  /** On the PON side: untagged, tagged, or no member. */
+  pon: "U" | "T" | "-";
+  /** The stick itself (the CPU) is a member: management, or a session of its own. */
+  stick: boolean;
+  /** The router's side reaches it tagged even while it is not the PVID. */
+  sfp: boolean;
+}
+
+/*
+ * The stick as an 802.1Q switch (ADR 0023): the SFP port to the router with a
+ * PVID a person sets, the PON port to the operator with PVID 1, the operator's
+ * untagged traffic, and the stick itself; a table of the VLANs and their
+ * members, untagged (U), tagged (T) or not (–), as on a switch's own page. The
+ * SFP port's PVID decides where the router's untagged frames go: the
+ * management VLAN, as a new stick starts, 1 to carry them to the operator as
+ * they are, or a service's VLAN. A change runs on trial, as the lane's does.
+ */
+function PvidCard() {
+  const { t } = useI18n();
+  const { data: live, dataUpdatedAt } = useLive();
+  const mgmt = useMgmt();
+  const pvid = useSfpPvid();
+  const rules = useServiceRules();
+  const { list } = useStickServices();
+  const change = usePvidChange();
+  const state = useChangeState(change);
+  const p = pvid.data;
+  const m = mgmt.data;
+  const u = rules.data?.untagged;
+  const left = useCountdown(p?.trial?.until_s, live?.uptime.up_s, dataUpdatedAt);
+  const [pick, setPick] = useState<string | null>(null);
+  const [other, setOther] = useState("");
+
+  const rows: VlanRow[] = [];
+  const seen = new Set<number>();
+  const add = (r: VlanRow) => {
+    if (seen.has(r.vlan)) return;
+    seen.add(r.vlan);
+    rows.push(r);
+  };
+  add({ vlan: 1, what: t("sfp.vlanOperatorUntagged"), pon: "U", stick: false, sfp: false });
+  if (m) add({ vlan: m.vlan, what: t("sfp.vlanMgmt"), pon: "-", stick: true, sfp: true });
+  if (u?.host != null)
+    add({ vlan: u.host, what: t("sfp.vlanOltUntagged"), pon: "T", stick: false, sfp: true });
+  for (const s of list)
+    if (!s.off)
+      for (const v of hostSide(s)) {
+        const what = t(s.multicast ? "sfp.pvidWhatTv" : "sfp.pvidWhatService");
+        add({
+          vlan: v,
+          what: s.vlan != null && s.vlan !== v ? t("sfp.vlanVia", { what, fibre: s.vlan }) : what,
+          pon: "T",
+          stick: false,
+          sfp: true,
+        });
+      }
+  rows.sort((a, b) => a.vlan - b.vlan);
+
+  const current = p ? String(p.pvid) : "";
+  const chosen = pick ?? current;
+  const value = chosen === "other" ? other.trim() : chosen;
+  const valid = /^\d+$/.test(value) && +value >= 1 && +value <= 4094;
+  const mgmtOff = m != null && p != null && valid && +value !== m.vlan;
+  const what = (v: number) => rows.find((r) => r.vlan === v)?.what ?? t("sfp.vlanNothing");
+  /* The SFP port's membership of a VLAN, as the PVID in force makes it. */
+  const sfpCell = (r: VlanRow) => (p?.pvid === r.vlan ? "U" : r.sfp ? "T" : "-");
+
+  const apply = () => {
+    if (
+      !window.confirm(
+        t(mgmtOff ? "sfp.pvidConfirmTagged" : "sfp.pvidConfirm", { vlan: m?.vlan ?? "" }),
+      )
+    )
+      return;
+    change.mutate({ PVID: value }, { onSuccess: () => setPick(null) });
+  };
+
+  const cell = (c: "U" | "T" | "-") =>
+    c === "U" ? (
+      <Badge tone="good">U</Badge>
+    ) : c === "T" ? (
+      <span className="font-mono text-sm">T</span>
+    ) : (
+      <span className="text-base-content/40">–</span>
+    );
+
+  return (
+    <Card title={t("sfp.vlansTitle")}>
+      <p className="text-sm text-base-content/70">{t("sfp.vlansHint")}</p>
+      <div className="overflow-x-auto">
+        <table className="table table-sm">
+          <thead>
+            <tr>
+              <th>{t("sfp.vlansPort")}</th>
+              <th>PVID</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{t("sfp.portSfp")}</td>
+              <td className="tabular font-medium">
+                {p ? (p.trial ? t("sfp.pvidOnTrial", { pvid: p.pvid }) : p.pvid) : "–"}
+              </td>
+            </tr>
+            <tr>
+              <td>{t("sfp.portPon")}</td>
+              <td className="tabular">1</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="table table-sm">
+          <thead>
+            <tr>
+              <th>VLAN</th>
+              <th>SFP</th>
+              <th>PON</th>
+              <th>{t("sfp.vlansStick")}</th>
+              <th>{t("sfp.vlansWhat")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.vlan}>
+                <td className="tabular font-medium">{r.vlan}</td>
+                <td>{cell(sfpCell(r))}</td>
+                <td>{cell(r.pon)}</td>
+                <td>{r.stick ? <Check className="size-4 text-success" /> : cell("-")}</td>
+                <td className="text-sm">{r.what}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-base-content/70">{t("sfp.vlansLegend")}</p>
+
+      {p && m && u?.clash && u.host != null && (
+        <div role="alert" className="alert alert-warning alert-soft text-base-content">
+          <TriangleAlert className="size-4 shrink-0 text-warning" aria-hidden />
+          <span className="text-sm">
+            {t("sfp.pvidOltService", { vlan: u.host, mgmt: m.vlan })}
+          </span>
+        </div>
+      )}
+      {p && m && u?.bridged && p.pvid !== 1 && (
+        <div role="alert" className="alert alert-warning alert-soft text-base-content">
+          <TriangleAlert className="size-4 shrink-0 text-warning" aria-hidden />
+          <span className="text-sm">{t("sfp.pvidOltBridged", { mgmt: m.vlan })}</span>
+        </div>
+      )}
+
+      {p?.trial ? (
+        <div
+          role="alert"
+          className="alert alert-warning alert-soft grid-flow-row gap-2 text-base-content sm:grid-flow-col"
+        >
+          <span className="flex items-start gap-2 text-sm">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+            {t("sfp.pvidTrial", { now: p.trial.pvid, before: p.trial.previous, left: left ?? "…" })}
+          </span>
+          <span className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={change.isPending}
+              onClick={() => change.mutate({ KEEP: "1" })}
+            >
+              <Check className="size-4" />
+              {t("sfp.pvidKeep")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={change.isPending}
+              onClick={() => change.mutate({ REVERT: "1" })}
+            >
+              <Undo2 className="size-4" />
+              {t("sfp.revert")}
+            </button>
+            <SaveState {...state} />
+          </span>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          <label className="grid gap-1">
+            <span className="text-sm font-medium">{t("sfp.pvidLabel")}</span>
+            <select
+              className="select select-sm w-full"
+              disabled={!p}
+              value={chosen}
+              onChange={(e) => setPick(e.currentTarget.value)}
+            >
+              {rows.map((r) => (
+                <option key={r.vlan} value={String(r.vlan)}>
+                  {`${r.vlan} – ${r.what}`}
+                </option>
+              ))}
+              {p && !seen.has(p.pvid) && (
+                <option value={String(p.pvid)}>{`${p.pvid} – ${what(p.pvid)}`}</option>
+              )}
+              <option value="other">{t("sfp.pvidOtherChoice")}</option>
+            </select>
+          </label>
+          {chosen === "other" && (
+            <Field
+              label={t("sfp.pvidOtherLabel")}
+              hint={t("sfp.pvidOtherHint")}
+              inputMode="numeric"
+              value={other}
+              onInput={(e) => setOther(e.currentTarget.value)}
+              error={other !== "" && !valid ? t("sfp.mgmtVlanRequired") : undefined}
+            />
+          )}
+          {mgmtOff && (
+            <span className="text-xs text-warning">
+              {t("sfp.pvidTaggedOnly", { vlan: m?.vlan ?? "" })}
+            </span>
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!p || !valid || value === current || change.isPending}
+              onClick={apply}
+            >
+              <RotateCcw className="size-4" />
+              {t("sfp.pvidTry")}
+            </button>
+            <SaveState {...state} />
+            <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/70">
+              {t("sfp.pvidSafety")}
+            </span>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function PortCounters() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
@@ -466,7 +696,10 @@ export function SfpPage() {
     <Page title={t("sfp.title")}>
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(min-content,1fr)]">
         <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <LaneCard />
+          <div className="grid content-start gap-4">
+            <LaneCard />
+            <PvidCard />
+          </div>
           <MgmtCard />
         </div>
         <Card title={t("sfp.traffic")} action={<HistoryNote />}>

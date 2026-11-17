@@ -937,18 +937,51 @@ export const pl: Dictionary = {
       "Linia działa na próbę w trybie {mode}. Wkładka wróci do poprzedniego za {left}\u00a0s, jeśli nie zostawisz zmiany.",
     keep: "Zostaw ten tryb",
     revert: "Wróć teraz",
+    vlansTitle: "VLAN-y i PVID",
+    vlansHint:
+      "Wkładka działa jak switch 802.1Q: port SFP do routera, port PON do operatora i sama wkładka. Ramka bez tagu dostaje VLAN równy PVID portu, a ramki tego VLAN-u wychodzą przez ten port bez tagu.",
+    vlansPort: "Port",
+    portSfp: "SFP (router)",
+    portPon: "PON (operator)",
+    vlansStick: "Wkładka",
+    vlansWhat: "Co to",
+    vlansLegend:
+      "U = bez tagu, T = z tagiem, – = nie należy. PVID SFP = 1: VLAN 1 bez tagu po obu stronach, ruch bez tagu idzie do operatora taki, jaki jest. PVID SFP = VLAN zarządzania: ruch bez tagu trafia do panelu.",
+    vlanOperatorUntagged: "ruch bez tagu operatora",
+    vlanMgmt: "zarządzanie",
+    vlanOltUntagged: "usługa operatora ustawiona bez tagu",
+    vlanVia: "{what} (na światłowodzie VLAN {fibre})",
+    vlanNothing: "nic pod nim nie ma",
+    pvidOnTrial: "{pvid} (na próbę)",
+    pvidKeep: "Zostaw ten PVID",
+    pvidLabel: "PVID portu SFP",
+    pvidWhatService: "usługa operatora",
+    pvidWhatTv: "telewizja operatora",
+    pvidOtherChoice: "inny numer…",
+    pvidOtherLabel: "VLAN",
+    pvidOtherHint: "Od 1 do 4094. Ramki bez tagu trafią tylko do tego, co jest w tym VLAN-ie.",
+    pvidTaggedOnly:
+      "Panel i ssh odpowiadają wtedy tylko w VLAN-ie {vlan}, z tagiem: najpierw ustaw go na routerze.",
+    pvidTry: "Ustaw na próbę",
+    pvidConfirm:
+      "Ustawić PVID na próbę? Zatwierdź go w ciągu 10\u00a0min, inaczej wkładka wróci do obecnego.",
+    pvidConfirmTagged:
+      "Ustawić PVID na próbę? Panel będzie wtedy działał tylko w VLAN-ie {vlan}, z tagiem: zatwierdź zmianę z panelu otwartego w ten sposób w ciągu 10\u00a0min, inaczej wkładka wróci do obecnego PVID.",
+    pvidTrial:
+      "PVID {now} działa na próbę (wcześniej {before}). Wkładka wróci do poprzedniego za {left}\u00a0s, jeśli nie zostawisz zmiany.",
+    pvidSafety:
+      "Zmiana działa od razu, na próbę: zostaje tylko wtedy, gdy zatwierdzisz ją z panelu w ciągu 10\u00a0min. Nie da się odciąć od wkładki.",
+    pvidOltService:
+      "Operator ustawił usługę bez tagu; w stronę routera to VLAN {vlan}. Router może wysyłać ją z tagiem {vlan}, albo ustaw PVID SFP = {vlan}: panel będzie wtedy działał tylko w VLAN-ie {mgmt}, z tagiem.",
+    pvidOltBridged:
+      "Sieć operatora przyjmuje ruch bez tagu (VLAN 1 na PON). Jeśli Twój router wysyła coś do operatora bez tagu, ustaw PVID SFP = 1: panel będzie wtedy działał tylko w VLAN-ie {mgmt}, z tagiem.",
     mgmtTitle: "Zarządzanie wkładką",
     mgmtHint:
-      "Gdzie odpowiadają panel i ssh: bez tagu albo w osobnym VLAN-ie, pod adresem i, jeśli ją podasz, za bramą. Ruch zarządzania nigdy nie wychodzi na światłowód.",
-    mgmtTagging: "Ruch zarządzania",
-    mgmtUntagged: "Bez tagu",
-    mgmtTagged: "W VLAN-ie",
-    mgmtUntaggedValue: "bez tagu",
-    mgmtUntaggedHint:
-      "Panel i ssh odpowiadają w sieci samego hosta, bez VLAN-u, tak jak startuje nowa wkładka. Widzi je każde urządzenie w tej sieci: trzymaj hasło tylko dla siebie.",
+      "Gdzie odpowiadają panel i ssh: bez tagu VLAN, tak jak startuje nowa wkładka, albo we własnym VLAN-ie; pod adresem i, jeśli ją podasz, za bramą. Ruch zarządzania nigdy nie wychodzi na światłowód.",
     mgmtVlan: "VLAN zarządzania",
     mgmtVlanHint:
       "Liczba od 1 do 4094. Ten VLAN należy tylko do zarządzania i nigdy nie przechodzi na światłowód.",
+    mgmtVlanAndUntagged: "{vlan} oraz bez tagu (PVID)",
     mgmtVlanRequired: "VLAN od 1 do 4094",
     mgmtAddress: "Adres zarządzania",
     mgmtAddressHint: "Adres z maską, np. 192.0.2.2/30.",

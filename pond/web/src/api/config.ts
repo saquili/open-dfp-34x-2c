@@ -33,6 +33,7 @@ import {
   getPhone,
   getServiceRules,
   getSfpLane,
+  getSfpPvid,
   getSsh,
   getTls,
   identityOltLogin,
@@ -239,7 +240,7 @@ export const REFRESH = {
   ipoe: [["live"], ["leases"], ["switch"]],
   lan: [["live"], ["leases"], ["switch"]],
   /* CONFIRM=1 keeps the changes on trial, REVERT=1 takes back all of them. */
-  changes: [["live"], ["sfp_lane"], ["mgmt"], ["leases"], ["switch"]],
+  changes: [["live"], ["sfp_lane"], ["mgmt"], ["service_rules"], ["leases"], ["switch"]],
   fixed: [["live"]],
   forward: [["live"]],
   dmz: [["live"]],
@@ -247,7 +248,10 @@ export const REFRESH = {
   fw: [["live"]],
   dos: [["live"]],
   sfp_lane: [["sfp_lane"], ["live"]],
-  mgmt: [["mgmt"], ["live"], ["switch"], ["tls"]],
+  /* Whether the PVID is the management VLAN decides how the panel is reached and what clashes. */
+  sfp_pvid: [["sfp_pvid"], ["mgmt"], ["service_rules"], ["live"]],
+  /* Where the untagged traffic goes decides whether the OLT's service of it clashes. */
+  mgmt: [["mgmt"], ["service_rules"], ["live"], ["switch"], ["tls"]],
   hostname: [["live"]],
   /* The name is in the bar over every page and in the tab's title, which the live figures carry. */
   product: [["live"]],
@@ -336,7 +340,15 @@ export const useMgmt = () =>
     refetchInterval: waiting,
     retry: false,
   });
+export const useSfpPvid = () =>
+  useQuery({
+    queryKey: ["sfp_pvid"],
+    queryFn: async () => (await getSfpPvid()).value,
+    refetchInterval: waiting,
+    retry: false,
+  });
 export const useLaneChange = () => useChange("sfp_lane");
+export const usePvidChange = () => useChange("sfp_pvid");
 export const useMgmtChange = () => useChange("mgmt");
 export const useHostnameChange = () => useChange("hostname");
 export const useProductChange = () => useChange("product");

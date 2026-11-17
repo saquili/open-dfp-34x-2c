@@ -22,6 +22,7 @@ import type {
   Sessions,
   Settings,
   SfpLane,
+  SfpPvid,
   UniPorts,
   UniReport,
 } from "../api/types";
@@ -484,9 +485,9 @@ let product = LIVE.product ?? DEFAULT_PRODUCT;
 const upNow = () => LIVE.uptime.up_s + (Date.now() - started) / 1000;
 let lane: SfpLane = { choice: "auto", active: "2500basex", trial: null };
 /*
- * The management settings: a new stick's untagged default (issues 1 and 2 of
- * the repository), a managed one's VLAN behind a gateway, and today's
- * software's VLAN without one.
+ * The management settings: a new stick's, whose management takes the router's
+ * untagged traffic (ADR 0023, issues 1 and 2 of the repository), a managed
+ * one's VLAN behind a gateway, and today's software's VLAN without one.
  */
 let mgmt: Mgmt =
   SCENARIO === "sessions" || SCENARIO === "demo" || SCENARIO === "production"
@@ -498,8 +499,55 @@ let mgmt: Mgmt =
         pending: null,
       }
     : SCENARIO === "stick"
-      ? { vlan: 4094, address: "192.0.2.250/30", gateway: null, data_address: null, pending: null }
-      : { vlan: null, address: "192.168.1.1/24", gateway: null, data_address: null, pending: null };
+      ? {
+          vlan: 4094,
+          address: "192.0.2.250/30",
+          gateway: null,
+          data_address: null,
+          pending: null,
+        }
+      : {
+          vlan: 4094,
+          address: "192.168.1.1/24",
+          gateway: null,
+          data_address: null,
+          pending: null,
+        };
+/*
+ * What the OLT does with the router's untagged traffic, as omcid tells it
+ * (service_rules.untagged): POND_MOCK_UNTAGGED=service, a service of its own
+ * that tags it (VLAN 1501 on the fibre), the new stick's default here;
+ * bridged, its network passing it as it is; none, neither.
+ */
+const UNTAGGED_CLAIM =
+  (typeof process === "undefined" ? undefined : process.env.POND_MOCK_UNTAGGED) ??
+  (SCENARIO === undefined ? "service" : "none");
+const untaggedOf = () => {
+  const service = UNTAGGED_CLAIM === "service" ? 1501 : null;
+  const bridged = UNTAGGED_CLAIM === "bridged";
+  const pvid = sfpPvid.pvid;
+  const host = service != null && pvid !== 1 ? service : null;
+  /* The host VLANs of the services, as the mock's OLT translates them. */
+  const leads = pvid === 1 || pvid === mgmt.vlan ? null : pvid === host ? service : pvid;
+  return {
+    pvid,
+    stick: pvid === mgmt.vlan,
+    leads,
+    service,
+    host,
+    bridged,
+    clash: pvid !== 1 && ((service != null && pvid !== host) || bridged),
+  };
+};
+/*
+ * The SFP port's PVID: the management VLAN on a new stick; on one updated
+ * from an earlier build, 1, the PON side's, so that the untagged frames go to
+ * the operator as they did.
+ */
+let sfpPvid: SfpPvid = {
+  pvid: SCENARIO === undefined ? mgmt.vlan : 1,
+  trial: null,
+};
 const identity: Identity = {
   serial: "XXXXXXXXXXXX",
   ploam_set: true,
@@ -1134,6 +1182,27 @@ const stick = [
     return HttpResponse.json({ id: "sfp_lane", ok: true });
   }),
 
+  http.get("*/api/get/sfp_pvid", async () => {
+    await delay(120);
+    return (
+      away() ?? (signedIn ? HttpResponse.json({ id: "sfp_pvid", value: sfpPvid }) : unauthorized())
+    );
+  }),
+
+  http.post("*/api/set/sfp_pvid", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    if (b.PVID) {
+      const pvid = Number(b.PVID);
+      if (!(pvid >= 1 && pvid <= 4094))
+        return HttpResponse.json({ error: "refused", detail: "PVID=1 to 4094" }, { status: 400 });
+      sfpPvid = { pvid, trial: { pvid, previous: sfpPvid.pvid, until_s: upNow() + 600 } };
+    } else if (b.KEEP) sfpPvid = { ...sfpPvid, trial: null };
+    else if (b.REVERT && sfpPvid.trial) sfpPvid = { pvid: sfpPvid.trial.previous, trial: null };
+    return HttpResponse.json({ id: "sfp_pvid", ok: true });
+  }),
+
   http.get("*/api/get/mgmt", async () => {
     await delay(120);
     return away() ?? (signedIn ? HttpResponse.json({ id: "mgmt", value: mgmt }) : unauthorized());
@@ -1147,7 +1216,7 @@ const stick = [
       mgmt = {
         ...mgmt,
         pending: {
-          vlan: b.VLAN === "untagged" ? null : Number(b.VLAN),
+          vlan: Number(b.VLAN),
           address: b.ADDRESS,
           gateway: b.GATEWAY ? b.GATEWAY : null,
           until_s: upNow() + 600,
@@ -1886,7 +1955,10 @@ const stick = [
     return (
       away() ??
       (signedIn
-        ? HttpResponse.json({ id: "service_rules", value: { rules: serviceRules() } })
+        ? HttpResponse.json({
+            id: "service_rules",
+            value: { rules: serviceRules(), untagged: untaggedOf() },
+          })
         : unauthorized())
     );
   }),

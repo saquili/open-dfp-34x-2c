@@ -84,6 +84,7 @@ export type {
   Sessions,
   Settings,
   SfpLane,
+  SfpPvid,
   Ssh,
   SshKey,
   TcAction,

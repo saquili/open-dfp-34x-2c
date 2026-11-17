@@ -944,18 +944,51 @@ export const en = {
       "The lane runs in {mode} on trial. The stick goes back to the previous mode in {left}\u00a0s unless you keep the change.",
     keep: "Keep this mode",
     revert: "Go back now",
+    vlansTitle: "VLANs and PVID",
+    vlansHint:
+      "The stick works as an 802.1Q switch: the SFP port to the router, the PON port to the operator, and the stick itself. An untagged frame gets the VLAN of its port's PVID, and the frames of that VLAN leave by that port untagged.",
+    vlansPort: "Port",
+    portSfp: "SFP (router)",
+    portPon: "PON (operator)",
+    vlansStick: "Stick",
+    vlansWhat: "What it is",
+    vlansLegend:
+      "U = untagged, T = tagged, – = not a member. SFP PVID 1: VLAN 1 untagged on both sides, the router's untagged traffic goes to the operator as it is. SFP PVID = the management VLAN: untagged traffic reaches the panel.",
+    vlanOperatorUntagged: "the operator's untagged traffic",
+    vlanMgmt: "management",
+    vlanOltUntagged: "the operator's service set up without a tag",
+    vlanVia: "{what} (VLAN {fibre} on the fibre)",
+    vlanNothing: "nothing behind it",
+    pvidOnTrial: "{pvid} (on trial)",
+    pvidKeep: "Keep this PVID",
+    pvidLabel: "The SFP port's PVID",
+    pvidWhatService: "operator's service",
+    pvidWhatTv: "operator's television",
+    pvidOtherChoice: "another number…",
+    pvidOtherLabel: "VLAN",
+    pvidOtherHint: "1 to 4094. Untagged frames reach only what is in this VLAN.",
+    pvidTaggedOnly:
+      "The panel and ssh then answer only in VLAN {vlan}, tagged: set it on the router first.",
+    pvidTry: "Set on trial",
+    pvidConfirm:
+      "Set the PVID on trial? Keep it within 10\u00a0min, or the stick goes back to the present one.",
+    pvidConfirmTagged:
+      "Set the PVID on trial? The panel then answers only in VLAN {vlan}, tagged: keep the change from a panel opened that way within 10\u00a0min, or the stick goes back to the present PVID.",
+    pvidTrial:
+      "PVID {now} is on trial (before: {before}). The stick goes back to the earlier one in {left}\u00a0s unless you keep the change.",
+    pvidSafety:
+      "The change runs at once, on trial: it stays only when you keep it from the panel within 10\u00a0min. You cannot lock yourself out.",
+    pvidOltService:
+      "The operator set up a service without a tag; towards the router it is VLAN {vlan}. Your router can send it tagged with VLAN {vlan}, or set the SFP PVID to {vlan}: the panel then answers only in VLAN {mgmt}, tagged.",
+    pvidOltBridged:
+      "The operator's network takes untagged traffic (VLAN 1 on the PON). If your router sends anything to the operator untagged, set the SFP PVID to 1: the panel then answers only in VLAN {mgmt}, tagged.",
     mgmtTitle: "Managing the stick",
     mgmtHint:
-      "Where the panel and ssh answer: untagged or in a VLAN of their own, at an address and, if you give one, behind a gateway. Management traffic never goes out to the fibre.",
-    mgmtTagging: "Management traffic",
-    mgmtUntagged: "Untagged",
-    mgmtTagged: "In a VLAN",
-    mgmtUntaggedValue: "untagged",
-    mgmtUntaggedHint:
-      "The panel and ssh answer on the host's own network, without a VLAN, as a new stick starts. Every device on that network can reach them: keep the password your own.",
+      "Where the panel and ssh answer: without a VLAN tag, as a new stick starts, or in a VLAN of their own; at an address and, if you give one, behind a gateway. Management traffic never goes out to the fibre.",
     mgmtVlan: "Management VLAN",
     mgmtVlanHint:
-      "A number from 1 to 4094. The VLAN belongs to management alone and never crosses to the fibre.",
+      "A number from 1 to 4094. This VLAN belongs to management alone and never crosses to the fibre.",
+    mgmtVlanAndUntagged: "{vlan}, and untagged (PVID)",
     mgmtVlanRequired: "A VLAN from 1 to 4094",
     mgmtAddress: "Management address",
     mgmtAddressHint: "An address with its prefix, e.g. 192.0.2.2/30.",

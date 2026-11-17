@@ -45,7 +45,9 @@ const READS = [
   ["identity"],
   ["omci"],
   ["sfp_lane"],
+  ["sfp_pvid"],
   ["mgmt"],
+  ["service_rules"],
   ["switch", "network"],
   ["switch", "bridge"],
 ] as const;
@@ -57,6 +59,7 @@ const name = (k: readonly string[]) => k.join("/");
 const CHANGED_BY: Record<string, Change[]> = {
   session: [],
   live: [
+    "sfp_pvid",
     "session",
     "ipoe",
     "lan",
@@ -84,7 +87,9 @@ const CHANGED_BY: Record<string, Change[]> = {
   identity: ["identity"],
   omci: [],
   sfp_lane: ["changes", "sfp_lane"],
-  mgmt: ["changes", "mgmt"],
+  sfp_pvid: ["sfp_pvid"],
+  mgmt: ["changes", "mgmt", "sfp_pvid"],
+  service_rules: ["changes", "mgmt", "service_rule", "sfp_pvid"],
   "switch/network": ["session", "ipoe", "lan", "changes", "mgmt"],
   "switch/bridge": ["session", "ipoe", "lan", "changes", "mgmt"],
 };
