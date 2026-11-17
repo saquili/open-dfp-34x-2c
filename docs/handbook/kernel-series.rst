@@ -134,6 +134,13 @@ The platform
        advertised). And, for every user, a watchdog the boot loader started
        is kept running instead of being stopped by the default control word
        at probe.
+   * - ``fs/pstore/ram.c``
+     - A fix that holds for every user: ramoops sized pstore's dump buffer to
+       the whole of a record and then put its own header in front of the
+       dump, so a dump that filled the buffer, as every dump does that is not
+       compressed, lost its newest lines to the header, the end of the
+       message that says why the kernel panicked. The buffer is smaller by
+       the header's room.
    * - ``Documentation/devicetree/bindings/gpio/realtek,otto-gpio.yaml``,
        ``Documentation/devicetree/bindings/spi/realtek,rtl-spi.yaml``,
        ``Documentation/devicetree/bindings/timer/realtek,otto-timer.yaml``,

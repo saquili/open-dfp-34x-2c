@@ -748,6 +748,53 @@ addresses without the names of their functions, by ``k0.System.map``, which
 ``make image`` puts beside ``k0.uImage`` and every release carries. SysRq
 stays: the bench restarts a board by it.
 
+Since 2026-11-17 the kernel checks itself for memory bugs, as mainline offers,
+in the drivers that parse what the OLT sends and in the network stack of the
+router, and every oops panics, which restarts the stick after 10 s rather than
+let it run on half broken. The record of a panic, with the console's last
+lines, outlives the restart in 64 KiB of DRAM that the tree sets aside
+(pstore with ramoops; ``system.rst``, "What is kept where"). Each option was
+measured by a build of the flash's kernel from the board's configuration, and
+on ONT-UART by the TCP that the stick sends at full load, which its CPU alone
+carries (49.5 Mbit/s without any of them; the traffic the switch forwards does
+not pass the CPU):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 46 18 36
+
+   * - Option
+     - Bytes in k0
+     - The stick's TCP, sent
+   * - ``FORTIFY_SOURCE``, ``HARDENED_USERCOPY``, ``LIST_HARDENED`` with
+       ``BUG_ON_DATA_CORRUPTION``
+     - +12910 (6749, 2939, 3222)
+     - 47.8 Mbit/s (-3 %); usercopy alone none measurable
+   * - ``STACKPROTECTOR_STRONG``
+     - +41797
+     - 43.0 Mbit/s (-13 % with the above)
+   * - ``INIT_ON_ALLOC_DEFAULT_ON``
+     - none
+     - 38.3 Mbit/s (-23 %)
+   * - ``INIT_ON_FREE_DEFAULT_ON``
+     - none
+     - 35.9 Mbit/s (-27 %)
+   * - ``PANIC_ON_OOPS``
+     - none
+     -
+   * - ``PSTORE``, ``PSTORE_RAM``, ``PSTORE_CONSOLE``, without compression
+     - +10390
+     -
+
+With all of them the kernel image is 1662071 bytes and ``k0`` keeps 238473,
+12.5 %, free. TCP into the stick, which the switch's meter holds at 58 Mbit/s,
+takes 75 % of the CPU instead of 65 %, measured by how much a loop of the
+lowest weight slows down (the kernel's own count of busy time misses the work
+done with interrupts off); 300 starts of a program take 2.38 s instead of 2.15
+s; the stick reaches O5 as soon as before. The two kinds of zeroing can be
+turned off without a build, by ``init_on_alloc=0 init_on_free=0`` on the
+kernel's command line.
+
 Reproducibility
 ===============
 

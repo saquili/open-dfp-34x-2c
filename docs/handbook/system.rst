@@ -499,6 +499,13 @@ What is kept where
        KiB, of what must outlive a restart: the settings, the accounts, the
        password, the keys (``boot-contract.rst``; the keys are listed in
        ``onu-utils/README.rst``).
+   * - ``/sys/fs/pstore``
+     - The kernel's last words before a restart, in 64 KiB of DRAM that a
+       restart does not clear and a power cut does (ramoops): the record of an
+       oops or a panic, and the console's last lines of the start before. The
+       panel shows them (System, Device) as long as they are there, and deletes
+       them through ``onu-crash clear``, which frees their place for the next
+       (``onu-utils/README.rst``).
    * - ``env``, ``env2``
      - The boot loader's environment: which bank starts, and a trial.
    * - The two banks

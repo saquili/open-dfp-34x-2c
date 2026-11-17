@@ -31,7 +31,8 @@ Where the stick is
      - "The password is lost"
    * - Kernel lines, then ``Kernel panic - not syncing``
      - Restarting by itself after 10 s. A bank on trial gives way to the
-       committed one.
+       committed one. The panic's record outlives the restart, and the panel
+       shows it over every page until it is deleted (System, Device).
      - "A bank does not come up"
    * - ``Hit any key to stop autoboot:`` and a count
      - At the boot loader's countdown.
