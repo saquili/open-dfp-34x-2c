@@ -607,7 +607,7 @@ Repository map
    * - Directory
      - What it holds
    * - `linux/ <linux/>`__
-     - Linux 6.18.63 with this project's kernel series on top: the SoC and
+     - Linux 6.18.64 with this project's kernel series on top: the SoC and
        its Lexra core, the board's device tree and configuration, and the
        drivers of the switch, its CPU port, the GPON and PON MACs, the
        optics, the watchdog and the PON class

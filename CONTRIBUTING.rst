@@ -121,7 +121,7 @@ The kernel tree
 ===============
 
 ``linux/`` holds a Linux release exactly as upstream publishes it -- now Linux
-6.18.63, from the kernel.org release tarball -- imported with
+6.18.64, from the kernel.org release tarball -- imported with
 ``git subtree add --squash``, and our kernel work on top of it as ordinary
 kernel commits. Upstream files change only through such commits, never by
 editing the import, and a kernel commit touches nothing outside ``linux/``.
@@ -143,11 +143,11 @@ names those two releases, ::
 turns them into patches, to publish or to apply onto the upstream stable tag.
 
 The split starts at the commit the import was squashed from, which no branch
-contains; the tag ``linux-6.18.63`` keeps it. Without the tag,
+contains; the tag ``linux-6.18.64`` keeps it. Without the tag,
 ``git subtree split`` stops with "could not rev-parse split hash", so fetch and
 push the tag along with the branches::
 
-    git push origin main linux-6.18.63
+    git push origin main linux-6.18.64
 
 Paths that differ only in case
 ------------------------------
@@ -203,18 +203,18 @@ the unpacked tarball::
     export GIT_DIR=<repository>/.git GIT_WORK_TREE="$PWD"
     export GIT_INDEX_FILE="$(mktemp -u)"
     git add -A -f && tree=$(git write-tree) && rm -f "$GIT_INDEX_FILE"
-    commit=$(git commit-tree -p 'linux-6.18.63^{commit}' \
-        -m 'Linux 6.18.64' \
-        -m 'The release tarball linux-6.18.64.tar.xz, SHA-256 <digest>.' \
+    commit=$(git commit-tree -p 'linux-6.18.64^{commit}' \
+        -m 'Linux 6.18.65' \
+        -m 'The release tarball linux-6.18.65.tar.xz, SHA-256 <digest>.' \
         "$tree")
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 then, in the repository::
 
-    git tag -a -m 'Linux 6.18.64, as imported into linux/' \
-        linux-6.18.64 "$commit"
+    git tag -a -m 'Linux 6.18.65, as imported into linux/' \
+        linux-6.18.65 "$commit"
     git subtree merge --squash -P linux \
-        -m 'linux: update to Linux 6.18.64' linux-6.18.64
+        -m 'linux: update to Linux 6.18.65' linux-6.18.65
 
 As the new release commit descends from the previous one, the squash commit
 lists only the releases in between, and the gates treat it as pristine
