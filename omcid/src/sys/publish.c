@@ -251,12 +251,25 @@ void omci_publish_services(const struct omci_publish_ops *ops, void *ctx)
 	size_t made_n = 0;
 	const size_t n = omci_vlan_services(&person, &made, &made_n);
 
+	struct omci_vlan_untagged u;
+	const bool clash = omci_vlan_untagged(&u);
+
 	ops->open(ctx, "rules", true);
 	for (size_t i = 0; i < n; i++)
 		write_rule(&person[i], ops, ctx);
 	for (size_t i = 0; i < made_n; i++)
 		write_rule(&made[i], ops, ctx);
 	ops->close(ctx, true);
+
+	ops->open(ctx, "untagged", false);
+	ops->flag(ctx, "management", u.management);
+	if (u.service != 0u)
+		ops->num(ctx, "service", u.service);
+	else
+		ops->none(ctx, "service");
+	ops->flag(ctx, "bridged", u.bridged);
+	ops->flag(ctx, "clash", clash);
+	ops->close(ctx, false);
 }
 
 /* Class 148, Authentication security method, and its fields of 25 bytes. */

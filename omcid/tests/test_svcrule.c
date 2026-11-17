@@ -14,6 +14,7 @@
 
 #include "harness.h"
 #include "hw/hw.h"
+#include "me/bridge.h"
 #include "me/svcrule.h"
 #include "me/vlan.h"
 #include "mib/store.h"
@@ -354,6 +355,75 @@ static void test_ip_host(void)
 	omci_mib_fini(mib);
 }
 
+/* How many records of the last programming of fibre VID @fibre have fate @f. */
+static size_t fates_of(unsigned int fibre, enum omci_vlan_fate f)
+{
+	const struct omci_vlan_fate_rec *rec = NULL;
+	const size_t n = omci_vlan_fates(&rec, NULL);
+	size_t k = 0;
+
+	for (size_t i = 0; i < n; i++)
+		k += rec[i].fate == (uint8_t)f && rec[i].net_vid == fibre;
+	return k;
+}
+
+static void test_untagged(void)
+{
+	struct omci_mib *mib = NULL;
+	struct omci_vlan_untagged u;
+
+	/*
+	 * The UNI's untagged frames go to VLAN 1501 on the fibre: a service of
+	 * the OLT's, which a bridge port of a GEM port carries.
+	 */
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	port(mib, 0x101u, OMCI_BRIDGE_TP_PPTP_ETH);
+	port(mib, 0x8001u, OMCI_BRIDGE_TP_GEM_IW);
+	me171(mib, 0x101u, 2u, 0x101u);
+	push(mib, 0x101u, 1501u);
+	omci_hw_host_untagged_set(false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(!omci_vlan_untagged(&u));
+	CHECK(!u.management && u.service == 1501u && u.named && !u.bridged);
+	CHECK_EQ(fates_of(1501u, OMCI_VLAN_FATE_PROGRAMMED), 1u);
+
+	/*
+	 * The stick's management takes them: the rule stays out of the hardware
+	 * and its service gets none, a clash.
+	 */
+	omci_hw_host_untagged_set(true);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u));
+	CHECK(u.management && u.service == 1501u && !u.bridged);
+	CHECK_EQ(fates_of(1501u, OMCI_VLAN_FATE_PROGRAMMED), 0u);
+	CHECK_EQ(fates_of(1501u, OMCI_VLAN_FATE_LOCAL), 1u);
+	omci_mib_fini(mib);
+
+	/*
+	 * No rule names the untagged frames, and a GEM port is a bridge port:
+	 * they cross the OLT's bridge as they are, a clash too; without the
+	 * GEM port, none.
+	 */
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	port(mib, 0x101u, OMCI_BRIDGE_TP_PPTP_ETH);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(!omci_vlan_untagged(&u));
+	CHECK(u.management && u.service == 0u && !u.named && !u.bridged);
+	port(mib, 0x8001u, OMCI_BRIDGE_TP_GEM_IW);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u));
+	CHECK(u.bridged && u.service == 0u);
+
+	/* An IP host's rule that tags them is no claim: it has a VLAN of its own. */
+	me171(mib, 0x901u, 3u, 0x0000u);
+	push(mib, 0x901u, 600u);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u) && u.service == 0u && u.bridged);
+	CHECK_EQ(host_of(600u), 600u);
+	omci_hw_host_untagged_set(false);
+	omci_mib_fini(mib);
+}
+
 int main(void)
 {
 	test_parse();
@@ -361,5 +431,6 @@ int main(void)
 	test_free_vid();
 	test_bridge_ports();
 	test_ip_host();
+	test_untagged();
 	return OMCI_T_REPORT("test_svcrule");
 }

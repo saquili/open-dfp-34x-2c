@@ -163,6 +163,20 @@ keeps out ``local``, and the ubus method ``rules`` gives the rules in force, a
 person's and the moves made, which pond serves as the value
 ``service_rules``.
 
+On a stick installed from the shipped firmware's page the host's untagged
+frames go to the stick's management (ADR 0023): the backend reads
+``UNTAGGED=1`` of ``/run/onu-mgmt`` at each programming of the VLAN rules.
+They then reach no service of the OLT's, so a rule of an Ethernet UNI or of
+the VEIP that gives them a tag stays out of the hardware, ``local`` in
+``omcivlan``, and the daemon says so once; an IP host's rule, which has a host
+VLAN of its own, is no such rule. ``rules`` gives besides the rules what
+became of the untagged frames, ``untagged``: ``management``; ``service``, the
+VLAN on the fibre that the first rule tagging them leads into, or null;
+``bridged``, when no rule names them while the OLT made a bridge port of a GEM
+port or a mapper, which they would cross as they are; and ``clash``, the
+management and a service or that bridge at once. The VLAN filters of the
+bridge ports (class 84) are not read for it.
+
 The multicast proxy
 ===================
 

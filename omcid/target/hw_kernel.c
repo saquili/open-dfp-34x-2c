@@ -2069,6 +2069,26 @@ static unsigned int mgmt_vlan(void)
 	return vid;
 }
 
+/*
+ * Whether the stick's management takes the host link's untagged frames:
+ * onu-mgmt's line UNTAGGED=1 of MGMT_PATH (ADR 0023). The switch then traps
+ * them to the CPU, so that no service of the OLT's gets them.
+ */
+static bool kernel_host_untagged(void)
+{
+	char line[64];
+	bool on = false;
+	FILE *f = fopen(MGMT_PATH, "re");
+
+	while (f != NULL && fgets(line, sizeof(line), f) != NULL)
+		if (!strcmp(line, "UNTAGGED=1\n") ||
+		    !strcmp(line, "UNTAGGED=1"))
+			on = true;
+	if (f != NULL)
+		fclose(f);
+	return on;
+}
+
 static void gem_vlans_publish(const struct omci_hw_bridge_port *ports, size_t n)
 {
 	static char last[GEM_VLANS_TEXT];
@@ -5046,6 +5066,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.routing = kernel_routing,
 	.reprogram_due = kernel_reprogram_due,
 	.service_rules = kernel_service_rules,
+	.host_untagged = kernel_host_untagged,
 	.fdb = kernel_fdb,
 	.mcast_port = kernel_mcast_port,
 	.mcast_groups = kernel_mcast_groups,

@@ -505,7 +505,25 @@ static void mgmt_vlan_clash(void)
 	CHECK(clash_warnings(log, 4094) == 1);
 	CHECK(clash_warnings(log, 4093) == 1);
 	CHECK(clash_warnings(log, 4094) == 2);
+
+	/* The management takes the host's untagged frames with UNTAGGED=1 alone. */
+	CHECK(!omci_hw_kernel_ops.host_untagged());
+	f = fopen("/run/onu-mgmt", "w");
+	CHECK(f != NULL);
+	if (f) {
+		fputs("VLAN=4094\nUNTAGGED=1\nDATA_ADDRESS=\n", f);
+		fclose(f);
+	}
+	CHECK(omci_hw_kernel_ops.host_untagged());
+	f = fopen("/run/onu-mgmt", "w");
+	CHECK(f != NULL);
+	if (f) {
+		fputs("VLAN=4094\nUNTAGGED=0\n", f);
+		fclose(f);
+	}
+	CHECK(!omci_hw_kernel_ops.host_untagged());
 	unlink("/run/onu-mgmt");
+	CHECK(!omci_hw_kernel_ops.host_untagged());
 	unlink(log);
 	CHECK(omci_hw_kernel_ops.bridge_apply(NULL, 0, NULL) == OMCI_OK);
 }

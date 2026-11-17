@@ -323,6 +323,19 @@ static size_t omci_hw_service_rules(struct omci_svc_rule *out, size_t cap)
 	return n;
 }
 
+/* Whether a test gave the stick's management the host's untagged frames. */
+static bool g_host_untagged;
+
+void omci_hw_host_untagged_set(bool on)
+{
+	g_host_untagged = on;
+}
+
+static bool omci_hw_host_untagged(void)
+{
+	return g_host_untagged;
+}
+
 /* Whether a test chose the subscriber's own priority for IGMP. */
 static bool g_igmp_host;
 
@@ -1080,6 +1093,7 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.encrypted = omci_hw_encrypted,
 	.routing = omci_hw_routing,
 	.service_rules = omci_hw_service_rules,
+	.host_untagged = omci_hw_host_untagged,
 	.fdb = omci_hw_fdb,
 	.optics = omci_hw_optics,
 	.optics_limits = omci_hw_optics_limits,

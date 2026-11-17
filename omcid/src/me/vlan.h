@@ -212,6 +212,39 @@ size_t omci_vlan_services(const struct omci_svc_rule **person,
 bool omci_vlan_phone(uint16_t *fibre, uint16_t *host);
 
 /**
+ * struct omci_vlan_untagged - What the VLAN rules made of the host's untagged
+ *	frames at the last programming (ADR 0023).
+ * @management: the stick's management takes them (the backend's
+ *	host_untagged)
+ * @service: the VLAN on the fibre that the first rule of an Ethernet UNI or
+ *	of the VEIP giving them a tag leads into; 0 without one
+ * @named: a rule of an Ethernet UNI or of the VEIP names them: gives them a
+ *	tag, passes them on or discards them
+ * @bridged: no rule names them, and the OLT made a bridge port of a GEM port
+ *	or a mapper, which they cross as they are
+ *
+ * While the management takes them, a rule that gives them a tag stays out of
+ * the hardware, of fate %OMCI_VLAN_FATE_LOCAL: its service gets none of them.
+ * Management and @service or @bridged at once are a clash.
+ */
+struct omci_vlan_untagged {
+	bool management;
+	uint16_t service;
+	bool named;
+	bool bridged;
+};
+
+/**
+ * omci_vlan_untagged() - What became of the host's untagged frames at the last
+ *	programming.
+ * @out: set to it
+ *
+ * Return: whether they clash: the management takes them, and a service of the
+ * OLT's takes them or they cross its bridge.
+ */
+bool omci_vlan_untagged(struct omci_vlan_untagged *out);
+
+/**
  * omci_vlan_row_refused() - Whether the hardware refused a rule at the last
  *	programming, or the programming left it out as one that the hardware
  *	cannot carry where it stands in the list.

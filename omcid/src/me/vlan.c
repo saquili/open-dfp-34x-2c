@@ -632,6 +632,19 @@ static size_t g_making_n;
  */
 static uint16_t g_phone[2], g_phoning[2];
 
+/*
+ * The host's untagged frames (ADR 0023): whether the stick's management takes
+ * them, from the backend at each programming; whether the OLT made a bridge
+ * port of a GEM port or a mapper; and, of the last recorded gathering and of
+ * the one under way, the fibre VLAN of the first rule that tags them and
+ * whether a rule names them at all.
+ */
+static bool g_untag_mgmt, g_untag_bridge;
+static uint16_t g_untag_service, g_untagging_service;
+static bool g_untag_named, g_untagging_named;
+/* The service last said to clash, so that it is said once. */
+static uint16_t g_untag_warned;
+
 /* The class 171 instance each gathered rule came of, by its place. */
 static uint16_t g_rule_inst[OMCI_HW_VLAN_MAX_RULES];
 
@@ -943,6 +956,8 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 	g_making_n = 0;
 	g_phoning[0] = 0;
 	g_phoning[1] = 0;
+	g_untagging_service = 0;
+	g_untagging_named = false;
 
 	bool warned_full = false;
 
@@ -1023,6 +1038,43 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 					     k != OUT_UNI && k != OUT_OTHER) ||
 					    (sr->action == OMCI_SVC_ONLY_VEIP &&
 					     k != OUT_VEIP && k != OUT_OTHER)) {
+						fate_put(record, cur.instance,
+							 i,
+							 OMCI_VLAN_FATE_LOCAL,
+							 &cand, fibre, NULL);
+						continue;
+					}
+				}
+
+				/*
+				 * A rule of the untagged frames of an Ethernet
+				 * UNI or of the VEIP, not an IP host's, which
+				 * has a host VLAN of its own: while the
+				 * stick's management takes those frames, a
+				 * rule that tags them stays out of the
+				 * hardware, as its service gets none.
+				 */
+				if (d.filter_outer_pri == VLAN_PRI_NO_TAG &&
+				    d.filter_inner_pri == VLAN_PRI_NO_TAG &&
+				    out_of(mib, class_id, cur.instance) !=
+					    OUT_IPHOST) {
+					const bool tags =
+						cand.kind ==
+							OMCI_HW_VLAN_CVID_PUSH ||
+						cand.kind ==
+							OMCI_HW_VLAN_SCVID_PUSH;
+
+					g_untagging_named = true;
+					if (tags && g_untagging_service == 0u)
+						g_untagging_service = fibre;
+					if (tags && g_untag_mgmt) {
+						if (warn &&
+						    fibre != g_untag_warned) {
+							g_untag_warned = fibre;
+							OMCI_WARN(
+								"me171: the OLT gives the host's untagged frames VLAN %u, but the stick's management takes them: the service gets none",
+								fibre);
+						}
 						fate_put(record, cur.instance,
 							 i,
 							 OMCI_VLAN_FATE_LOCAL,
@@ -1203,6 +1255,10 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 		g_made_n = g_making_n;
 		g_phone[0] = g_phoning[0];
 		g_phone[1] = g_phoning[1];
+		g_untag_service = g_untagging_service;
+		g_untag_named = g_untagging_named;
+		if (!g_untag_mgmt || g_untag_service == 0u)
+			g_untag_warned = 0;
 	}
 	if (bad_out != NULL)
 		*bad_out = bad;
@@ -1224,6 +1280,9 @@ static void svc_ready(const struct omci_mib *mib, uint16_t class_id,
 	g_svc_n = omci_hw()->service_rules != NULL ?
 			  omci_hw()->service_rules(g_svc, ARRAY_SIZE(g_svc)) :
 			  0u;
+	g_untag_mgmt = omci_hw()->host_untagged != NULL &&
+		       omci_hw()->host_untagged();
+	g_untag_bridge = false;
 	memset(g_host_used, 0, sizeof(g_host_used));
 	for (size_t k = 0; k < g_svc_n; k++)
 		if (g_svc[k].action == OMCI_SVC_MOVE)
@@ -1231,6 +1290,16 @@ static void svc_ready(const struct omci_mib *mib, uint16_t class_id,
 				(uint8_t)(1u << (g_svc[k].host % 8u));
 	for (enum omci_status w = omci_mib_walk_first(mib, &cur); w == OMCI_OK;
 	     w = omci_mib_walk_next(mib, &cur)) {
+		if (cur.class_id == OMCI_BRIDGE_PORT_CLASS_ID) {
+			uint8_t tp = 0;
+
+			if (omci_mib_attr_get(mib, cur.class_id, cur.instance,
+					      OMCI_BRIDGE_PORT_ATTR_TPTYPE, &tp,
+					      1u, NULL) == OMCI_OK &&
+			    (tp == OMCI_BRIDGE_TP_GEM_IW ||
+			     tp == OMCI_BRIDGE_TP_MAPPER))
+				g_untag_bridge = true;
+		}
 		if (cur.class_id != class_id)
 			continue;
 		const size_t count = omci_mib_table_count(
@@ -1257,6 +1326,15 @@ size_t omci_vlan_services(const struct omci_svc_rule **person,
 	*made = g_made;
 	*made_n = g_made_n;
 	return g_svc_n;
+}
+
+bool omci_vlan_untagged(struct omci_vlan_untagged *out)
+{
+	out->management = g_untag_mgmt;
+	out->service = g_untag_service;
+	out->named = g_untag_named;
+	out->bridged = !g_untag_named && g_untag_bridge;
+	return out->management && (out->service != 0u || out->bridged);
 }
 
 bool omci_vlan_phone(uint16_t *fibre, uint16_t *host)
