@@ -36,6 +36,22 @@
 		#size-cells = <1>;
 		ranges;
 
+		/*
+		 * The record of the kernel's last words, which a restart after a
+		 * panic leaves in place: 32 KiB of the console and two records of
+		 * 16 KiB, of an oops and of the panic that follows it. It lies
+		 * just below the downstream area, above what the loader's TFTP
+		 * puts at 16 MiB and below where it runs itself, at 28 MiB.
+		 */
+		ramoops@16ef000 {
+			compatible = "ramoops";
+			reg = <0x016ef000 0x10000>;
+			console-size = <0x8000>;
+			record-size = <0x4000>;
+			ecc-size = <16>;
+			no-map;
+		};
+
 		pbo_ds: pbo@16ff000 {
 			reg = <0x016ff000 0x101000>;
 			no-map;
