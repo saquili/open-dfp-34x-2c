@@ -567,9 +567,7 @@ function PvidCard() {
       {p && m && u?.clash && u.host != null && (
         <div role="alert" className="alert alert-warning alert-soft text-base-content">
           <TriangleAlert className="size-4 shrink-0 text-warning" aria-hidden />
-          <span className="text-sm">
-            {t("sfp.pvidOltService", { vlan: u.host, mgmt: m.vlan })}
-          </span>
+          <span className="text-sm">{t("sfp.pvidOltService", { vlan: u.host, mgmt: m.vlan })}</span>
         </div>
       )}
       {p && m && u?.bridged && p.pvid !== 1 && (
