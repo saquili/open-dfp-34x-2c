@@ -22,8 +22,18 @@
 # without a fiber the PON says nothing about the new system. Nor does it in
 # O7, where the OLT disabled the ONU, which stays so across a restart until
 # the OLT enables it (pon keep): that counts as up. All three hold
-# for a person to manage the stick and for the operator to see it. Then
-# "onu-update commit" makes the running bank the one the boot loader starts.
+# for a person to manage the stick and for the operator to see it. And a
+# person must have reached it: a sign-in to the panel, or an ssh login, from
+# an address other than the stick's own. The status daemon marks the first
+# such sign-in in /run/pond/signed-in; dropbear says a login in the system
+# log. The status daemon's answer on ADDRESS, which onu-trial asks for from
+# the stick itself, says nothing of whether anybody can reach the stick from
+# the host's side; a system that nobody reaches within the trial goes back
+# to the committed bank, the shipped firmware after an install from its
+# page.
+#
+# Then "onu-update commit" makes the running bank the one the boot loader
+# starts.
 # When they do not hold within TRIAL_LIMIT seconds (300), onu-trial restarts
 # the stick, and the boot loader, which set sw_tryactive back to 2 before it
 # started the tried bank, starts the committed one. The watchdog that the
@@ -101,11 +111,33 @@ pon_ready() {
 	grep 'alarms' "$RUN/onu-trial.pon" | grep -q 'LOS'
 }
 
+# The stick's own IPv4 addresses, one per line: those of /run/onu-mgmt and
+# the interfaces', and the loopback's.
+own_addresses() {
+	{
+		sed -n -e 's/^ADDRESS=//p' -e 's/^DATA_ADDRESS=//p' "$RUN/onu-mgmt" 2>/dev/null
+		ip -4 addr show 2>/dev/null | sed -n 's/^ *inet \([0-9.]*\).*/\1/p'
+		[ -z "$address" ] || echo "$address"
+	} | sed 's|/.*||' | grep -v '^$'
+	echo 127.0.0.1
+}
+
+# Whether a person signed in since the start, from an address other than the
+# stick's own: to the panel, which the status daemon marks, or over ssh,
+# which dropbear says in the system log.
+person_came() {
+	[ -s "$RUN/pond/signed-in" ] && return 0
+	logread 2>/dev/null |
+		sed -n "s/.*auth succeeded for '[^']*'.* from \([0-9.]*\):[0-9]*.*/\1/p" |
+		grep -v -x -F "$(own_addresses)" | grep -q .
+}
+
 # What is not up yet, or nothing when all of it is.
 missing() {
 	omcid_steady || { echo "omcid does not run steadily"; return; }
 	pond_answers || { echo "the status daemon does not answer"; return; }
 	pon_ready || { echo "the PON is not in O5"; return; }
+	person_came || { echo "nobody signed in to the panel or over ssh from the host's side"; return; }
 }
 
 status=$(onu-update status 2>/dev/null) || exit 0
@@ -118,7 +150,7 @@ esac
 [ "$running" != "$committed" ] || exit 0
 
 state trial
-log "bank $running runs on trial, bank $committed is committed"
+log "bank $running runs on trial, bank $committed is committed; waiting for a sign-in from the host's side"
 waited=0
 while :; do
 	why=$(missing)

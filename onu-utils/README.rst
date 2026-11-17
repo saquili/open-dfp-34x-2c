@@ -371,6 +371,13 @@ by its whole path where procd starts it.
    PON is in O5 (or has no light, or is in O7, where the OLT keeps it
    disabled), and restarts into the committed bank when
    that does not happen within 300 s, forcing the restart after 30 s more.
+   A person must have reached the new system as well: a sign-in to the
+   panel, which the status daemon marks in ``/run/pond/signed-in``, or an ssh
+   login that dropbear logs, from an address other than the stick's own. Its
+   own look at the status daemon, from the stick itself, proves nothing of
+   the kind. A system that nobody reaches within the 300 s goes back to the
+   committed bank: the other system of this kind after an update, the
+   shipped firmware after an install from its page.
 
 ``pon``
    shows the PON devices of the kernel and their ONU, through the kernel's
