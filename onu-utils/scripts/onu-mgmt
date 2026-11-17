@@ -179,7 +179,9 @@ gateway_ok() {
 		g = ip($1); o = ip(a[1]); len = a[2] + 0
 		if (g < 0 || o < 0 || len < 1 || len > 30 || g == o)
 			exit 1
-		size = 2 ^ (32 - len)
+		# The awk of BusyBox has no ^ without its math support: doubling.
+		for (size = 1; len < 32; len++)
+			size *= 2
 		first = o - o % size
 		if (g < first || g >= first + size)
 			exit 1
