@@ -191,6 +191,9 @@ jobs:
         run: |
           tools/flash-layout/tests/run -v
           tools/flash-layout/flash-layout
+      - name: Self-tests of the checks of known vulnerabilities
+        # The daily workflow vulns.yml runs the checks themselves.
+        run: tools/vulns/tests/run -v
       - name: Self-tests of the run files check, and the page of the run files
         # Every file under /run that a script of the image names is on
         # docs/handbook/run-files.rst, and every file there is named.

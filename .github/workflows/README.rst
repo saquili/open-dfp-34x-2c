@@ -19,7 +19,13 @@ compared for reproducibility, and the cross toolchain, built once and compared
 with a second build on request, are built when started by hand, and so are
 their releases. A change to the panel on main
 builds its demo, in which a mock stick answers it in the browser, and puts it
-on the repository's GitHub Pages site (``demo.yml``). The merge rule is a
+on the repository's GitHub Pages site (``demo.yml``). Every day, and on a
+pull request that changes the checks, ``vulns.yml`` looks up the known
+vulnerabilities of what the image is made of (``tools/vulns``): the CVEs of
+the packages of the board's configuration, a newer release of the kernel's
+series with the CVEs it fixes, a newer Mongoose or Buildroot point release,
+and the advisories of the panel's npm packages; a job fails while it has a
+finding, so that the failed run is the notice. The merge rule is a
 green suite, full line coverage where it is measured, and a device run
 (``tests/device``).
 
