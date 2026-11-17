@@ -14,9 +14,11 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 int prov_uptime(struct prov_buf *out)
@@ -316,6 +318,137 @@ int prov_log(struct prov_buf *out)
 	}
 	pv_close(out, ']');
 	close(fd);
+	return 0;
+}
+
+#define CRASH_DIR "/sys/fs/pstore"
+
+static int name_cmp(const void *a, const void *b)
+{
+	return strcmp((const char *)a, (const char *)b);
+}
+
+/*
+ * The first @cap bytes of @path into @text, with a NUL byte, which a record
+ * that the restart garbled may hold, made '?': the length read, or -1.
+ */
+static ssize_t crash_text(const char *path, char *text, size_t cap)
+{
+	char rooted[512];
+	size_t got = 0;
+	int fd = open(prov_path(path, rooted, sizeof(rooted)), O_RDONLY | O_CLOEXEC);
+
+	if (fd < 0)
+		return -1;
+	while (got < cap) {
+		ssize_t n = read(fd, text + got, cap - got);
+
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			break;
+		got += (size_t)n;
+	}
+	close(fd);
+	for (size_t i = 0; i < got; i++)
+		if (!text[i])
+			text[i] = '?';
+	return (ssize_t)got;
+}
+
+/*
+ * The kernel's last words before the last restart, which ramoops kept in
+ * DRAM and pstore shows as files (onu-crash of onu-utils/README.rst), by
+ * name: each record's kind, the part of its name before the backend's
+ * ("dmesg" for an oops or a panic, "console" for the console's last lines
+ * of the start before); the reason of an oops or a panic, from the line
+ * pstore begins its record with ("Panic#1 Part1"); the time it was made,
+ * which the console's record has not; and its text. None when the kernel
+ * has no pstore or nothing was kept.
+ */
+int prov_crash(struct prov_buf *out)
+{
+	char names[CRASH_RECORDS][NAME_MAX + 1];
+	char rooted[512], path[sizeof(CRASH_DIR) + NAME_MAX + 2];
+	unsigned int count = 0, shown = 0, i;
+	struct dirent *d;
+	char *text;
+	DIR *dir;
+
+	dir = opendir(prov_path(CRASH_DIR, rooted, sizeof(rooted)));
+	if (dir) {
+		while ((d = readdir(dir)) && count < CRASH_RECORDS) {
+			size_t n = strnlen(d->d_name, sizeof(names[0]));
+
+			if (d->d_name[0] == '.' || n >= sizeof(names[0]))
+				continue;
+			memcpy(names[count], d->d_name, n + 1);
+			count++;
+		}
+		closedir(dir);
+	}
+	qsort(names, count, sizeof(names[0]), name_cmp);
+
+	text = count ? malloc(CRASH_TEXT) : NULL;
+	if (count && !text)
+		return -ENOMEM;
+
+	pv_open(out, '{');
+	pv_key(out, "records");
+	pv_open(out, '[');
+	for (i = 0; i < count; i++) {
+		const char *name = names[i];
+		const char *dash = strchr(name, '-');
+		struct stat st;
+		ssize_t len;
+		bool dmesg = !strncmp(name, "dmesg-", 6);
+
+		snprintf(path, sizeof(path), CRASH_DIR "/%.*s", NAME_MAX, name);
+		if (stat(prov_path(path, rooted, sizeof(rooted)), &st) ||
+		    !S_ISREG(st.st_mode))
+			continue;
+		len = crash_text(path, text, CRASH_TEXT);
+		if (len < 0)
+			continue;
+		if (shown++)
+			pv_comma(out);
+		pv_open(out, '{');
+		pv_key(out, "name");
+		pv_str(out, name);
+		pv_comma(out);
+		pv_key(out, "kind");
+		pv_strn(out, name, dash ? (size_t)(dash - name) : strlen(name));
+		pv_comma(out);
+		pv_key(out, "reason");
+		if (dmesg && memchr(text, '#', (size_t)len)) {
+			char why[16];
+			size_t n = 0;
+
+			while (n < (size_t)len && n + 1 < sizeof(why) &&
+			       text[n] != '#' && text[n] != '\n') {
+				why[n] = (char)(text[n] >= 'A' && text[n] <= 'Z' ?
+						text[n] - 'A' + 'a' : text[n]);
+				n++;
+			}
+			why[n] = '\0';
+			pv_str(out, why);
+		} else {
+			pv_null(out);
+		}
+		pv_comma(out);
+		pv_key(out, "time_s");
+		if (dmesg)
+			pv_num(out, (long long)st.st_mtime);
+		else
+			pv_null(out);
+		pv_comma(out);
+		pv_key(out, "text");
+		pv_strn(out, text, (size_t)len);
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+	pv_close(out, '}');
+	free(text);
 	return 0;
 }
 

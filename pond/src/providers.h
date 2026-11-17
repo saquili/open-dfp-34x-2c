@@ -65,6 +65,16 @@ void ssh_key_json(struct prov_buf *out, const char *line, const char *source);
 int prov_image(struct prov_buf *out);
 int prov_kernel(struct prov_buf *out);
 int prov_log(struct prov_buf *out);
+/*
+ * The kernel's last words before the last restart (pstore): CRASH_RECORDS
+ * records at most, each of CRASH_TEXT bytes at most.
+ */
+#define CRASH_RECORDS 8
+#define CRASH_TEXT (40u * 1024u)
+int prov_crash(struct prov_buf *out);
+int prov_crash_write(const char *val, char *err, size_t errcap, prov_done done,
+		     void *ctx);
+int prov_crash_set(const char *val, char *err, size_t errcap);
 int prov_memory(struct prov_buf *out);
 int prov_model(struct prov_buf *out);
 int prov_nl_fdb(const char *links, size_t llen, const char *fdb, size_t flen,

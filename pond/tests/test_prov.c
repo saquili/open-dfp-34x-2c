@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/un.h>
 #include <sys/socket.h>
@@ -3294,6 +3295,67 @@ static const char hostname_stub[] =
 
 static void test_product(void);
 
+static const char crash_stub[] =
+	"#!/bin/sh\n"
+	"echo \"$*\" >>\"$POND_ROOT/crash.log\"\n"
+	"[ -e \"$POND_ROOT/crash.fail\" ] && { echo 'rm: read-only'; exit 1; }\n"
+	"rm -f \"$POND_ROOT\"/sys/fs/pstore/*\n";
+
+static void test_crash(void)
+{
+	const struct timeval made[2] = { { 1763400000, 0 }, { 1763400000, 0 } };
+	char buf[4096], path[512], stub[512], err[256];
+	const char *s;
+	FILE *f;
+	int e;
+
+	puts("the kernel's last words before the last restart, and their removal");
+
+	s = render(prov_crash, buf, sizeof(buf), &e);
+	check(!e && !strcmp(s, "{\"records\":[]}"),
+	      "a kernel without pstore, or with nothing kept, has no records");
+
+	mkdir(prov_path("/sys/fs", path, sizeof(path)), 0755);
+	mkdir(prov_path("/sys/fs/pstore", path, sizeof(path)), 0750);
+	put("/sys/fs/pstore/dmesg-ramoops-0",
+	    "Panic#1 Part1\n<0>[  92.5] Kernel panic - not syncing: sysrq triggered crash\n",
+	    0444);
+	utimes(prov_path("/sys/fs/pstore/dmesg-ramoops-0", path, sizeof(path)), made);
+	f = fopen(prov_path("/sys/fs/pstore/console-ramoops-0", path, sizeof(path)), "w");
+	if (f) {
+		fwrite("boot\0ok\n", 1, 8, f);
+		fclose(f);
+	}
+	s = render(prov_crash, buf, sizeof(buf), &e);
+	check(!e && well_formed(s), "the records read, as one object");
+	check(s && strstr(s, "{\"name\":\"console-ramoops-0\",\"kind\":\"console\","
+			     "\"reason\":null,\"time_s\":null,\"text\":\"boot?ok\\n\"}") != NULL,
+	      "the console's record comes first by name, without a time, a NUL "
+	      "byte of it made a question mark");
+	check(s && strstr(s, "{\"name\":\"dmesg-ramoops-0\",\"kind\":\"dmesg\","
+			     "\"reason\":\"panic\",\"time_s\":1763400000,") != NULL,
+	      "a panic's record, its reason from pstore's first line, its time");
+	check(s && strstr(s, "not syncing: sysrq triggered crash\\n\"}") != NULL,
+	      "and its text whole");
+
+	put("/crash-stub", crash_stub, 0755);
+	setenv("POND_ONU_CRASH", prov_path("/crash-stub", stub, sizeof(stub)), 1);
+	check(prov_crash_set("CLEAR=0\n", err, sizeof(err)) == -EINVAL &&
+		      prov_crash_set("KEEP=1\n", err, sizeof(err)) == -EINVAL,
+	      "only CLEAR=1 is a change");
+	put("/crash.fail", "", 0644);
+	check(prov_crash_set("CLEAR=1\n", err, sizeof(err)) == -EIO &&
+		      strstr(err, "read-only") != NULL,
+	      "a removal that fails says why");
+	unlink(prov_path("/crash.fail", path, sizeof(path)));
+	check(prov_crash_set("CLEAR=1\n", err, sizeof(err)) == 0 &&
+		      file_has("/crash.log", "clear\nclear\n"),
+	      "the removal goes to onu-crash clear");
+	s = render(prov_crash, buf, sizeof(buf), &e);
+	check(!e && !strcmp(s, "{\"records\":[]}"), "and the records are gone");
+	unsetenv("POND_ONU_CRASH");
+}
+
 static void test_system(void)
 {
 	char buf[2048], stub[512], err[256], path[512], onu_config[512];
@@ -3870,6 +3932,7 @@ int main(void)
 	test_omci();
 	test_omci_frames();
 	test_system();
+	test_crash();
 	test_clock();
 	test_table();
 	test_failure_paths();

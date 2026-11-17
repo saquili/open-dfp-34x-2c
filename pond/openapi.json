@@ -2338,6 +2338,53 @@
         "operationId": "getLog"
       }
     },
+    "/api/get/crash": {
+      "get": {
+        "tags": [
+          "values"
+        ],
+        "summary": "The value crash",
+        "description": "The kernel's last words before the last restart, kept across it in DRAM (pstore): the record of an oops or a panic, and the console's last lines of the start before. Read only on its own, as the log is.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "crash"
+                    },
+                    "value": {
+                      "$ref": "#/components/schemas/Crash"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "value"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "500": {
+            "description": "The value cannot be read, or is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getCrash"
+      }
+    },
     "/api/get/identity": {
       "get": {
         "tags": [
@@ -3714,6 +3761,89 @@
           }
         },
         "operationId": "setSfpPvid"
+      }
+    },
+    "/api/set/crash": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "summary": "Change crash",
+        "description": "Remove the kernel's records of before the last restart, which frees their place for the next.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XPond"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "KEY=VALUE lines, one per line",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "CLEAR": {
+                    "type": "string",
+                    "description": "1: remove the records"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "CLEAR"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "const": "crash"
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The change is refused, and why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorised"
+          },
+          "403": {
+            "description": "No X-Pond header, or the default password is in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "setCrash"
       }
     },
     "/api/set/identity": {
@@ -9884,6 +10014,61 @@
         "required": [
           "pvid",
           "trial"
+        ]
+      },
+      "Crash": {
+        "description": "The kernel's last words before the last restart (pond's value \"crash\"), which ramoops kept in DRAM across it and pstore shows in /sys/fs/pstore. None after a start from power off, or once removed.",
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "description": "The records by name, at most 8.",
+            "items": {
+              "$ref": "#/components/schemas/CrashRecord"
+            }
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "CrashRecord": {
+        "description": "A record of pstore's.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its file's name, such as dmesg-ramoops-0."
+          },
+          "kind": {
+            "type": "string",
+            "description": "\"dmesg\" for the record of an oops or a panic, \"console\" for the console's last lines of the start before."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Of an oops or a panic, why the kernel wrote it: \"oops\", \"panic\", or another reason of the kernel's, in small letters."
+          },
+          "time_s": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "When an oops or a panic was written, in seconds since 1970 by the stick's clock then; none for the console."
+          },
+          "text": {
+            "type": "string",
+            "description": "The record, at most 40 KiB, a NUL byte of it made a question mark."
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "reason",
+          "time_s",
+          "text"
         ]
       }
     }

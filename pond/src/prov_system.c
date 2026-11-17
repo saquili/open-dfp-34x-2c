@@ -485,6 +485,55 @@ int prov_sfp_pvid_set(const char *val, char *err, size_t errcap)
 	return prov_wait(prov_sfp_pvid_write(val, err, errcap, prov_waited, &w), &w);
 }
 
+/* The removal of the kernel's records of before the last restart. */
+static struct prov_change g_crash;
+
+static void crash_cleared(void *ctx, int code, const char *output)
+{
+	char err[256];
+
+	(void)ctx;
+	if (code) {
+		snprintf(err, sizeof(err), "%s",
+			 *output ? output : "the records were not removed");
+		err[strcspn(err, "\n")] = '\0';
+	}
+	prov_change_end(&g_crash, code ? -EIO : 0, code ? err : "");
+}
+
+/*
+ * CLEAR=1: remove the kernel's records of before the last restart, which
+ * frees their place for the next (onu-crash clear, which only root may run).
+ */
+int prov_crash_write(const char *val, char *err, size_t errcap,
+		     prov_done done, void *ctx)
+{
+	char v[8];
+	int rc;
+
+	if (!line_of(val, "CLEAR", v, sizeof(v)) || strcmp(v, "1")) {
+		snprintf(err, errcap, "CLEAR=1");
+		return -EINVAL;
+	}
+	rc = prov_change_take(&g_crash, done, ctx, err, errcap);
+	if (rc)
+		return rc;
+	rc = bus_act_begin("crash_clear", NULL, NULL, 0, NULL, crash_cleared, NULL);
+	if (rc) {
+		prov_change_drop(&g_crash);
+		snprintf(err, errcap, "the records were not removed");
+		return -EIO;
+	}
+	return -EINPROGRESS;
+}
+
+int prov_crash_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_crash_write(val, err, errcap, prov_waited, &w), &w);
+}
+
 /* A flag of KEY= in @text, 0 or 1, as JSON, or null. */
 static void pv_line_bool(struct prov_buf *out, const char *text, const char *key)
 {

@@ -573,6 +573,14 @@ more than 32 KiB, 423 and 429 as the updates do.
   ``COMMIT=1``, taken only from a request that came to the new address, makes
   it the pair in use and stops the old address; ``CANCEL=1`` takes it away. A
   read gives the pair and one that waits.
+* ``crash``: the kernel's last words before the last restart, which ramoops
+  keeps in DRAM across it and pstore shows in ``/sys/fs/pstore``, a slow value
+  read only on its own: each record by name, its kind (``dmesg`` for an oops
+  or a panic, ``console`` for the console's last lines of the start before),
+  the reason of an oops or a panic, the time it was written, and its text, at
+  most 40 KiB. The directory is root's and pond's group's (``/sbin/init``);
+  ``CLEAR=1`` removes the records through ``onu-crash clear``, which only
+  root may run.
 
 Among the values read only: ``cpu``, the processor's clock ticks in each state
 (a share of busy time is the difference of two reads), its load and model;

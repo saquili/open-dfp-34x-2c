@@ -4,6 +4,7 @@
 		"onu-act": { "methods": [
 			"lane_status", "lane_try", "lane_keep", "lane_revert",
 			"pvid_status", "pvid_try", "pvid_keep", "pvid_revert",
+			"crash_clear",
 			"mgmt_status", "mgmt_add", "mgmt_commit", "mgmt_cancel",
 			"changes_confirm", "changes_revert",
 			"system_store", "hostname",

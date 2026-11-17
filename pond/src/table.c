@@ -42,6 +42,10 @@ const struct prov pond_provs[] = {
 	{ "image", "System", "Image", prov_image, NULL, 0 },
 	{ "model", "System", "Board", prov_model, NULL, 0 },
 	{ "log", "System", "Kernel log", prov_log, NULL, PROV_SLOW },
+	{ "crash", "System",
+	  "The kernel's last words before the last restart, kept across it: the "
+	  "record of an oops or a panic, and the console's last lines; and their "
+	  "removal", prov_crash, prov_crash_write, PROV_SLOW },
 
 	{ "identity", "GPON", "How the stick introduces itself to the OLT",
 	  prov_identity, prov_identity_write, 0 },
