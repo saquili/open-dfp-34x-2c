@@ -242,7 +242,8 @@ docs:
 # The offline gates: the provenance gates (their own tests, then the tree and
 # the commits since main) and the self-tests of the tools, of the script that
 # fetches the build system, of the one that archives the kernel, of the size
-# check of the images, of the cut of the shared libraries, of the scripts and
+# check of the images, of the cut of the shared libraries, of the checks of
+# known vulnerabilities (offline), of the scripts and
 # lists of the distribution, of the device tests (their own, which need no
 # stick), of the launcher of the tests in qemu (which need no docker) and of
 # the files of the kexec trial and of the lab host's tools. The instruction-set
@@ -263,6 +264,7 @@ check:
 	tools/flash-layout/flash-layout >/dev/null
 	tools/run-files/tests/run
 	tools/run-files/run-files
+	tools/vulns/tests/run
 	tools/image-budget/tests/run
 	tools/docs/tests/run
 	tools/docs/render --check --if-available
