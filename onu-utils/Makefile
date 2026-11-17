@@ -169,6 +169,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	sh tests/test_onu_trial.sh
 	sh tests/test_onu_lane.sh
 	sh tests/test_onu_pvid.sh
+	sh tests/test_onu_crash.sh
 	sh tests/test_onu_change.sh
 	sh tests/test_onu_mgmt.sh
 	sh tests/test_onu_net.sh

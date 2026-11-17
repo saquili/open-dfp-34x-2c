@@ -10,7 +10,7 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 ``passwd``, which are in ``/usr/sbin`` and ``/usr/bin``. The others only other
 programs run, and they are in ``/usr/lib/onu``, out of a person's way (ADR
 0012): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-pvid``,
-``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call``,
+``onu-crash``, ``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call``,
 ``onu-fw``, ``onu-dhcpc`` and ``onu-config.sh``. A script that runs one of them finds it there, and names it
 by its whole path where procd starts it.
 
@@ -657,6 +657,17 @@ by its whole path where procd starts it.
       onu-pvid keep
       onu-pvid revert
       onu-pvid set PVID       # at once, with no trial
+
+``onu-crash``
+   the kernel's last words before a restart, which ramoops keeps in DRAM
+   across it (the device tree sets 64 KiB aside) and pstore shows in
+   ``/sys/fs/pstore``: the record of an oops or a panic, ``dmesg-ramoops-N``,
+   and the console's last lines of the start before, ``console-ramoops-0``.
+   ``/sbin/init`` mounts it and gives its directory to pond's group, which
+   reads it for the panel; this script, which only root may run, removes
+   the records, which frees their place::
+
+      onu-crash clear
 
 ``onu-change``
    the changes on trial (ADR 0011), whichever program made them: the

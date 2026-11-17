@@ -1,0 +1,37 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-crash: the kernel's last words before a restart, which ramoops keeps in
+# DRAM across it and pstore shows as files in /sys/fs/pstore: the record of
+# an oops or a panic (dmesg-ramoops-N), and the console's last lines of the
+# start before (console-ramoops-0). pond reads them for the panel; root alone
+# may remove them.
+#
+#   onu-crash clear       remove the records, which frees their place for the
+#                         next; the console's record of the start before goes
+#                         too, and the console of this start fills it again
+#
+# ONU_ROOT, when set, is put in front of /sys, for the tests.
+
+set -u
+DIR=${ONU_ROOT:-}/sys/fs/pstore
+
+clear() {
+	n=0
+	for f in "$DIR"/*; do
+		[ -f "$f" ] || continue
+		rm -f "$f" || return 1
+		n=$((n + 1))
+	done
+	[ "$n" -eq 0 ] || logger -t onu-crash "the kernel's $n records of before removed" 2>/dev/null
+	return 0
+}
+
+case ${1:-} in
+clear) clear ;;
+*)
+	echo "usage: onu-crash clear" >&2
+	exit 2
+	;;
+esac

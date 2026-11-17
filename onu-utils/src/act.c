@@ -18,6 +18,7 @@
 /*
  * What the status daemon asks of the stick, as it ran it itself before
  * (pond/README.rst): the lane of the SFP port, the management pair, the
+ * kernel's records of before the last restart, which it removes, the
  * changes on trial, the name, the identity, the updates, the restart, and
  * the settings of the data path with the accounts, which the status daemon
  * sees without their secrets (onu-config current) and changes on trial
@@ -53,6 +54,7 @@ const struct act_method act_methods[] = {
 	  .params = { { "pvid", DIGITS, 4 } } },
 	{ .name = "pvid_keep", .program = LIB "onu-pvid", .fixed = { "keep" } },
 	{ .name = "pvid_revert", .program = LIB "onu-pvid", .fixed = { "revert" } },
+	{ .name = "crash_clear", .program = LIB "onu-crash", .fixed = { "clear" } },
 	{ .name = "mgmt_status", .program = LIB "onu-mgmt", .fixed = { "status" } },
 	{ .name = "mgmt_add", .program = LIB "onu-mgmt", .fixed = { "add" },
 	  .params = { { "vlan", DIGITS, 4 }, { "address", DIGITS "./", 18 },
