@@ -221,3 +221,11 @@ lists only the releases in between, and the gates treat it as pristine
 upstream, as they treat the import. A merge from the upstream stable
 repository instead would list that repository's whole history in the squash
 commit, because the release commits here are not upstream's own.
+
+The merge's message may say more than the line above, but it must not carry
+``git-subtree-mainline`` and ``git-subtree-split`` lines, which only the
+squash commit and the first import hold. ``git subtree split`` reads such a
+pair as a rejoin: it takes the merge's first parent for the bare release, and
+the split then starts the kernel history at the new release, without the
+series, which the kernel workflow reports as "No kernel commits above the
+import".
