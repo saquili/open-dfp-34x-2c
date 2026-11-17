@@ -437,8 +437,9 @@ Reaching the stick
   address, on VLAN 4094 of the host link, which the switch keeps off the PON
   both ways: the address the shipped firmware's page had, or
   ``192.168.1.1/24``. On a stick installed from the shipped firmware's page
-  the host link's untagged frames go to that VLAN too, so the address
-  answers without a tag (``MGMT_UNTAGGED``, ADR 0023). A bench may add one
+  the SFP port's PVID is that VLAN, so the address answers without a tag
+  (``SFP_PVID``, ADR 0023); a gateway of the management network
+  (``MGMT_GATEWAY``) lets it answer from other networks. A bench may add one
   on the host link itself
   (``DATA_ADDRESS`` in ``/etc/board.conf``, ``building.rst``), which is a
   management address too. Port 80 sends a browser to port 443.

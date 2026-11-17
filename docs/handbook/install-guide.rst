@@ -183,8 +183,8 @@ them from the shipped firmware's files:
   default is not taken, and the panel would then ask for a new password at
   the first sign-in instead (ADR 0009).
 * **Its LAN address becomes the panel's**, without a VLAN tag as the page
-  had it, and on VLAN 4094, at every start until the panel moves the stick
-  to an address of its own. If you gave the
+  had it (the SFP port's PVID is the management VLAN, 4094), at every start
+  until the panel moves the stick to an address of its own. If you gave the
   page another address, the panel is at that one, and the router needs an
   address of its network in the steps below.
 
@@ -234,8 +234,8 @@ Step 4: Reach the panel
 =======================
 
 This system answers at the address the shipped firmware's page had, without
-a VLAN tag as the page did, and on VLAN 4094 of the host link (README,
-"Reaching the panel"). The router's address stays on the port. Some half a
+a VLAN tag as the page did: the SFP port's PVID is its management VLAN, 4094
+(README, "Reaching the panel"). The router's address stays on the port. Some half a
 minute after its restart the stick answers::
 
     ping -c 3 192.168.1.1

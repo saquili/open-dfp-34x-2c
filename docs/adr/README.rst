@@ -128,5 +128,5 @@ The index
      - Sign each release, and say what a file is signed with
      - Accepted
    * - 0023
-     - Trap the host link's untagged frames to management
+     - Give the SFP port a PVID, as on an 802.1Q switch
      - Accepted

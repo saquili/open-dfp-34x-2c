@@ -546,9 +546,10 @@ filesystem tree before it packs ``r0.squashfs``::
 ``tools/bench`` tries; the defaults are in the script). Without
 ``DATA_ADDRESS``, as by default, the host link itself has no address: the
 stick is managed on its VLAN, which the switch keeps from the PON both ways,
-and on a new stick also without a tag (``MGMT_UNTAGGED``), and has no
-address on the subscriber's data path, as an operator's ONT has none. While
-the untagged frames go to management, ``DATA_ADDRESS`` gets none of them.
+and on a new stick without a tag, by the SFP port's PVID (``SFP_PVID``), and
+has no address on the subscriber's data path, as an operator's ONT has none.
+While the untagged frames go to management, ``DATA_ADDRESS`` gets none of
+them.
 On a finished build this runs the last step only, a few seconds, and it does
 not change the target directory: the next ``make`` without the variable gives
 the plain image again. The image with a key in it is not the

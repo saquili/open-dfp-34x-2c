@@ -126,14 +126,19 @@ Shared by two components
    * - ``/run/onu-mgmt``
      - ``onu-mgmt``
      - ``onu-apply``, ``onu-trial``, ``onu-config``, ``omcid``
-     - The management pair in use: ``VLAN``, ``ADDRESS``, ``IFACE``, ``NAME``,
-       ``PREF``, ``DATA_ADDRESS`` and ``UNTAGGED``, 1 when the host link's
-       untagged frames go to management.
+     - The management pair in use: ``VLAN``, ``ADDRESS``, ``GATEWAY``,
+       ``IFACE``, ``NAME``, ``PREF`` and ``DATA_ADDRESS``.
+   * - ``/run/onu-pvid``
+     - ``onu-pvid``
+     - the boot script, ``omcid``
+     - The SFP port's PVID in force, ``PVID`` (ADR 0023): the VLAN the
+       host's untagged frames get, 1 while they go to the OLT as they are.
    * - ``/run/onu-system``
      - ``onu-config``
-     - the boot script, ``onu-run``, ``onu-lane``, ``pond``
+     - the boot script, ``onu-run``, ``onu-lane``, ``onu-pvid``, ``pond``
      - The stick's own settings, ``NAME=value``: ``HOSTNAME``, ``MGMT_VLAN``,
-       ``MGMT_ADDRESS``, ``MGMT_UNTAGGED``, ``SFP_LANE``, ``NTP_SERVER``,
+       ``MGMT_ADDRESS``, ``MGMT_GATEWAY``, ``SFP_LANE``, ``SFP_PVID``,
+       ``NTP_SERVER``,
        ``LOG_SERVER``, ``PRODUCT_NAME`` (``pond``, which takes ``BuchOS``
        without it).
    * - ``/run/onu-auth``
@@ -307,9 +312,10 @@ Private to one program or to onu-utils
        ``onu-mgmt`` ends when the management link changes. BusyBox's own
        daemons write their PID files here too (``klogd.pid``,
        ``syslogd.pid``).
-   * - ``/run/messages``, ``/run/omcid.log``, ``/run/dhcp6d.log``,
-       ``/run/pond/log``, ``/run/onu-trial.log``
-     - The system log (``syslogd``, one older copy beside it) and the logs of
+   * - ``/run/messages``, ``/run/messages.0``, ``/run/omcid.log``,
+       ``/run/dhcp6d.log``, ``/run/pond/log``, ``/run/onu-trial.log``
+     - The system log (``syslogd``, one older copy beside it, which
+       ``onu-trial`` reads for the ssh sign-ins of a trial) and the logs of
        the programs that write their own. In memory, as a bench reads them.
    * - ``/run/resolv.conf.auto``
      - The name servers netifd's interfaces got (``-r``). Nothing in this

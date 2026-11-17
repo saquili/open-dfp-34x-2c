@@ -1,9 +1,9 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 .. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-============================================================
-ADR 0023: Trap the host link's untagged frames to management
-============================================================
+==========================================================
+ADR 0023: Give the SFP port a PVID, as on an 802.1Q switch
+==========================================================
 
 :Status: Accepted
 :Date: 2026-11-17
@@ -12,16 +12,16 @@ ADR 0023: Trap the host link's untagged frames to management
 Summary
 =======
 
-The stick's untagged traffic on the host link can go to its management, so
-that a stick just installed from the shipped firmware's page answers at the
-address that page had, without a VLAN set on the router. The switch then
-traps the host link's frames without a tag to the CPU alone, so that none of
-them reaches the PON, and in software they are given the management VLAN on
-the way in, whose frames leave the host link without their tag. The data
-path stays as the OLT provisions it. When the OLT gives the subscriber's
-untagged frames a service of its own while they go to management, the two
-claim the same frames: the stick says so, as it says of two services that
-would take one VLAN towards the host, and the person decides.
+The stick behaves towards the router as a port of an 802.1Q switch: the SFP
+port has a PVID, the VLAN the router's untagged frames get, whose frames go
+back to the router untagged, and the PON side's PVID is 1, the operator's
+untagged traffic. A stick installed from the shipped firmware's page starts
+with the PVID of its management VLAN, so that its panel answers untagged at
+the address that page had, without a VLAN set on the router; one updated from
+an earlier build keeps 1, and the untagged frames go to the operator as they
+did. A PVID of a service's VLAN towards the router gives that service the
+untagged frames. The panel shows the stick's ports and VLANs as a switch's
+page does, and a change of the PVID runs on trial.
 
 Context
 =======
@@ -95,53 +95,60 @@ Options considered
   and moved the stick's other VLAN devices on ``sfp`` onto the bridge, as the
   kernel refuses a bridge VLAN on a port whose VLAN device has its VID. Not
   taken.
-* **The switch's trap, and the tag in software.** An ACL rule on ``sfp``'s
-  ingress traps the frames whose C-tag field reads 0 to the CPU alone; the
-  data path is untouched, and the switch's tables hold nothing more. Taken.
+* **A flag of management's: untagged frames to management or not.** It
+  covers the one case, and a person who knows switches finds no PVID to set
+  and no way to give the untagged frames to a service. Not taken.
+* **A PVID, by the switch's trap and the classifier's rules.** An ACL rule on
+  ``sfp``'s ingress traps the frames whose C-tag field reads 0 to the CPU
+  alone for a VLAN of the stick's own; a rule of the classifier gives them a
+  service's VLAN on the fibre; the switch's tables hold nothing more. Taken.
 
 Decision
 ========
 
-* **Untagged frames from the router go to management, on a new install.**
-  On a stick whose first start follows an install from the shipped
-  firmware's page, ``onu-config`` stores ``MGMT_UNTAGGED=1``; a stick updated
-  from an earlier build of this system keeps its store, without the key, and
-  management on VLAN 4094 alone.
-* **The switch traps them, the software tags them.** With
-  ``MGMT_UNTAGGED=1`` ``onu-mgmt`` puts four rules on ``sfp``: in software,
-  on the ingress, the management VLAN's tag pushed onto a frame without a
-  tag and set as the VID of a priority tag, and, on the egress, the
-  management VLAN's tag taken away; then, in the switch, the trap of the
-  frames without a tag or with a priority tag to the CPU alone. The software's
-  rules go in before the trap and out after it, so that no trapped frame
-  reaches the bridge untagged. Management then answers untagged alone: the
-  frames of its VLAN leave ``sfp`` without the tag.
-* **The data path stays as the OLT provisions it.** omcid builds the bridge
-  as before; while the trap is on, the subscriber's untagged frames reach
-  none of its ports.
-* **A claim of the untagged frames by the OLT is a clash.** When the OLT
-  gives the subscriber's untagged frames a service while they go to
-  management, the service gets none of them, and omcid reports it beside the
-  services it moved for other clashes. The panel shows it with the two ways
-  out: a rule of the services that moves the OLT's service to a tagged VLAN
-  towards the host, which leaves untagged frames to management, or
-  management on its VLAN alone, which gives them to the service. The
-  stick's own uses of the host link without a tag, a bench's
-  ``DATA_ADDRESS``, the link a session hands its address down on and a local
-  network without a VLAN, get no untagged frames either while management has
-  them, which the panel says too.
-* **A person changes it on the panel, on trial**, as a change of the
-  management address is; a new management pair in another VLAN, confirmed
-  through that VLAN, keeps it tagged, and the store then holds
-  ``MGMT_UNTAGGED=0``.
+* **The SFP port has a PVID, the PON side 1.** The router's untagged frames,
+  and those with a priority tag, get the SFP port's PVID; the frames of that
+  VLAN leave the SFP port untagged. 1 is the PON side's: with the PVID 1 the
+  untagged frames go to the OLT as they are, VLAN 1 untagged on both sides.
+  ``onu-pvid`` owns the PVID (``/run/onu-pvid``, ``SFP_PVID`` of the store).
+* **A new install starts with the management VLAN's.** On a stick whose
+  first start follows an install from the shipped firmware's page,
+  ``onu-config`` stores ``SFP_PVID=4094``; a stick updated from an earlier
+  build of this system keeps its store, without the key, and the PVID 1.
+* **A VLAN of the stick's own: the switch traps, the software tags.** When
+  the PVID is the management VLAN or a VLAN device on ``sfp``, the switch
+  traps the untagged and priority-tagged frames to the CPU alone, and in
+  software they are given that VLAN's tag on ``sfp``'s ingress, which its
+  frames lose on ``sfp``'s egress; the software's rules go in before the trap
+  and out after it. That VLAN then answers untagged alone.
+* **A service's VLAN: a rule of the classifier.** While the PVID is not 1,
+  omcid gives a service the OLT set up on untagged frames a host VLAN of its
+  own, the fibre's when free, as it does an IP host's; a PVID that is a
+  service's host VLAN puts a rule ahead of the others that gives untagged
+  frames the service's VLAN on the fibre and takes it away on the way down,
+  the service's translation then working upstream alone. A PVID that leads
+  nowhere drops the untagged frames, as a switch does.
+* **The data path stays as the OLT provisions it** but for these rules.
+* **A change runs on trial**, ten minutes, kept from the panel or taken back
+  by itself, as the lane's mode is. A new management pair in another VLAN,
+  confirmed through that VLAN, sets a PVID of the old VLAN back to 1.
+* **The panel shows the stick as a switch.** The SFP page lists the ports,
+  SFP and PON, with their PVIDs, and the VLANs with their members, untagged,
+  tagged or not, and what each VLAN is: management, the operator's services,
+  the service the OLT set up untagged, VLAN 1. It says when the panel would
+  answer tagged alone, and when the OLT's untagged service or its bridge
+  would want the untagged frames while the PVID leads them elsewhere: omcid
+  reports it in ``service_rules``.
 
 Consequences
 ============
 
-* While management has the untagged frames, every frame the router sends
-  without a tag reaches the CPU, within the CPU port's limit of frames a
-  second, as the management VLAN's do.
-* The steps, each its own change and test: the trap and the tags in
-  software; the clash of an untagged service, and of the stick's own
-  untagged uses, with management, in omcid, pond and the panel; the change
-  on the panel; the management gateway of issue 1.
+* While the PVID is a VLAN of the stick's own, every frame the router sends
+  untagged reaches the CPU, within the CPU port's limit of frames a second, as
+  the management VLAN's do.
+* The PVID 4094 of a new stick leaves its management VLAN untagged on the
+  SFP port: a router that reaches it tagged sets the PVID to 1 first.
+* What was measured with a service's VLAN as the PVID is the classifier's
+  rule of an OLT that tags untagged frames; the lab's OLT sets up none, so
+  it is tested on the build machine alone until an OLT that does is at
+  hand.

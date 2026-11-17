@@ -435,10 +435,10 @@ Before you install
   firmware stays in the other bank, as the way back, with its settings.
 * **The panel answers without a VLAN tag**, at the address where the
   shipped firmware's page was, ``192.168.1.1/24`` unless it was changed
-  there, and on VLAN 4094 (`Reaching the panel`_). The router's frames
-  without a tag then go to the panel, not to the OLT's services. A stick
-  updated from an earlier build of this system keeps the panel on VLAN 4094
-  alone.
+  there (`Reaching the panel`_): the SFP port's PVID is the management VLAN,
+  4094, so the router's frames without a tag go to the panel, not to the
+  OLT's services. A stick updated from an earlier build of this system keeps
+  the PVID 1 and the panel on VLAN 4094.
 * **Copy the whole flash right after the install**, before the first
   ``update.bin``. Take it over ssh and compare its SHA-256 digest with the
   stick's, the way that was tried on a stick (`backup.rst
@@ -495,20 +495,24 @@ Before you install
 Reaching the panel
 ------------------
 
-The stick answers at the address the shipped firmware's page had, on VLAN
-4094 of its host link, which its switch keeps away from the PON. Installed
-from the shipped firmware's page, it answers there without a VLAN tag too:
-the router's frames without a tag go to the panel and nowhere else, so give
-the router's SFP port an address of the same network, open
+The stick answers at the address the shipped firmware's page had, in its
+management VLAN, 4094, which its switch keeps away from the PON. Its SFP
+port has a PVID, as a port of an 802.1Q switch has (ADR 0023,
+`docs/adr/0023-sfp-port-pvid.rst <docs/adr/0023-sfp-port-pvid.rst>`__): the
+VLAN the router's untagged frames get, whose frames go back untagged.
+Installed from the shipped firmware's page, the stick starts with the PVID
+4094: the router's frames without a tag go to the panel and nowhere else, so
+give the router's SFP port an address of the same network, open
 ``https://192.168.1.1/`` (or the address you had given the shipped firmware)
-and sign in as ``root``. An OLT's service on the subscriber's frames without
-a tag gets none of them meanwhile (ADR 0023,
-`docs/adr/0023-untagged-frames-to-management.rst
-<docs/adr/0023-untagged-frames-to-management.rst>`__).
+and sign in as ``root``. The panel's page "SFP port" shows the stick's ports
+and VLANs as a switch's page does, and sets the PVID: 1 gives the router's
+untagged frames to the operator as they are, a service's VLAN to that
+service; the change runs on trial for ten minutes.
 
-A stick updated from an earlier build of this system answers on VLAN 4094
-alone: give the router's SFP port that VLAN and an address of the same
-network. On a Linux router whose SFP port is ``eth1``::
+A stick updated from an earlier build of this system keeps the PVID 1 and
+answers in VLAN 4094 alone: give the router's SFP port that VLAN and an
+address of the same network. On a Linux router whose SFP port is
+``eth1``::
 
     ip link add link eth1 name eth1.4094 type vlan id 4094
     ip address add 192.168.1.2/24 dev eth1.4094
@@ -524,7 +528,9 @@ give the shipped firmware another address before the install, or give the
 router the VLAN's address only until the panel has moved the stick to a
 network of its own. The panel can move the stick to another VLAN or address;
 it keeps the old pair until the new one is confirmed from a panel opened at
-it.
+it. A gateway on the management network, set on the same card, lets the
+stick answer from other networks and reach servers beyond it, and stays
+across restarts.
 
 Releases
 --------
