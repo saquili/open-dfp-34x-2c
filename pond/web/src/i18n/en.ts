@@ -1140,7 +1140,7 @@ export const en = {
     overShippedConfirm:
       "System {letter} holds the firmware the stick shipped with. This writes over it, and then the only way back to it is a copy of the whole flash taken before.",
     uploadStartConfirm:
-      "After the upload the stick starts system {letter} at once, on trial. If it does not come up within 5 minutes, it goes back to system {back} by itself.",
+      "After the upload the stick starts system {letter} at once, on trial. Sign in to the panel again once it answers: unless it comes up and somebody signs in within 5 minutes, it goes back to system {back} by itself.",
     howUpdate: "How an update goes",
     step1: "The file goes into the system that does not run now; the running one is left alone.",
     step2: "The stick writes it, reads it back and checks its checksums.",
@@ -1262,7 +1262,7 @@ export const en = {
     downloadHint: "The running system as an update file, for another stick or for later.",
     switchTo: "Start system {letter}",
     switchConfirm:
-      "The stick restarts from system {letter}, on trial. If it does not come up within 5 minutes, it goes back to system {back} by itself.",
+      "The stick restarts from system {letter}, on trial. Sign in to the panel again once it answers: unless it comes up and somebody signs in within 5 minutes, it goes back to system {back} by itself.",
     switchAction: "Start on trial",
     switching: "The stick is restarting from system {letter}. This page reconnects by itself.",
     returnTo: "Go back to the shipped firmware (system {letter})",
@@ -1279,7 +1279,8 @@ export const en = {
       "A copy of the whole flash, 8 MiB, holds the stick's registration and its passwords: keep it private. Take one before an update writes over the shipped firmware.",
     copied: "The copy of the flash is saved.",
     notReported: "No report: {reason}",
-    trialNow: "System {letter} runs on trial and is kept once the stick is fully up.",
+    trialNow:
+      "System {letter} runs on trial and is kept once the stick is fully up and somebody has signed in from the host's side, as you have.",
     failedNote:
       "The last trial of system {letter} did not come up, so the stick went back to the other system.",
     fromMemory: "The stick runs from memory (a service start), so updates are not available.",

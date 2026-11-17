@@ -1131,7 +1131,7 @@ export const pl: Dictionary = {
     overShippedConfirm:
       "W systemie {letter} jest firmware, z którym wkładka przyszła. To go nadpisze i wtedy wrócić do niego można tylko z kopii całego flasha zrobionej wcześniej.",
     uploadStartConfirm:
-      "Po wgraniu wkładka od razu uruchomi się z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5 minut, sama wróci do systemu {back}.",
+      "Po wgraniu wkładka od razu uruchomi się z systemu {letter}, na próbę. Gdy odpowie, zaloguj się ponownie do panelu: jeśli w ciągu 5 minut nie wstanie albo nikt się nie zaloguje, sama wróci do systemu {back}.",
     howUpdate: "Jak przebiega aktualizacja",
     step1: "Plik trafia do systemu, który teraz nie działa; działający zostaje nietknięty.",
     step2: "Wkładka zapisuje go, czyta z powrotem i sprawdza sumy kontrolne.",
@@ -1251,7 +1251,7 @@ export const pl: Dictionary = {
     downloadHint: "Działający system jako plik aktualizacji, dla innej wkładki albo na później.",
     switchTo: "Uruchom system {letter}",
     switchConfirm:
-      "Wkładka uruchomi się ponownie z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5 minut, sama wróci do systemu {back}.",
+      "Wkładka uruchomi się ponownie z systemu {letter}, na próbę. Gdy odpowie, zaloguj się ponownie do panelu: jeśli w ciągu 5 minut nie wstanie albo nikt się nie zaloguje, sama wróci do systemu {back}.",
     switchAction: "Uruchom na próbę",
     switching: "Wkładka uruchamia się z systemu {letter}. Strona połączy się sama.",
     returnTo: "Wróć do oryginalnego firmware (system {letter})",
@@ -1268,7 +1268,8 @@ export const pl: Dictionary = {
       "Kopia całego flasha, 8 MiB, zawiera dane rejestracji wkładki i jej hasła: trzymaj ją u siebie. Zrób ją, zanim aktualizacja nadpisze oryginalne firmware.",
     copied: "Kopia flasha zapisana.",
     notReported: "Brak raportu: {reason}",
-    trialNow: "System {letter} działa na próbę i zostanie zachowany, gdy wkładka w pełni wstanie.",
+    trialNow:
+      "System {letter} działa na próbę i zostanie zachowany, gdy wkładka w pełni wstanie i ktoś zaloguje się od strony hosta, tak jak Ty.",
     failedNote:
       "Ostatnia próba systemu {letter} nie powiodła się, więc wkładka wróciła do drugiego systemu.",
     fromMemory:
