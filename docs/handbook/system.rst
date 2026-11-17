@@ -219,10 +219,13 @@ The switch's checks of malformed frames
 =======================================
 
 The switch can stop sixteen shapes of malformed or hostile frames where they
-enter, before they reach the stick's CPU or cross to the other side
-(``linux/Documentation/networking/devlink/rtl9602c.rst``, "DoS checks"). The
-settings offer fifteen, each its own, all off by default, and the firewall's
-page of the panel sets them; ``onu-apply`` gives them to the switch
+enter, among the frames it passes between the operator's side and the host's
+(``linux/Documentation/networking/devlink/rtl9602c.rst``, "DoS checks"). It
+does not judge the frames its rules hand to the stick's own CPU, so the
+management VLAN, the panel and ssh are not behind these checks (M: on the
+management VLAN the shapes the checks drop between the sides all reached the
+CPU). The settings offer fifteen, each its own, all off by default, and the
+firewall's page of the panel sets them; ``onu-apply`` gives them to the switch
 (``onu-utils/README.rst``). ``DOS_SIDE`` says whose frames they judge, and the
 switch has one set of ports for all the checks: the operator's side
 (``internet``, the default), the host's (``host``) or both. A frame a check
@@ -239,9 +242,9 @@ stops is dropped.
      - An IP source equal to its destination.
      - Nothing known.
    * - ``DOS_BLAT``
-     - An L4 source port equal to its destination port.
-     - Traffic between two servers that use one port at both ends, such as NTP
-       between peers (I: from the protocols).
+     - An L4 source port equal to its destination port, of TCP and of UDP.
+     - Traffic between two servers that use one port at both ends: NTP from
+       port 123 to port 123 is dropped (M).
    * - ``DOS_SYN_FIN``, ``DOS_XMAS``, ``DOS_NULL_SCAN``
      - A TCP segment with SYN and FIN both set, an Xmas scan, a null scan.
      - Nothing known.
@@ -262,18 +265,23 @@ stops is dropped.
      - TCP Fast Open (I: from the protocol).
    * - ``DOS_SYN_FLOOD``, ``DOS_FIN_FLOOD``, ``DOS_ICMP_FLOOD``
      - The frames of that kind beyond a threshold, 1 to 255, that the switch
-       counts in a window of its own.
-     - Ordinary bursts, when the threshold is low. ``DOS_ICMP_FLOOD`` has not
-       been tried on ICMPv6 (neighbour discovery) at all.
+       counts in a window of about a millisecond.
+     - Ordinary bursts, when the threshold is low. ``DOS_ICMP_FLOOD`` counts
+       ICMPv6 too, IPv6's neighbour discovery among it (M: at a threshold of 0
+       it dropped echo requests and neighbour solicitations of IPv6 alike).
 
-The checks and the thresholds were tried one by one on the stick, each caught
-by a frame of its shape (M: ``linux/Documentation/networking/dsa/
-rtl9602c-acl-qos.rst``). Not known: the length of the window the thresholds
-count in, so the panel gives a threshold as a number of the switch's, not of
-frames a second (I: a sweep of the offered rate against a threshold would
-settle it); and whether any check cuts good traffic of a real connection to an
-operator. A setting that is on goes on trial like the rest, so one that cuts
-the panel off goes back in 90 s.
+The checks were tried on the stick with frames bridged from the host's side
+to the PON, each check dropping every frame of its own shape and none of the
+ordinary frames sent between them (M: ONT-UART on the bench's OLT,
+2026-11-17; ``linux/Documentation/networking/dsa/rtl9602c-acl-qos.rst``). A
+threshold counts in a window of about a millisecond (M: SYNs at 2000 a second
+against a threshold of 1 passed at about 700 a second, of 2 at about 1400, of 3
+or more all of them; at 57,000 a second a threshold of 5 passed about 4,500 a
+second): 255 lets nearly everything through, and the panel starts a flood check
+at 10, some 9,000 frames a second. Not measured: the checks on frames from the
+operator's side, which the bench's OLT cannot send, and whether any check cuts
+good traffic of a real connection to an operator. A setting that is on goes on
+trial like the rest, so one that cuts the panel off goes back in 90 s.
 
 Who owns what
 =============
