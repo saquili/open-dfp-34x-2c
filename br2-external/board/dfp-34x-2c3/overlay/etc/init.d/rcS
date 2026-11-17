@@ -41,12 +41,12 @@ onu-trial >/run/onu-trial.log 2>&1 &
 # they found the shipped firmware's page, or else that firmware's own
 # default. The host link itself has no address of the stick's, as an
 # operator's ONT has none on the subscriber's data path: the OLT's services
-# put it in a bridge, where an address of the port would take no traffic. On
-# a new stick (MGMT_UNTAGGED=1, which the first start stores) the host link's
-# untagged frames go to management too, which the switch then keeps from the
-# PON, so that the panel answers without a VLAN set on the router (ADR 0023);
-# on one updated from an earlier build they go where the OLT's services take
-# them, as before. A bench with other addresses puts them in /etc/board.conf
+# put it in a bridge, where an address of the port would take no traffic. The
+# SFP port's PVID (onu-pvid, ADR 0023) is the management VLAN on a new stick,
+# which the first start stores, so that the panel answers without a VLAN set
+# on the router; on one updated from an earlier build it is 1, and the
+# untagged frames go where the OLT's services take them, as before. A bench
+# with other addresses puts them in /etc/board.conf
 # (docs/handbook/building.rst), DATA_ADDRESS for one on the host link itself.
 DATA_ADDRESS=
 MGMT_VLAN=4094
@@ -122,7 +122,6 @@ SYS_HOSTNAME=
 SYS_LOG_SERVER=
 BOARD_MGMT_VLAN=$MGMT_VLAN
 BOARD_MGMT_ADDRESS=$MGMT_ADDRESS
-MGMT_UNTAGGED=
 if [ -r /run/onu-system ]; then
 	SYS_HOSTNAME=$(sed -n 's/^HOSTNAME=//p' /run/onu-system)
 	SYS_LOG_SERVER=$(sed -n 's/^LOG_SERVER=//p' /run/onu-system)
@@ -130,8 +129,6 @@ if [ -r /run/onu-system ]; then
 	[ -n "$value" ] && MGMT_VLAN=$value
 	value=$(sed -n 's/^MGMT_ADDRESS=//p' /run/onu-system)
 	[ -n "$value" ] && MGMT_ADDRESS=$value
-	value=$(sed -n 's/^MGMT_UNTAGGED=//p' /run/onu-system)
-	[ "$value" = 1 ] && MGMT_UNTAGGED=untagged
 fi
 
 hostname -F /etc/hostname
@@ -229,12 +226,16 @@ onu-nl link set sfp up || warn "no interface sfp"
 # (onu-apply guard, onu-fw guard), before any server starts: what comes in
 # to the stick by any interface but the management VLAN's is dropped, but
 # what one of its programs takes there.
-onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" $MGMT_UNTAGGED || {
+onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" || {
 	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS is not a pair, the image's instead"
 	MGMT_VLAN=$BOARD_MGMT_VLAN
 	MGMT_ADDRESS=$BOARD_MGMT_ADDRESS
-	onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" $MGMT_UNTAGGED
+	onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS"
 }
+# The SFP port's PVID, the stored one (SFP_PVID), 1 without one: with the
+# management VLAN's the host's untagged frames reach management.
+onu-pvid apply || warn "the SFP port's PVID is not in force: untagged frames go to the OLT"
+PVID=$(sed -n 's/^PVID=//p' /run/onu-pvid 2>/dev/null)
 onu-svc start netifd -- /usr/sbin/netifd -c /run/config -r /run/resolv.conf.auto -h /usr/sbin/onu-apply || {
 	warn "netifd is no service of procd: started once"
 	netifd -c /run/config -r /run/resolv.conf.auto -h /usr/sbin/onu-apply &
@@ -343,7 +344,9 @@ onu-update digest >/dev/null 2>&1 &
 {
 	echo
 	echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
-	echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN${MGMT_UNTAGGED:+, and untagged})${data:+ and $DATA_ADDRESS (sfp)}"
+	untagged=
+	[ "$PVID" = "$MGMT_VLAN" ] && untagged=", and untagged"
+	echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN$untagged)${data:+ and $DATA_ADDRESS (sfp)}"
 	[ -r /run/pond/tls.key ] && pond -k /run/pond/tls.key -c /run/pond/tls.own -F "$mgmt" |
 		sed 's/^\([^ ]*\) SHA-256 \([^ ]*\) until \([^T]*\).*$/open-dfp-34x-2c: the panel on https:\/\/\1\/, certificate SHA-256 \2, valid until \3/'
 	echo "open-dfp-34x-2c: ready"

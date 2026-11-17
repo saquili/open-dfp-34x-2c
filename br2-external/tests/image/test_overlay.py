@@ -27,6 +27,7 @@ INITTAB = os.path.join(OVERLAY, "etc", "inittab")
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 TCPRIO = os.path.join(REPO, "omcid", "target", "tcprio.h")
 ONU_MGMT = os.path.join(REPO, "onu-utils", "scripts", "onu-mgmt")
+ONU_PVID = os.path.join(REPO, "onu-utils", "scripts", "onu-pvid")
 ONU_APPLY = os.path.join(REPO, "onu-utils", "scripts", "onu-apply")
 ONU_FWACL = os.path.join(REPO, "onu-utils", "src", "fwacl.h")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
@@ -122,6 +123,14 @@ class BootScript(unittest.TestCase):
         first, second = (int(re.search(rf"^PREF_{x}=(\d+)$", mgmt, re.M).group(1)) for x in "AB")
         self.assertEqual((first, second), (registry["TC_PRIO_MGMT"], registry["TC_PRIO_MGMT"] + 1))
         self.assertEqual(registry["TC_PRIO_MGMT_N"], 2)
+        # onu-pvid's trap and tags take the PVID's range, the trap its first.
+        pvid = read(ONU_PVID)
+        prefs = {x: int(re.search(rf"^PVID_{x}=(\d+)$", pvid, re.M).group(1))
+                 for x in ("TRAP", "PUSH", "PRIO")}
+        self.assertEqual(prefs["TRAP"], registry["TC_PRIO_PVID"])
+        self.assertEqual(sorted(prefs.values()),
+                         list(range(registry["TC_PRIO_PVID"],
+                                    registry["TC_PRIO_PVID"] + registry["TC_PRIO_PVID_N"])))
         apply = read(ONU_APPLY)
         self.assertEqual(int(re.search(r"^VLAN_PREF=(\d+)$", apply, re.M).group(1)),
                          registry["TC_PRIO_VLAN"])
@@ -267,8 +276,8 @@ class Names(unittest.TestCase):
                                    "onu-utils.mk"))
         installed = dict(re.findall(r"\$\(@D\)/(?:build|scripts)/(\S+) \$\(TARGET_DIR\)(\S+)",
                                     recipe))
-        for helper in ("ponid", "onu-mgmt", "onu-net", "onu-run", "onu-lane", "onu-trial",
-                       "onu-config.sh"):
+        for helper in ("ponid", "onu-mgmt", "onu-net", "onu-run", "onu-lane", "onu-pvid",
+                       "onu-trial", "onu-config.sh"):
             self.assertEqual(installed[helper], "/usr/lib/onu/" + helper)
         for program in ("onu-config", "onu-apply", "onu-update", "onu-svc", "pon"):
             self.assertEqual(installed[program], "/usr/sbin/" + program)
@@ -315,13 +324,12 @@ class ServersOnTheHostSide(unittest.TestCase):
         text = read(RCS)
         self.assertIn('[ -z "$DATA_ADDRESS" ] || onu-net wait sfp "$DATA_ADDRESS" 10', text)
 
-    def test_a_new_stick_sends_untagged_frames_to_management(self):
-        # MGMT_UNTAGGED=1, which onu-config load stores on a new stick, has
-        # onu-mgmt start give management the host link's untagged frames.
+    def test_the_sfp_port_takes_its_stored_pvid(self):
+        # onu-pvid apply sets the stored PVID, the management VLAN's on a new
+        # stick, after onu-mgmt start has recorded that VLAN.
         text = read(RCS)
-        self.assertIn('[ "$value" = 1 ] && MGMT_UNTAGGED=untagged', text)
-        self.assertLess(text.index("\nonu-config load"), text.index("MGMT_UNTAGGED=untagged"))
-        self.assertIn('onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" $MGMT_UNTAGGED', text)
+        self.assertLess(text.index("\nonu-mgmt start "), text.index("\nonu-pvid apply"))
+        self.assertLess(text.index("\nonu-config load"), text.index("\nonu-pvid apply"))
 
     def test_the_trial_is_watched_from_the_first_step(self):
         # onu-trial starts before anything that could hang, and finds the

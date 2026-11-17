@@ -35,6 +35,7 @@ define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-apply $(TARGET_DIR)/usr/sbin/onu-apply
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-config.sh $(TARGET_DIR)/usr/lib/onu/onu-config.sh
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-lane $(TARGET_DIR)/usr/lib/onu/onu-lane
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-pvid $(TARGET_DIR)/usr/lib/onu/onu-pvid
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mgmt $(TARGET_DIR)/usr/lib/onu/onu-mgmt
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-change $(TARGET_DIR)/usr/lib/onu/onu-change
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-net $(TARGET_DIR)/usr/lib/onu/onu-net

@@ -50,8 +50,8 @@ DYNAMIC = {
     # DROP=$LIB/onu-drop
     ("onu-run", '"$DROP"'): ("onu-drop",),
     # prog is the first word of what verbs() echoes for a change on trial.
-    ("onu-change", '"$prog"'): ("onu-lane", "onu-mgmt"),
-    ("onu-change", '"${v%% *}"'): ("onu-lane", "onu-mgmt"),
+    ("onu-change", '"$prog"'): ("onu-lane", "onu-mgmt", "onu-pvid"),
+    ("onu-change", '"${v%% *}"'): ("onu-lane", "onu-mgmt", "onu-pvid"),
     # CALL=$ROOT/usr/lib/onu/onu-call
     ("onu-dhcpc", '"$CALL"'): ("onu-call",),
 }
