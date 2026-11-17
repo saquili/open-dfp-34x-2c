@@ -93,8 +93,10 @@ struct tc_rule {
  */
 struct nlmsghdr *tc_clsact_msg(char *buf, int ifindex, bool add, uint32_t seq);
 struct nlmsghdr *tc_rule_msg(char *buf, const struct tc_rule *r, uint32_t seq);
-/* Remove the filters of priority @pref, whatever their protocol, on the
- * ingress of @ifindex or, with @egress, on its egress. */
+/*
+ * Remove the filters of priority @pref, whatever their protocol, on the
+ * ingress of @ifindex or, with @egress, on its egress.
+ */
 struct nlmsghdr *tc_rule_del_msg(char *buf, int ifindex, bool egress,
 				 uint16_t pref, uint32_t seq);
 /* A dump of the filters on the ingress of @ifindex. */
