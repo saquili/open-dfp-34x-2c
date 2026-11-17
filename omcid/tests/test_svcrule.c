@@ -367,6 +367,32 @@ static size_t fates_of(unsigned int fibre, enum omci_vlan_fate f)
 	return k;
 }
 
+/* Untagged frames given S-tag @svid and C-tag @cvid, of instance @instance. */
+static void sc_push(struct omci_mib *mib, uint16_t instance, unsigned int svid,
+		    unsigned int cvid)
+{
+	uint8_t row[16];
+
+	pack(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (svid << 3),
+	     (5u << 16) | (cvid << 3));
+	CHECK_EQ(omci_mib_table_put(mib, 171u, instance, 6u, row, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+}
+
+/* A translation of host VID @host of priority @pri alone to fibre VID @fibre. */
+static void pri_xlate(struct omci_mib *mib, uint16_t instance, unsigned int pri,
+		      unsigned int host, unsigned int fibre)
+{
+	uint8_t row[16];
+
+	pack(row, 0xf8000000u, (pri << 28) | (host << 15), 0x400f0000u,
+	     (8u << 16) | (fibre << 3));
+	CHECK_EQ(omci_mib_table_put(mib, 171u, instance, 6u, row, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+}
+
 /* A rule of the untagged frames of instance @instance: passed as they are, or discarded. */
 static void untagged_rule(struct omci_mib *mib, uint16_t instance, bool discard)
 {
@@ -506,6 +532,41 @@ static void test_untagged(void)
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(!omci_vlan_untagged(&u) && !u.bridged && u.dropped);
 	CHECK_EQ(omci_mib_delete(mib, 171u, 0x101u), OMCI_OK);
+	omci_hw_host_pvid_set(1u, false);
+
+	/*
+	 * A C- and an S-tag given the untagged frames have no host VLAN to move
+	 * to: while the PVID is not 1, the rule stays out, and is said once.
+	 */
+	omci_hw_host_pvid_set(4094u, true);
+	me171(mib, 0x102u, 2u, 0x101u);
+	sc_push(mib, 0x102u, 36u, 410u);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u) && u.service != 0u && u.host == 0u);
+	CHECK_EQ(fates(OMCI_VLAN_FATE_LOCAL), 1u);
+	omci_hw_host_pvid_set(1u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(fates(OMCI_VLAN_FATE_LOCAL), 0u);
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x102u), OMCI_OK);
+
+	/* A PVID out of 1 to 4094 is taken for 1. */
+	omci_hw_host_pvid_set(5000u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(!omci_vlan_untagged(&u) && u.pvid == 1u);
+
+	/*
+	 * A PVID whose service's rule takes one priority alone leads nowhere:
+	 * the untagged frames, of no priority, cannot be given to it.
+	 */
+	me171(mib, 0x103u, 2u, 0x101u);
+	pri_xlate(mib, 0x103u, 5u, 35u, 35u);
+	omci_hw_host_pvid_set(35u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u) && u.leads == 0u);
+	CHECK(push_of(35u) == NULL && omci_hw_untagged_discarded());
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x103u), OMCI_OK);
 	omci_hw_host_pvid_set(1u, false);
 
 	/* An IP host's rule that tags them is no claim: it has a VLAN of its own. */

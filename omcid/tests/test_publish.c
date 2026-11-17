@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "hw/hw.h"
+#include "omcid/array_size.h"
 #include "me/svcrule.h"
 #include "me/vlan.h"
 #include "mib/store.h"
@@ -262,6 +263,13 @@ static void test_the_status(struct omci_mib *mib)
 	CHECK_EQ(strcmp(g_out, g_status), 0);
 }
 
+/* The value "untagged" of the services with the PVID 1 and nothing of the OLT's, in pieces. */
+static const char *const g_untagged[] = {
+	"],\"untagged\":{\"pvid\":1,\"stick\":false,\"leads\":null,",
+	"\"service\":null,\"host\":null,\"bridged\":false,",
+	"\"clash\":false}}",
+};
+
 /*
  * The rules of the services: a person's, and a move the programming made
  * for the VEIP's VLAN 410, which the UNI's takes.
@@ -306,11 +314,47 @@ static void test_the_services(struct omci_mib *mib)
 		CHECK(at != NULL);
 		at = at != NULL ? at + strlen(g_rules[i]) + (i < 2u) : NULL;
 	}
-	CHECK(at != NULL &&
-	      strcmp(at, "],\"untagged\":{\"pvid\":1,\"stick\":false,"
-			 "\"leads\":null,\"service\":null,\"host\":null,"
-			 "\"bridged\":false,\"clash\":false}}") == 0);
+	/* Then what became of the untagged frames, a piece at a time. */
+	for (size_t i = 0; i < ARRAY_SIZE(g_untagged); i++) {
+		const size_t len = strlen(g_untagged[i]);
+
+		CHECK(at != NULL && strncmp(at, g_untagged[i], len) == 0);
+		at = at != NULL ? at + len : NULL;
+	}
+	CHECK(at != NULL && *at == '\0');
 	omci_hw_service_rules_set(person, 0u);
+}
+
+/*
+ * The OLT gives the UNI's untagged frames VLAN 1501 on the fibre, and the
+ * PVID is 1501: the service's host VLAN, where the PVID leads them.
+ */
+static void test_the_untagged_frames(struct omci_mib *mib)
+{
+	static const uint8_t uni = 2u;
+	static const uint8_t to1501[16] = { 0xf8, 0,	0,    0,    0xf8, 0,
+					    0,	  0,	0,    0x0f, 0,	  0,
+					    0,	  0x05, 0x2e, 0xe8 };
+	struct text t = { .p = g_out, .cap = sizeof(g_out) };
+
+	CHECK_EQ(omci_mib_create(mib, 171u, 0x111u), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, 171u, 0x111u, 1u, &uni, 1u), OMCI_OK);
+	CHECK_EQ(omci_mib_table_put(mib, 171u, 0x111u, 6u, to1501, 16, 8,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	omci_hw_host_pvid_set(1501u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	t.first[0] = true;
+	t_put(&t, "{");
+	omci_publish_services(&g_text_ops, &t);
+	t_put(&t, "}");
+	CHECK(strstr(g_out, "\"pvid\":1501,\"stick\":false,\"leads\":1501,") !=
+	      NULL);
+	CHECK(strstr(g_out, "\"service\":1501,\"host\":1501,") != NULL);
+	CHECK(strstr(g_out, "\"clash\":false}") != NULL);
+	omci_hw_host_pvid_set(1u, false);
+	CHECK_EQ(omci_mib_delete(mib, 171u, 0x111u), OMCI_OK);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 }
 
 /*
@@ -633,6 +677,7 @@ int main(void)
 	RUN_MIB(test_what_does_not_fit_is_left_out_whole);
 	RUN_MIB(test_the_status);
 	RUN_MIB(test_the_services);
+	RUN_MIB(test_the_untagged_frames);
 	RUN_MIB(test_the_login);
 	RUN_MIB(test_the_phone);
 	return OMCI_T_REPORT("test_publish");
