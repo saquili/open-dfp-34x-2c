@@ -2151,11 +2151,13 @@ The checks, in bit order, with the forwarding reason of each:
      - 67
      - M
    * - 4
-     - Xmas scan.
+     - Xmas scan: FIN, URG and PSH set with a sequence number of 0; with
+       another number the segment passes.
      - 68
      - M
    * - 5
-     - Null scan.
+     - Null scan: no flag set with a sequence number of 0; with another
+       number the segment passes.
      - 69
      - M
    * - 6
@@ -2240,10 +2242,15 @@ The checks, in bit order, with the forwarding reason of each:
        ``dos_synflood_thresh`` 0, passed at 255 and dropped again at 0; the
        frame capture on reason 77 caught one at 0, nothing in 15 s at 255, and
        one again at 0.
-   * - A threshold counts frames per a fixed hardware window of unknown length.
-     - I
-     - Not load-bearing. Sweeping the offered rate against a fixed threshold on
-       a quiet link would settle it.
+   * - A threshold counts frames per a hardware window of about a
+       millisecond, 1.1 ms to 1.5 ms by the rates that passed, and the check
+       stops the frames beyond it.
+     - M
+     - SYN frames forwarded from ``sfp`` to the PON: at 2000 a second, a
+       threshold of 1 passed about 690 a second, 2 about 1380 and 3 or more
+       all of them; at 57,000 a second a threshold of 5 passed about 4,560 a
+       second; at about 39,000 a second a threshold of 10 passed about 9,000
+       a second, and so did the FIN flood and the ICMP flood checks at 10.
    * - A read of a threshold register can stall the CPU on the register bus
        until the soft-lockup detector resets the board; a write works. Whether
        every read does is not settled, because one read of all three registers
@@ -3520,9 +3527,6 @@ Questions the code does not depend on
    * - Whether a zero in ``RTL9602C_SHAPE_PORT_CFG_RATE`` passes nothing ("The
        egress shaper").
      - Writing 0 and watching the port stop.
-   * - Whether the DoS flood thresholds count frames per a hardware window, and
-       of what length ("Malformed-frame (DoS) checks").
-     - Sweeping the offered rate against a fixed threshold on a quiet link.
    * - Whether every read of a flood-threshold register is unsafe
        ("Malformed-frame (DoS) checks").
      - A single read through a driver debug path after a write.

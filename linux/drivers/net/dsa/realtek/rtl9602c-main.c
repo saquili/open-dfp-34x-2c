@@ -1433,7 +1433,7 @@ static const struct devlink_region_ops rtl9602c_pktdbg_region_ops = {
  * 8 TCP fragment offset, 9 ICMP fragment, 10 ping of death, 11 UDP bomb,
  * 12 SYN with data, 13 SYN flood, 14 FIN flood and 15 ICMP flood. The three
  * flood checks count frames against their thresholds over a hardware window
- * of unknown length. Check 0 has not been observed to fire: ordinary
+ * of about a millisecond. Check 0 has not been observed to fire: ordinary
  * forwarding already drops such a frame.
  *
  * Values are read back from the hardware, except the flood thresholds, the
