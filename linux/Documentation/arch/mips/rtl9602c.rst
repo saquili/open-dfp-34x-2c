@@ -2113,7 +2113,9 @@ DRAM and reserved memory
 The board has one bank of 32 MiB of DRAM at physical 0. The PON MAC keeps its
 packet buffer in two areas of DRAM, one per direction; the tree reserves them
 with ``no-map`` so the kernel never allocates or maps them, and the switch
-driver finds them by name through its ``memory-region`` property.
+driver finds them by name through its ``memory-region`` property. Below the
+downstream area the tree sets 64 KiB aside for ramoops, the kernel's record of
+an oops or a panic and of the console, which a restart leaves in place.
 
 .. list-table::
    :header-rows: 1
@@ -2145,6 +2147,20 @@ driver finds them by name through its ``memory-region`` property.
        switch driver reports ``buffers at 0x01eff000 and 0x016ff000``. T:
        downstream lock, time to O5 and hold time on an OLT, and OMCI both ways
        over ``/dev/pon0omci0`` (GEM traffic and OMCI through the PON MAC).
+   * - ``ramoops@16ef000``, ``reg = <0x016ef000 0x10000>``, ``no-map``:
+       ``console-size`` 32 KiB, ``record-size`` 16 KiB (two records, of an oops
+       and of the panic that follows it), ``ecc-size`` 16. It lies above what
+       the boot loader fetches by TFTP to 16 MiB for a boot from RAM and below
+       the boot loader itself, which runs from 28 MiB; the boot loader's DRAM
+       calibration at every reset leaves it as it was.
+     - M
+     - Every boot: ``OF: reserved mem: 0x016ef000..0x016fefff (64 KiB) nomap
+       non-reusable ramoops@16ef000`` and ``ramoops: using 0x10000@0x16ef000,
+       ecc: 16``. After ``echo c >/proc/sysrq-trigger`` and the restart that
+       ``panic=10`` makes, ``/sys/fs/pstore/dmesg-ramoops-0`` holds the panic
+       whole, with ``ECC: No errors detected``, and ``console-ramoops-0`` the
+       console of the start before; the first boot after power-up finds no
+       valid record (``ramoops: uncorrectable error in header``).
    * - ``&switch { memory-region = <&pbo_us>, <&pbo_ds>; memory-region-names =
        "pbo-us", "pbo-ds"; }``. The switch driver finds the regions by name,
        requires each to be at least ``RTL9602C_PBO_DRAM`` (1 MiB) and gives the
