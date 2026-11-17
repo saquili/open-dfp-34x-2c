@@ -24,7 +24,8 @@
 #   onu-config auth HASH a hash of root's password made elsewhere, the same way
 #   onu-config system    the stick's own settings of the KEY=VALUE lines of the
 #                        standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
-#                        SFP_LANE, SFP_PVID, NTP_SERVER, LOG_SERVER,
+#                        MGMT_GATEWAY, SFP_LANE, SFP_PVID, NTP_SERVER,
+#                        LOG_SERVER,
 #                        PRODUCT_NAME) into
 #                        the store and into /run/onu-system; an empty value
 #                        removes the key
@@ -446,6 +447,9 @@ system() {
 			exit 1
 		if (k == "MGMT_ADDRESS" && v !~ /^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+)?$/)
 			exit 1
+		# The gateway of the management pair, an IPv4 address (onu-mgmt).
+		if (k == "MGMT_GATEWAY" && v !~ /^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)?$/)
+			exit 1
 		# The PVID of the SFP port, 1 to 4094 (ADR 0023, onu-pvid).
 		if (k == "SFP_PVID" && (v !~ /^([1-9][0-9]*)?$/ || v + 0 > 4094))
 			exit 1
@@ -464,7 +468,7 @@ system() {
 		if (k == "PRODUCT_NAME" &&
 		    (length(v) > 20 || v !~ /^([A-Za-z0-9]([A-Za-z0-9 .-]*[A-Za-z0-9])?)?$/))
 			exit 1
-		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE|SFP_PVID|NTP_SERVER|LOG_SERVER|PRODUCT_NAME)$/)
+		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|MGMT_GATEWAY|SFP_LANE|SFP_PVID|NTP_SERVER|LOG_SERVER|PRODUCT_NAME)$/)
 			exit 1
 		print "SYS_" k "=" v
 	}') || return 1

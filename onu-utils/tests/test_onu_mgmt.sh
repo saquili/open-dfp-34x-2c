@@ -118,6 +118,40 @@ check 'echo "$out" | grep -qx ADDRESS=198.51.100.2/30'
 check '! echo "$out" | grep -q PENDING_'
 teardown
 
+echo "a gateway: a table of the pair's own, and a default route behind any other"
+setup
+run start 4094 198.51.100.2/30 "" 198.51.100.1
+check '[ $rc -eq 0 ] && grep -qx GATEWAY=198.51.100.1 "$ONU_ROOT/run/onu-mgmt"'
+check 'grep -q "option src .198.51.100.2/32." "$T/part" && grep -q "option lookup .121." "$T/part"'
+check 'grep -q "option table .121." "$T/part" && grep -q "option metric .1000." "$T/part"'
+check '[ "$(grep -c "option gateway .198.51.100.1." "$T/part")" -eq 2 ]'
+run status
+check 'echo "$out" | grep -qx GATEWAY=198.51.100.1'
+# A gateway off the pair's network, or the pair's own address, is none.
+for bad in 198.51.100.5 198.51.100.2 198.51.100.3 x; do
+	run start 4094 198.51.100.2/30 "" "$bad"
+	check '[ $rc -eq 0 ] && grep -qx GATEWAY= "$ONU_ROOT/run/onu-mgmt" && ! grep -q "option gateway" "$T/part"'
+done
+teardown
+
+echo "a new pair with a gateway, confirmed; the gateway alone changes at once"
+setup
+run add 100 192.0.2.6/30 192.0.2.5
+check '[ $rc -eq 0 ] && grep -qx GATEWAY=192.0.2.5 "$ONU_ROOT/run/onu-trial.d/mgmt"'
+check 'grep -q "option lookup .122." "$T/part" && ! grep -q "option metric" "$T/part"'
+run status
+check 'echo "$out" | grep -qx PENDING_GATEWAY=192.0.2.5'
+run commit
+check '[ $rc -eq 0 ] && grep -qx MGMT_GATEWAY=192.0.2.5 "$T/stored" && grep -qx GATEWAY=192.0.2.5 "$ONU_ROOT/run/onu-mgmt"'
+check 'grep -q "option metric .1000." "$T/part"'
+: >"$T/stored"
+run add 100 192.0.2.6/30
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
+check 'grep -qx GATEWAY= "$ONU_ROOT/run/onu-mgmt" && grep -qx MGMT_GATEWAY= "$T/stored" && ! grep -q "option gateway" "$T/part"'
+run add 100 192.0.2.6/30 192.0.2.9
+check '[ $rc -eq 2 ]'
+teardown
+
 echo "a pair in another VLAN, confirmed through it, has a PVID of the old VLAN go back to 1"
 setup
 echo 4094 >"$T/pvid"

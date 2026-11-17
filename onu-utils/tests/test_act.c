@@ -74,7 +74,9 @@ static void test_values_in_their_places(void)
 	const char *const lane[] = { "2500basex" };
 	const char *const pvid[] = { "4094" };
 	const char *const notpvid[] = { "-1" };
-	const char *const pair[] = { "100", "192.0.2.10/30" };
+	const char *const pair[] = { "100", "192.0.2.10/30", NULL };
+	const char *const routed[] = { "100", "192.0.2.10/30", "192.0.2.9" };
+	const char *const badgw[] = { "100", "192.0.2.10/30", "192.0.2.9/30" };
 	const char *const here[] = { "fe80::1" };
 	const char *const none[] = { NULL };
 	const char *const bank[] = { "1" };
@@ -89,6 +91,9 @@ static void test_values_in_their_places(void)
 	CHECK(!*run("pvid_try", notpvid, &bad) && bad && !strcmp(bad, "pvid"));
 	CHECK(!strcmp(run("mgmt_add", pair, &bad),
 		      "/usr/lib/onu/onu-mgmt add 100 192.0.2.10/30"));
+	CHECK(!strcmp(run("mgmt_add", routed, &bad),
+		      "/usr/lib/onu/onu-mgmt add 100 192.0.2.10/30 192.0.2.9"));
+	CHECK(!*run("mgmt_add", badgw, &bad) && bad && !strcmp(bad, "gateway"));
 	CHECK(!strcmp(run("changes_confirm", here, &bad),
 		      "/usr/lib/onu/onu-change confirm fe80::1"));
 	CHECK(!strcmp(run("changes_confirm", none, &bad), "/usr/lib/onu/onu-change confirm"));

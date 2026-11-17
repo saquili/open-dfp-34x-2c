@@ -486,7 +486,7 @@ check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 printf 'NTP_SERVER=192.0.2.123\nLOG_SERVER=[2001:db8::1]:5514\n' | "$STORE_SCRIPT" system 2>/dev/null
 check 'grep -q -x NTP_SERVER=192.0.2.123 "$ONU_ROOT/run/onu-system"'
 check 'grep -q -x "LOG_SERVER=\[2001:db8::1\]:5514" "$ONU_ROOT/run/onu-system"'
-for good in NTP_SERVER=2001:db8::123 NTP_SERVER=198.51.100.255 LOG_SERVER=192.0.2.9 \
+for good in MGMT_GATEWAY=192.0.2.1 NTP_SERVER=2001:db8::123 NTP_SERVER=198.51.100.255 LOG_SERVER=192.0.2.9 \
 	LOG_SERVER=192.0.2.9:5514 LOG_SERVER=192.0.2.9:65535 LOG_SERVER=2001:db8::9 \
 	"LOG_SERVER=[2001:db8::9]"; do
 	printf '%s\n' "$good" | "$STORE_SCRIPT" system 2>/dev/null
@@ -560,6 +560,9 @@ for bad in 0 4095 01 x; do
 	rc=$?
 	check '[ $rc -ne 0 ]'
 done
+printf 'MGMT_GATEWAY=192.0.2.1/30\n' | "$STORE_SCRIPT" system 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ]'
 printf 'SFP_PVID=35\n' | "$STORE_SCRIPT" system 2>/dev/null
 check 'grep -q -x SFP_PVID=35 "$ONU_ROOT/run/onu-system"'
 teardown

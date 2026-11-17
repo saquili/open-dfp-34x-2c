@@ -618,10 +618,20 @@ by its whole path where procd starts it.
    The address on ``sfp`` itself, ``DATA_ADDRESS``, is the interface ``data``
    of the same part. A pair in another VLAN, confirmed through that VLAN,
    sets the SFP port's PVID back to 1 when it was the old VLAN's
-   (``onu-pvid``)::
+   (``onu-pvid``).
 
-      onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]   # at boot
-      onu-mgmt add VLAN ADDRESS
+   A pair may have a gateway, a router on its network other than its own
+   address (``MGMT_GATEWAY`` of the settings), through which the stick
+   answers from other networks and reaches servers beyond it: what the
+   pair's address sends follows a routing table of its own, 121 or 122, with
+   a default route through the gateway, sessions or none, and the pair in
+   use adds a default route of the main table behind any other (metric 1000)
+   for what the stick itself sends. A new gateway alone, in the same VLAN and
+   at the same address, changes at once, as it cannot cut anyone off the
+   pair's own network::
+
+      onu-mgmt start VLAN ADDRESS [DATA_ADDRESS [GATEWAY]]   # at boot
+      onu-mgmt add VLAN ADDRESS [GATEWAY]
       onu-mgmt commit
       onu-mgmt cancel
       onu-mgmt status

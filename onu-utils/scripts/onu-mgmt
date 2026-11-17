@@ -7,16 +7,18 @@
 # added beside the old one, and replaces it only when confirmed, which a
 # person can do only once the new pair answers.
 #
-#   onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]
-#                          the pair of the boot, on the interface mgmt, and
-#                          the address on the SFP port itself, if any:
-#                          recorded, given to netifd, and its VLAN kept from
-#                          the PON by the switch's rules; what is not a pair
-#                          fails and changes nothing
-#   onu-mgmt status        VLAN, ADDRESS, IFACE, DATA_ADDRESS and, while a
-#                          change waits, PENDING_VLAN, PENDING_ADDRESS and
+#   onu-mgmt start VLAN ADDRESS [DATA_ADDRESS [GATEWAY]]
+#                          the pair of the boot, on the interface mgmt, the
+#                          address on the SFP port itself, if any, and the
+#                          pair's gateway, if any: recorded, given to netifd,
+#                          and its VLAN kept from the PON by the switch's
+#                          rules; what is not a pair fails and changes
+#                          nothing, a gateway that is not one is left out
+#   onu-mgmt status        VLAN, ADDRESS, GATEWAY, IFACE, DATA_ADDRESS and,
+#                          while a change waits, PENDING_VLAN,
+#                          PENDING_ADDRESS, PENDING_GATEWAY and
 #                          PENDING_UNTIL, as KEY=VALUE lines
-#   onu-mgmt add VLAN ADDRESS
+#   onu-mgmt add VLAN ADDRESS [GATEWAY]
 #                          add the new pair beside the old: an interface (or
 #                          the old one's, in the same VLAN), the switch's
 #                          rules that keep the VLAN from the PON, an ssh
@@ -24,6 +26,15 @@
 #                          (600) unless committed
 #   onu-mgmt commit        the new pair replaces the old, in the store too
 #   onu-mgmt cancel        the new pair goes, the old one stays
+#
+# A pair's gateway is a router on its network, other than its own address,
+# through which the stick answers from other networks and reaches servers
+# beyond it (GitHub issue 1): netifd gives the pair's address a routing
+# table of its own, 120 and the pair's priority, with a default route
+# through the gateway, which what the pair's address sends follows, sessions
+# or none; and the pair in use a default route of the main table too, behind
+# any other (metric 1000), for what the stick itself sends. The guard keeps
+# anything else from being forwarded there.
 #
 # The pair in use is recorded in /run/onu-mgmt (VLAN, ADDRESS, IFACE, the
 # VLAN's interface, NAME, the pair's interface of netifd, PREF, the priority
@@ -134,6 +145,49 @@ iface_conf() {
 	printf "\toption proto 'static'\n\toption ipaddr '%s'\n\n" "$3"
 }
 
+# The gateway $3 of the pair whose interface of netifd is $1, of priority $2,
+# and address $4: its table, which what comes from the address follows, and,
+# with $5, a default route of the main table behind any other.
+gateway_conf() {
+	[ -n "$3" ] || return 0
+	printf "config rule\n\toption src '%s/32'\n\toption lookup '%s'\n\n" \
+		"${4%/*}" "$((120 + $2))"
+	printf "config route\n\toption interface '%s'\n\toption target '0.0.0.0/0'\n" "$1"
+	printf "\toption gateway '%s'\n\toption table '%s'\n\n" "$3" "$((120 + $2))"
+	[ -z "${5:-}" ] && return 0
+	printf "config route\n\toption interface '%s'\n\toption target '0.0.0.0/0'\n" "$1"
+	printf "\toption gateway '%s'\n\toption metric '1000'\n\n" "$3"
+}
+
+# Whether $1 is an IPv4 address on the network of the address $2 (with its
+# prefix), and neither it nor the network's first or last address.
+gateway_ok() {
+	case $1 in
+	*[!0-9.]* | "") return 1 ;;
+	esac
+	echo "$1 $2" | awk '
+	function ip(s,   p, n) {
+		if (split(s, p, ".") != 4)
+			return -1
+		for (n = 1; n <= 4; n++)
+			if (p[n] !~ /^[0-9]+$/ || p[n] > 255)
+				return -1
+		return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4]
+	}
+	{
+		split($2, a, "/")
+		g = ip($1); o = ip(a[1]); len = a[2] + 0
+		if (g < 0 || o < 0 || len < 1 || len > 30 || g == o)
+			exit 1
+		size = 2 ^ (32 - len)
+		first = o - o % size
+		if (g < first || g >= first + size)
+			exit 1
+		if (size > 2 && (g == first || g == first + size - 1))
+			exit 1
+	}'
+}
+
 # The pairs as netifd's part "mgmt": the one in use and, while a change
 # waits, the new one. Each pair is an interface of its own, named once
 # (NAME), so that netifd, which takes an interface down and up again when
@@ -147,12 +201,16 @@ net_apply() {
 	{
 		dev_conf "$(field IFACE "$STATE")" "$(field VLAN "$STATE")"
 		iface_conf "$(field NAME "$STATE")" "$(field IFACE "$STATE")" "$(field ADDRESS "$STATE")"
+		gateway_conf "$(field NAME "$STATE")" "$(field PREF "$STATE")" \
+			"$(field GATEWAY "$STATE")" "$(field ADDRESS "$STATE")" main
 		[ -z "$data" ] || iface_conf data sfp "$data"
 		if [ -r "$PENDING" ]; then
 			[ "$(field IFACE "$PENDING")" = "$(field IFACE "$STATE")" ] ||
 				dev_conf "$(field IFACE "$PENDING")" "$(field VLAN "$PENDING")"
 			iface_conf "$(field NAME "$PENDING")" "$(field IFACE "$PENDING")" \
 				"$(field ADDRESS "$PENDING")"
+			gateway_conf "$(field NAME "$PENDING")" "$(field PREF "$PENDING")" \
+				"$(field GATEWAY "$PENDING")" "$(field ADDRESS "$PENDING")"
 		fi
 	} | onu-net set mgmt || return 1
 	# The sessions keep their packets off the networks of the pair in use.
@@ -164,8 +222,13 @@ start() {
 		log "not a VLAN and an address with its prefix: $1 $2"
 		return 2
 	}
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=mgmt\nNAME=mgmt\nPREF=%s\nDATA_ADDRESS=%s\n' \
-		"$1" "$2" "$PREF_A" "$3" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
+	gateway=${4:-}
+	if [ -n "$gateway" ] && ! gateway_ok "$gateway" "$2"; then
+		log "not a gateway on the network of $2: $gateway; none"
+		gateway=
+	fi
+	printf 'VLAN=%s\nADDRESS=%s\nGATEWAY=%s\nIFACE=mgmt\nNAME=mgmt\nPREF=%s\nDATA_ADDRESS=%s\n' \
+		"$1" "$2" "$gateway" "$PREF_A" "$3" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
 	rm -f "$PENDING"
 	# The pair's rules, whatever an earlier start of this script left.
 	rules_del "$PREF_A"
@@ -176,11 +239,11 @@ start() {
 }
 
 status() {
-	for k in VLAN ADDRESS IFACE DATA_ADDRESS; do
+	for k in VLAN ADDRESS GATEWAY IFACE DATA_ADDRESS; do
 		echo "$k=$(field "$k" "$STATE")"
 	done
 	if [ -r "$PENDING" ]; then
-		for k in VLAN ADDRESS UNTIL; do
+		for k in VLAN ADDRESS GATEWAY UNTIL; do
 			echo "PENDING_$k=$(field "$k" "$PENDING")"
 		done
 	fi
@@ -205,10 +268,15 @@ drop_pending() {
 add() {
 	vlan=$1
 	address=$2
+	gateway=${3:-}
 	vlan_ok "$vlan" && address_ok "$address" || {
 		log "not a VLAN and an address with its prefix: $vlan $address"
 		return 2
 	}
+	if [ -n "$gateway" ] && ! gateway_ok "$gateway" "$address"; then
+		log "not a gateway on the network of $address: $gateway"
+		return 2
+	fi
 	[ -e "$PENDING" ] && {
 		log "a change waits already"
 		return 1
@@ -216,7 +284,18 @@ add() {
 	old_vlan=$(field VLAN "$STATE")
 	old_iface=$(field IFACE "$STATE")
 	old_pref=$(field PREF "$STATE")
-	[ "$vlan" = "$old_vlan" ] && [ "$address" = "$(field ADDRESS "$STATE")" ] && return 0
+	# The gateway alone: it cannot cut anyone off the pair's own network, so
+	# it changes at once, in the store too.
+	if [ "$vlan" = "$old_vlan" ] && [ "$address" = "$(field ADDRESS "$STATE")" ]; then
+		[ "$gateway" = "$(field GATEWAY "$STATE")" ] && return 0
+		sed "s/^GATEWAY=.*/GATEWAY=$gateway/" "$STATE" >"$STATE.new" &&
+			mv "$STATE.new" "$STATE" || return 1
+		printf 'MGMT_GATEWAY=%s\n' "$gateway" | onu-config system ||
+			log "the gateway $gateway is kept until the next start only"
+		net_apply || return 1
+		log "the management gateway is now ${gateway:-none}"
+		return 0
+	fi
 	token=$$
 	until=$(($(uptime_s) + LIMIT))
 	if [ "$vlan" = "$old_vlan" ]; then
@@ -239,8 +318,8 @@ add() {
 		}
 	fi
 	mkdir -p "${PENDING%/*}" || return 1
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nUNTIL=%s\nTOKEN=%s\n' \
-		"$vlan" "$address" "$iface" "mgmt$token" "$pref" "$until" "$token" >"$PENDING"
+	printf 'VLAN=%s\nADDRESS=%s\nGATEWAY=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nUNTIL=%s\nTOKEN=%s\n' \
+		"$vlan" "$address" "$gateway" "$iface" "mgmt$token" "$pref" "$until" "$token" >"$PENDING"
 	if ! net_apply || ! onu-net wait "$iface" "$address" 10; then
 		log "the management address $address in VLAN $vlan did not come up"
 		rm -f "$PENDING"
@@ -269,14 +348,16 @@ commit() {
 	iface=$(field IFACE "$PENDING")
 	name=$(field NAME "$PENDING")
 	pref=$(field PREF "$PENDING")
-	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\n' "$vlan" "$address" | onu-config system ||
+	gateway=$(field GATEWAY "$PENDING")
+	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\nMGMT_GATEWAY=%s\n' "$vlan" "$address" "$gateway" |
+		onu-config system ||
 		log "the management address $address is kept until the next start only"
 	old_vlan=$(field VLAN "$STATE")
 	old_iface=$(field IFACE "$STATE")
 	old_pref=$(field PREF "$STATE")
 	data=$(field DATA_ADDRESS "$STATE")
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nDATA_ADDRESS=%s\n' \
-		"$vlan" "$address" "$iface" "$name" "$pref" "$data" >"$STATE.new" &&
+	printf 'VLAN=%s\nADDRESS=%s\nGATEWAY=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nDATA_ADDRESS=%s\n' \
+		"$vlan" "$address" "$gateway" "$iface" "$name" "$pref" "$data" >"$STATE.new" &&
 		mv "$STATE.new" "$STATE"
 	rm -f "$PENDING"
 	net_apply || log "netifd was not told that the old management address goes"
@@ -310,14 +391,14 @@ cancel() {
 }
 
 case ${1:-} in
-start) start "${2:-}" "${3:-}" "${4:-}" ;;
+start) start "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
 status) status ;;
-add) add "${2:-}" "${3:-}" ;;
+add) add "${2:-}" "${3:-}" "${4:-}" ;;
 commit) commit ;;
 cancel) cancel ;;
 expire) drop_pending "${2:-}" ;;
 *)
-	echo "usage: onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]|status|add VLAN ADDRESS|commit|cancel" >&2
+	echo "usage: onu-mgmt start VLAN ADDRESS [DATA_ADDRESS [GATEWAY]]|status|add VLAN ADDRESS [GATEWAY]|commit|cancel" >&2
 	exit 2
 	;;
 esac
