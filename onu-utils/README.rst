@@ -437,8 +437,9 @@ by its whole path where procd starts it.
    neither: iproute2 is in the RAM image only (ADR 0017)::
 
       onu-nl clsact add|del DEV
-      onu-nl filter add DEV [pref N] [vlan VID] [hw] trap|drop|redirect TO
-      onu-nl filter del DEV pref N
+      onu-nl filter add DEV [egress] [pref N] [vlan VID | untagged] [hw | sw]
+                            trap|drop|redirect TO|push VID|modify VID|pop
+      onu-nl filter del DEV [egress] pref N
       onu-nl filter prefs DEV
       onu-nl param NAME [VALUE]
       onu-nl link set DEV [up|down] [mtu N] [address MAC] [master BRIDGE]
@@ -448,11 +449,16 @@ by its whole path where procd starts it.
       onu-nl vlan add|del DEV VID [pvid] [untagged] [self]
       onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]
 
-   A filter is on the ingress of DEV: without ``vlan`` it takes every frame
-   (tc's matchall), with it the frames whose outer 802.1Q tag has that VID
-   (flower); ``hw`` keeps it in the switch alone (tc's skip_sw); ``trap``
-   sends what it takes to the CPU, ``drop`` drops it and ``redirect`` hands
-   it to the ingress of TO. ``clsact add`` leaves a clsact qdisc that is
+   A filter is on the ingress of DEV, or with ``egress`` on its egress:
+   without ``vlan`` or ``untagged`` it takes every frame (tc's matchall), with
+   ``vlan`` the frames whose outer 802.1Q tag has that VID and with
+   ``untagged`` those without a tag (flower, num_of_vlans 0); ``hw`` keeps it
+   in the switch alone (tc's skip_sw), ``sw`` in software alone (skip_hw);
+   ``trap`` sends what it takes to the CPU, ``drop`` drops it, ``redirect``
+   hands it to the ingress of TO, and ``push``, ``modify`` and ``pop`` give it
+   a tag of VLAN VID, set its tag's VID or take its tag away and pass it on
+   (tc's vlan action). In the switch a rule on frames without a tag takes
+   those with a priority tag, VID 0, too, which 802.1Q classifies alike. ``clsact add`` leaves a clsact qdisc that is
    there already. ``filter prefs`` prints the priorities of the filters on
    DEV's ingress, one a line, the lowest first. ``param`` prints a parameter
    of the switch's devlink instance in the runtime mode, or sets it: a number

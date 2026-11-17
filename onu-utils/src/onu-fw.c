@@ -358,7 +358,7 @@ static void acl_remove(struct mnl_socket *nl, int ifindex)
 	if (talk(nl, tc_rule_dump_msg(buf, ifindex, ++g_seq), pref_cb, &t))
 		return;
 	for (int i = 0; i < t.nprefs; i++)
-		talk(nl, tc_rule_del_msg(buf, ifindex, t.prefs[i], ++g_seq), NULL, &t);
+		talk(nl, tc_rule_del_msg(buf, ifindex, false, t.prefs[i], ++g_seq), NULL, &t);
 }
 
 /* Take the entries of @rule out, -1 for the passes of the local destinations. */
@@ -370,7 +370,7 @@ static void acl_remove_entries(struct mnl_socket *nl, const int ifindex[2], int 
 	for (int i = 0; i < g_acl.n; i++)
 		if (g_acl.e[i].rule == rule)
 			talk(nl,
-			     tc_rule_del_msg(buf, ifindex[g_acl.e[i].port], g_acl.e[i].pref, ++g_seq),
+			     tc_rule_del_msg(buf, ifindex[g_acl.e[i].port], false, g_acl.e[i].pref, ++g_seq),
 			     NULL, &t);
 }
 

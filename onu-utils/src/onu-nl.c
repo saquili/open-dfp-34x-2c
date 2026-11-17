@@ -7,9 +7,10 @@
  * iproute2, which only the RAM image carries (ADR 0017).
  *
  *   onu-nl clsact add|del DEV
- *   onu-nl filter add DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw]
- *                         trap|drop|redirect TO
- *   onu-nl filter del DEV pref N
+ *   onu-nl filter add DEV [egress] [pref N]
+ *                         [vlan VID | untagged | dst ADDRESS[/LEN]] [hw | sw]
+ *                         trap|drop|redirect TO|push VID|modify VID|pop
+ *   onu-nl filter del DEV [egress] pref N
  *   onu-nl filter prefs DEV
  *   onu-nl param NAME [VALUE]
  *   onu-nl link set DEV [up|down] [mtu N] [address MAC]
@@ -18,10 +19,13 @@
  *   onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]
  *
  * "clsact add" leaves a clsact qdisc that is there already. A filter is on
- * the ingress of DEV; "vlan" takes the frames of a VLAN, "dst" the IPv4
- * packets to an address of a prefix (/32 without LEN), and without either it
- * takes every frame; "hw" keeps it in
- * the switch alone; "redirect" hands what it takes to the ingress of TO.
+ * the ingress of DEV, or with "egress" on its egress; "vlan" takes the frames
+ * of a VLAN, "untagged" those without a tag, "dst" the IPv4 packets to an
+ * address of a prefix (/32 without LEN), and without any it takes every
+ * frame; "hw" keeps it in the switch alone, "sw" in software alone;
+ * "redirect" hands what it takes to the ingress of TO, "push" gives it an
+ * 802.1Q tag of VLAN VID, "modify" sets the VID of its tag and "pop" takes
+ * its tag away, each passing it on.
  * "filter prefs" prints the priorities of the filters on the ingress of
  * DEV, one a line, the lowest first. "param" prints the value of a
  * parameter of the stick's devlink instance, the first the kernel lists,
@@ -196,9 +200,10 @@ static int help(void)
 {
 	fprintf(stderr,
 		"usage: onu-nl clsact add|del DEV\n"
-		"       onu-nl filter add DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw]\n"
-		"                         trap|drop|redirect TO\n"
-		"       onu-nl filter del DEV pref N\n"
+		"       onu-nl filter add DEV [egress] [pref N]\n"
+		"                         [vlan VID | untagged | dst ADDRESS[/LEN]] [hw | sw]\n"
+		"                         trap|drop|redirect TO|push VID|modify VID|pop\n"
+		"       onu-nl filter del DEV [egress] pref N\n"
 		"       onu-nl filter prefs DEV\n"
 		"       onu-nl param NAME [VALUE]\n"
 		"       onu-nl link set DEV [up|down] [mtu N] [address MAC] [master BRIDGE]\n"
@@ -251,7 +256,10 @@ static int clsact_cmd(int argc, char **argv)
 	return err ? 1 : 0;
 }
 
-/* DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw] trap|drop|redirect TO, into @r. */
+/*
+ * DEV [egress] [pref N] [vlan VID | untagged | dst ADDRESS[/LEN]] [hw | sw]
+ * trap|drop|redirect TO|push VID|modify VID|pop, into @r.
+ */
 static bool rule_args(int argc, char **argv, struct tc_rule *r)
 {
 	bool pref = false;
@@ -260,19 +268,24 @@ static bool rule_args(int argc, char **argv, struct tc_rule *r)
 
 	memset(r, 0, sizeof(*r));
 	for (i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "pref") && !pref && i + 1 < argc) {
+		if (!strcmp(argv[i], "egress") && i == 1) {
+			r->egress = true;
+		} else if (!strcmp(argv[i], "pref") && !pref && i + 1 < argc) {
 			if (!decimal(argv[++i], 1, 65535, &v))
 				return false;
 			r->pref = (uint16_t)v;
 			pref = true;
 		} else if (!strcmp(argv[i], "vlan") && !r->has_vlan &&
-			   !r->has_dst && i + 1 < argc) {
+			   !r->untagged && !r->has_dst && i + 1 < argc) {
 			if (!decimal(argv[++i], 0, 4095, &v))
 				return false;
 			r->vlan = (uint16_t)v;
 			r->has_vlan = true;
+		} else if (!strcmp(argv[i], "untagged") && !r->has_vlan &&
+			   !r->untagged && !r->has_dst) {
+			r->untagged = true;
 		} else if (!strcmp(argv[i], "dst") && !r->has_vlan &&
-			   !r->has_dst && i + 1 < argc) {
+			   !r->untagged && !r->has_dst && i + 1 < argc) {
 			char addr[INET_ADDRSTRLEN];
 			const char *slash = strchr(argv[++i], '/');
 			size_t n = slash ? (size_t)(slash - argv[i]) : strlen(argv[i]);
@@ -290,8 +303,10 @@ static bool rule_args(int argc, char **argv, struct tc_rule *r)
 			r->dst = in.s_addr;
 			r->dst_len = (uint8_t)v;
 			r->has_dst = true;
-		} else if (!strcmp(argv[i], "hw") && !r->hw) {
+		} else if (!strcmp(argv[i], "hw") && !r->hw && !r->sw) {
 			r->hw = true;
+		} else if (!strcmp(argv[i], "sw") && !r->hw && !r->sw) {
+			r->sw = true;
 		} else {
 			break;
 		}
@@ -302,8 +317,17 @@ static bool rule_args(int argc, char **argv, struct tc_rule *r)
 		r->action = TC_RULE_DROP;
 	else if (i == argc - 2 && !strcmp(argv[i], "redirect"))
 		r->action = TC_RULE_REDIRECT;
-	else
+	else if (i == argc - 1 && !strcmp(argv[i], "pop"))
+		r->action = TC_RULE_POP;
+	else if (i == argc - 2 && (!strcmp(argv[i], "push") ||
+				   !strcmp(argv[i], "modify"))) {
+		if (!decimal(argv[i + 1], 1, 4094, &v))
+			return false;
+		r->action = argv[i][0] == 'p' ? TC_RULE_PUSH : TC_RULE_MODIFY;
+		r->act_vlan = (uint16_t)v;
+	} else {
 		return false;
+	}
 	return true;
 }
 
@@ -324,6 +348,7 @@ static int filter_cmd(int argc, char **argv)
 	struct mnl_socket *nl;
 	struct tc_rule r;
 	unsigned long pref = 0;
+	bool egress = false;
 	int ifindex, err;
 
 	if (argc < 2)
@@ -332,8 +357,9 @@ static int filter_cmd(int argc, char **argv)
 		if (!rule_args(argc - 1, argv + 1, &r))
 			return help();
 	} else if (!strcmp(argv[0], "del")) {
-		if (argc != 4 || strcmp(argv[2], "pref") ||
-		    !decimal(argv[3], 1, 65535, &pref))
+		egress = argc == 5 && !strcmp(argv[2], "egress");
+		if (argc != 4 + egress || strcmp(argv[2 + egress], "pref") ||
+		    !decimal(argv[3 + egress], 1, 65535, &pref))
 			return help();
 	} else if (strcmp(argv[0], "prefs") || argc != 2) {
 		return help();
@@ -357,7 +383,7 @@ static int filter_cmd(int argc, char **argv)
 		err = talk(nl, tc_rule_msg(buf, &r, ++g_seq), NULL, NULL, 0,
 			   "filter not added");
 	} else if (!strcmp(argv[0], "del")) {
-		err = talk(nl, tc_rule_del_msg(buf, ifindex, (uint16_t)pref, ++g_seq),
+		err = talk(nl, tc_rule_del_msg(buf, ifindex, egress, (uint16_t)pref, ++g_seq),
 			   NULL, NULL, 0, "filter not removed");
 	} else {
 		err = talk(nl, tc_rule_dump_msg(buf, ifindex, ++g_seq), pref_cb,

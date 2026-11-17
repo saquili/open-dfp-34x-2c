@@ -19,8 +19,10 @@
 #include <linux/rtnetlink.h>
 #include <linux/tc_act/tc_gact.h>
 #include <linux/tc_act/tc_mirred.h>
+#include <linux/tc_act/tc_vlan.h>
 
 #define TC_INGRESS TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS)
+#define TC_EGRESS TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_EGRESS)
 
 static struct nlmsghdr *tc_header(char *buf, uint16_t type, uint16_t flags,
 				  uint32_t seq, int ifindex, uint32_t parent,
@@ -72,6 +74,21 @@ static void put_action(struct nlmsghdr *nlh, uint16_t list,
 		mnl_attr_put_strz(nlh, TCA_ACT_KIND, "mirred");
 		opts = mnl_attr_nest_start(nlh, TCA_ACT_OPTIONS);
 		mnl_attr_put(nlh, TCA_MIRRED_PARMS, sizeof(m), &m);
+	} else if (r->action == TC_RULE_PUSH || r->action == TC_RULE_MODIFY ||
+		   r->action == TC_RULE_POP) {
+		struct tc_vlan v = {
+			.action = TC_ACT_PIPE,
+			.v_action = r->action == TC_RULE_PUSH ? TCA_VLAN_ACT_PUSH :
+				    r->action == TC_RULE_MODIFY ?
+						TCA_VLAN_ACT_MODIFY :
+						TCA_VLAN_ACT_POP,
+		};
+
+		mnl_attr_put_strz(nlh, TCA_ACT_KIND, "vlan");
+		opts = mnl_attr_nest_start(nlh, TCA_ACT_OPTIONS);
+		mnl_attr_put(nlh, TCA_VLAN_PARMS, sizeof(v), &v);
+		if (r->action != TC_RULE_POP)
+			mnl_attr_put_u16(nlh, TCA_VLAN_PUSH_VLAN_ID, r->act_vlan);
 	} else {
 		struct tc_gact g = {
 			.action = r->action == TC_RULE_TRAP ? TC_ACT_TRAP :
@@ -91,21 +108,26 @@ struct nlmsghdr *tc_rule_msg(char *buf, const struct tc_rule *r, uint32_t seq)
 {
 	const uint16_t proto = r->has_vlan ? ETH_P_8021Q :
 			       r->has_dst ? ETH_P_IP : ETH_P_ALL;
-	const uint32_t flags = r->hw ? TCA_CLS_FLAGS_SKIP_SW : 0;
-	const bool flower = r->has_vlan || r->has_dst;
+	const uint32_t flags = r->hw ? TCA_CLS_FLAGS_SKIP_SW :
+			       r->sw ? TCA_CLS_FLAGS_SKIP_HW : 0;
+	const bool flower = r->has_vlan || r->untagged || r->has_dst;
 	struct nlmsghdr *nlh;
 	struct nlattr *opts;
 
 	nlh = tc_header(buf, RTM_NEWTFILTER,
 			NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL, seq, r->ifindex,
-			TC_INGRESS,
+			r->egress ? TC_EGRESS : TC_INGRESS,
 			TC_H_MAKE((uint32_t)r->pref << 16, htons(proto)));
 	mnl_attr_put_strz(nlh, TCA_KIND, flower ? "flower" : "matchall");
 	opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
 	if (flower) {
-		mnl_attr_put_u16(nlh, TCA_FLOWER_KEY_ETH_TYPE, htons(proto));
+		/* tc names no EtherType for "protocol all". */
+		if (proto != ETH_P_ALL)
+			mnl_attr_put_u16(nlh, TCA_FLOWER_KEY_ETH_TYPE, htons(proto));
 		if (r->has_vlan) {
 			mnl_attr_put_u16(nlh, TCA_FLOWER_KEY_VLAN_ID, r->vlan);
+		} else if (r->untagged) {
+			mnl_attr_put_u8(nlh, TCA_FLOWER_KEY_NUM_OF_VLANS, 0);
 		} else {
 			uint32_t mask = r->dst_len ?
 				htonl(~0u << (32 - r->dst_len)) : 0;
@@ -124,11 +146,12 @@ struct nlmsghdr *tc_rule_msg(char *buf, const struct tc_rule *r, uint32_t seq)
 	return nlh;
 }
 
-struct nlmsghdr *tc_rule_del_msg(char *buf, int ifindex, uint16_t pref,
-				 uint32_t seq)
+struct nlmsghdr *tc_rule_del_msg(char *buf, int ifindex, bool egress,
+				 uint16_t pref, uint32_t seq)
 {
 	return tc_header(buf, RTM_DELTFILTER, NLM_F_ACK, seq, ifindex,
-			 TC_INGRESS, TC_H_MAKE((uint32_t)pref << 16, 0));
+			 egress ? TC_EGRESS : TC_INGRESS,
+			 TC_H_MAKE((uint32_t)pref << 16, 0));
 }
 
 struct nlmsghdr *tc_rule_dump_msg(char *buf, int ifindex, uint32_t seq)

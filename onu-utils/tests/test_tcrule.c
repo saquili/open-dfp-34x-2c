@@ -18,6 +18,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/tc_act/tc_gact.h>
 #include <linux/tc_act/tc_mirred.h>
+#include <linux/tc_act/tc_vlan.h>
 
 #include "tcrule.h"
 
@@ -34,6 +35,7 @@ static int checks, failures;
 	} while (0)
 
 #define INGRESS 0xfffffff2u
+#define EGRESS 0xfffffff3u
 
 static char buf[8192];
 
@@ -278,9 +280,104 @@ static void test_more_kinds(void)
 	CHECK(gact(action(in(opts, TCA_MATCHALL_ACT), "gact")) == TC_ACT_TRAP);
 }
 
+/* The tag of a vlan action's options: its v_action, and the VID if any. */
+static int vlan_act(const struct nlattr *opts, uint16_t *vid)
+{
+	const struct nlattr *a = in(opts, TCA_VLAN_PARMS);
+	const struct nlattr *id = in(opts, TCA_VLAN_PUSH_VLAN_ID);
+	struct tc_vlan v;
+
+	CHECK(a && mnl_attr_get_payload_len(a) == sizeof(v));
+	if (!a)
+		return -1;
+	memcpy(&v, mnl_attr_get_payload(a), sizeof(v));
+	CHECK(v.action == TC_ACT_PIPE && v.index == 0);
+	*vid = id ? mnl_attr_get_u16(id) : 0;
+	return v.v_action;
+}
+
+/*
+ * tc filter add dev 5 ingress pref 3 protocol all flower skip_sw
+ *	num_of_vlans 0 action trap
+ */
+static void test_untagged_trapped_in_the_switch(void)
+{
+	struct tc_rule r = { .ifindex = 5, .pref = 3, .untagged = true,
+			     .hw = true, .action = TC_RULE_TRAP };
+	struct nlmsghdr *nlh = tc_rule_msg(buf, &r, 41);
+	const struct nlattr *opts = top(nlh, TCA_OPTIONS);
+
+	CHECK(tcm_of(nlh)->tcm_parent == INGRESS);
+	CHECK(tcm_of(nlh)->tcm_info == ((3u << 16) | htons(ETH_P_ALL)));
+	CHECK(is_str(top(nlh, TCA_KIND), "flower"));
+	CHECK(!in(opts, TCA_FLOWER_KEY_ETH_TYPE));
+	CHECK(in(opts, TCA_FLOWER_KEY_NUM_OF_VLANS) &&
+	      mnl_attr_get_u8(in(opts, TCA_FLOWER_KEY_NUM_OF_VLANS)) == 0);
+	CHECK(!in(opts, TCA_FLOWER_KEY_VLAN_ID));
+	CHECK(mnl_attr_get_u32(in(opts, TCA_FLOWER_FLAGS)) == TCA_CLS_FLAGS_SKIP_SW);
+	CHECK(gact(action(in(opts, TCA_FLOWER_ACT), "gact")) == TC_ACT_TRAP);
+}
+
+/*
+ * tc filter add dev 5 ingress pref 4 protocol all flower skip_hw
+ *	num_of_vlans 0 action vlan push id 4094 pipe
+ */
+static void test_untagged_given_a_tag_in_software(void)
+{
+	struct tc_rule r = { .ifindex = 5, .pref = 4, .untagged = true,
+			     .sw = true, .action = TC_RULE_PUSH,
+			     .act_vlan = 4094 };
+	struct nlmsghdr *nlh = tc_rule_msg(buf, &r, 42);
+	const struct nlattr *opts = top(nlh, TCA_OPTIONS);
+	uint16_t vid = 0;
+
+	CHECK(mnl_attr_get_u32(in(opts, TCA_FLOWER_FLAGS)) == TCA_CLS_FLAGS_SKIP_HW);
+	CHECK(vlan_act(action(in(opts, TCA_FLOWER_ACT), "vlan"), &vid) ==
+	      TCA_VLAN_ACT_PUSH);
+	CHECK(vid == 4094);
+}
+
+/* tc filter add dev 5 ingress pref 5 protocol 802.1Q flower skip_hw vlan_id 0 action vlan modify id 4094 pipe */
+static void test_priority_tag_given_a_vid(void)
+{
+	struct tc_rule r = { .ifindex = 5, .pref = 5, .has_vlan = true,
+			     .vlan = 0, .sw = true, .action = TC_RULE_MODIFY,
+			     .act_vlan = 4094 };
+	struct nlmsghdr *nlh = tc_rule_msg(buf, &r, 43);
+	const struct nlattr *opts = top(nlh, TCA_OPTIONS);
+	uint16_t vid = 0;
+
+	CHECK(mnl_attr_get_u16(in(opts, TCA_FLOWER_KEY_VLAN_ID)) == 0);
+	CHECK(vlan_act(action(in(opts, TCA_FLOWER_ACT), "vlan"), &vid) ==
+	      TCA_VLAN_ACT_MODIFY);
+	CHECK(vid == 4094);
+}
+
+/* tc filter add dev 5 egress pref 6 protocol 802.1Q flower skip_hw vlan_id 4094 action vlan pop pipe */
+static void test_tag_popped_on_the_egress(void)
+{
+	struct tc_rule r = { .ifindex = 5, .egress = true, .pref = 6,
+			     .has_vlan = true, .vlan = 4094, .sw = true,
+			     .action = TC_RULE_POP };
+	struct nlmsghdr *nlh = tc_rule_msg(buf, &r, 44);
+	const struct nlattr *opts = top(nlh, TCA_OPTIONS);
+	uint16_t vid = 1;
+
+	CHECK(tcm_of(nlh)->tcm_parent == EGRESS);
+	CHECK(mnl_attr_get_u16(in(opts, TCA_FLOWER_KEY_ETH_TYPE)) == htons(ETH_P_8021Q));
+	CHECK(vlan_act(action(in(opts, TCA_FLOWER_ACT), "vlan"), &vid) ==
+	      TCA_VLAN_ACT_POP);
+	CHECK(vid == 0);
+
+	nlh = tc_rule_del_msg(buf, 5, true, 6, 45);
+	CHECK(nlh->nlmsg_type == RTM_DELTFILTER);
+	CHECK(tcm_of(nlh)->tcm_parent == EGRESS);
+	CHECK(tcm_of(nlh)->tcm_info == 6u << 16);
+}
+
 static void test_del_and_dump(void)
 {
-	struct nlmsghdr *nlh = tc_rule_del_msg(buf, 8, 1000, 31);
+	struct nlmsghdr *nlh = tc_rule_del_msg(buf, 8, false, 1000, 31);
 
 	CHECK(nlh->nlmsg_type == RTM_DELTFILTER);
 	CHECK(nlh->nlmsg_flags == (NLM_F_REQUEST | NLM_F_ACK));
@@ -323,6 +420,10 @@ int main(void)
 	test_ipv4_destination_dropped();
 	test_everything_redirected();
 	test_more_kinds();
+	test_untagged_trapped_in_the_switch();
+	test_untagged_given_a_tag_in_software();
+	test_priority_tag_given_a_vid();
+	test_tag_popped_on_the_egress();
 	test_del_and_dump();
 	test_pref_of_a_dump_message();
 	printf("test_tcrule: %d checks, %d failed\n", checks, failures);
