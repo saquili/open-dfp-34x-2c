@@ -74,6 +74,9 @@ export const pl: Dictionary = {
       "Panel nie zdołał zachować zmiany: {reason}. Poprosi ponownie przy następnym odczycie.",
     trialElsewhere:
       "Nowy adres zarządzania {address} czeka na potwierdzenie z panelu otwartego pod tym adresem. Bez tego wkładka wróci do starego adresu.",
+    crashed: "Wkładka uruchomiła się ponownie po błędzie jądra ({when}): {cause}.",
+    crashedNoClock: "Wkładka uruchomiła się ponownie po błędzie jądra: {cause}.",
+    crashedSee: "Zobacz zapis",
   },
   auth: {
     title: "Logowanie",
@@ -1242,6 +1245,24 @@ export const pl: Dictionary = {
     partKernelB: "System B: jądro",
     partSystemB: "System B: pliki",
     reportHint: "Wszystkie dane, które podaje wkładka, w jednym pliku, dla serwisu.",
+    crash: "Ostatni restart",
+    crashKernel: "Po błędzie jądra",
+    crashClean: "Bez błędu jądra",
+    crashNone:
+      "Jądro nie trafiło na błąd od włączenia zasilania ani od usunięcia ostatniego zapisu. Zwykły restart nie zostawia tu zapisu.",
+    crashConsoleOnly:
+      "Poprzedni start skończył się bez błędu jądra. Są z niego ostatnie linie konsoli, przydatne po zawieszeniu, po którym wkładkę uruchomił ponownie watchdog.",
+    crashWhen: "Kiedy",
+    crashNoClock: "przed ustawieniem zegara",
+    crashCause: "Przyczyna",
+    crashLines: "Ostatnie linie przed restartem",
+    crashDownload: "Pobierz zapis",
+    crashClear: "Usuń zapis",
+    crashClearConfirm:
+      "Zapis zniknie z pamięci wkładki i zwolni miejsce na następny. Pobierz go wcześniej, jeśli chcesz go zachować.",
+    crashClearAction: "Usuń",
+    crashHint:
+      "Gdy jądro trafi na błąd, zapisuje jego opis i ostatnie linie konsoli w pamięci, która przetrwa restart, a wkładka uruchamia się od nowa. Zapis znika po odłączeniu zasilania.",
     update: "Aktualizacja",
     systemLetter: "System {letter}",
     tagRunning: "działa teraz",

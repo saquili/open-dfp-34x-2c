@@ -32,6 +32,8 @@ export type {
   BridgeVlan,
   Clock,
   Cpu,
+  Crash,
+  CrashRecord,
   DmzInfo,
   DosChecks,
   Family,

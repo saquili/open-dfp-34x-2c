@@ -9,13 +9,15 @@
  * answers, the panel's own settings (its theme and language, kept in the
  * browser) and the user. When the stick stops answering,
  * the pages keep the last figures and a bar says since when. A change of the
- * settings on trial is confirmed here, whatever the page (ADR 0011).
+ * settings on trial is confirmed here, whatever the page (ADR 0011), and a
+ * restart after a kernel error is told here, with the way to its record.
  */
 
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Cable,
   CircleAlert,
+  FileWarning,
   Globe,
   KeyRound,
   LayoutDashboard,
@@ -33,10 +35,11 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useSignOut } from "../api/auth";
 import { AuthError, OfflineError } from "../api/client";
-import { useChanges } from "../api/config";
+import { useChanges, useCrash } from "../api/config";
 import { useLive } from "../api/live";
 import { type Key, useI18n } from "../i18n";
 import { useCountdown } from "../lib/countdown";
+import { crashLine, crashWhen, kernelRecord } from "../lib/crash";
 import { clock } from "../lib/format";
 import { useProductName } from "../lib/product";
 import { reason } from "../lib/read";
@@ -395,6 +398,31 @@ function TrialBar() {
   );
 }
 
+/*
+ * A restart after a kernel error, whatever the page, until its record is
+ * deleted: when, the line that says why, and the way to the record.
+ */
+function CrashBar() {
+  const { t, lang } = useI18n();
+  const record = kernelRecord(useCrash().data);
+  if (!record) return null;
+  const when = crashWhen(record.time_s, lang);
+  const cause = crashLine(record.text);
+  return (
+    <div role="status" className="alert alert-warning alert-soft mb-4 text-base-content">
+      <FileWarning className="size-5 text-warning" />
+      <span>
+        {when
+          ? t("connection.crashed", { when, cause })
+          : t("connection.crashedNoClock", { cause })}
+      </span>
+      <Link to="/system/device" hash="crash" className="btn btn-sm">
+        {t("connection.crashedSee")}
+      </Link>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children?: ReactNode }) {
   const { t, lang, setLang } = useI18n();
   const signOut = useSignOut();
@@ -503,6 +531,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
         <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col p-4 sm:p-6 lg:min-h-0 lg:overflow-auto">
           <LiveBar />
           <TrialBar />
+          <CrashBar />
           {/*
            * Every page shows the live figures: until their first answer, or
            * their first failure, which the bar above says, that they are read.

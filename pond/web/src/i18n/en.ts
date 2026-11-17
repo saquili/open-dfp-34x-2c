@@ -73,6 +73,9 @@ export const en = {
       "The panel could not keep the change: {reason}. It asks again at the next reading.",
     trialElsewhere:
       "The new management address {address} waits to be confirmed by a panel opened at it; without that the stick goes back to the old one.",
+    crashed: "The stick restarted after a kernel error ({when}): {cause}.",
+    crashedNoClock: "The stick restarted after a kernel error: {cause}.",
+    crashedSee: "See the record",
   },
   auth: {
     title: "Sign in",
@@ -1252,6 +1255,24 @@ export const en = {
     partKernelB: "System B: kernel",
     partSystemB: "System B: files",
     reportHint: "Every figure the stick reports, in one file, for support.",
+    crash: "Last restart",
+    crashKernel: "After a kernel error",
+    crashClean: "No kernel error",
+    crashNone:
+      "The kernel has met no error since the stick was powered on or the last record was deleted. An ordinary restart leaves no record here.",
+    crashConsoleOnly:
+      "The start before ended without a kernel error. Its console's last lines are kept, of use after a hang that the watchdog restarted the stick from.",
+    crashWhen: "When",
+    crashNoClock: "before the clock was set",
+    crashCause: "Cause",
+    crashLines: "Last lines before the restart",
+    crashDownload: "Download the record",
+    crashClear: "Delete the record",
+    crashClearConfirm:
+      "The record leaves the stick's memory and frees the place for the next. Download it first to keep it.",
+    crashClearAction: "Delete",
+    crashHint:
+      "When the kernel meets an error, it writes what it was and the console's last lines to memory that outlives a restart, and the stick starts again. The record is gone once the power is off.",
     update: "Update",
     systemLetter: "System {letter}",
     tagRunning: "running now",

@@ -8,6 +8,7 @@
  */
 
 import type {
+  Crash,
   Identity,
   IpoeInfo,
   Iptv,
@@ -544,6 +545,89 @@ const untaggedOf = () => {
  * from an earlier build, 1, the PON side's, so that the untagged frames go to
  * the operator as they did.
  */
+/*
+ * The kernel's last words before the last restart: POND_MOCK_CRASH=panic, a
+ * panic made on purpose (/proc/sysrq-trigger) as the stick keeps it, with
+ * the console's lines of the start before, the mock's default; oops, an oops
+ * and the panic it led to; console, only the console's lines, as after an
+ * ordinary restart; none, nothing, as after power-up and in the demo.
+ */
+const CRASH_KIND =
+  (typeof process === "undefined" ? undefined : process.env.POND_MOCK_CRASH) ??
+  (SCENARIO === undefined ? "panic" : "none");
+const CONSOLE_TEXT =
+  "[    0.000000] Linux version 6.18.64 (mips-buildroot-linux-uclibc-gcc 14.4.0)\n" +
+  "[    9.286008] rtl9602c-switch: <GPON> O4 ranging -> O5 operation\n" +
+  "open-dfp-34x-2c: ready\n" +
+  "[   23.098022] sysrq: Trigger a crash\n" +
+  "[   23.102299] Kernel panic - not syncing: sysrq triggered crash\n";
+const PANIC_TEXT =
+  "Panic#1 Part1\n" +
+  "<6>[    9.286008] rtl9602c-switch: <GPON> O4 ranging -> O5 operation\n" +
+  "<6>[   16.985987] omcibr0: port 3(gem257) entered blocking state\n" +
+  "<6>[   16.992015] omcibr0: port 3(gem257) entered forwarding state\n" +
+  "<6>[   23.098022] sysrq: Trigger a crash\n" +
+  "<0>[   23.102299] Kernel panic - not syncing: sysrq triggered crash\n" +
+  "<4>[   23.108110] CPU: 0 UID: 0 PID: 1412 Comm: sh Not tainted 6.18.64\n" +
+  "<4>[   23.114502] Call Trace:\n" +
+  "<4>[   23.117301] [<80010a4c>] show_stack+0x38/0x118\n" +
+  "<4>[   23.122204] [<8001e2b8>] dump_stack_lvl+0x48/0x74\n" +
+  "<4>[   23.127310] [<80021f60>] vpanic+0x110/0x2f0\n" +
+  "<4>[   23.131902] [<8002216c>] panic+0x2c/0x30\n" +
+  "<4>[   23.136150] [<802e7d64>] sysrq_handle_crash+0x18/0x24\n" +
+  "<0>[   23.139504] Rebooting in 10 seconds..\n" +
+  "\nECC: No errors detected\n";
+const OOPS_TEXT =
+  "Oops#1 Part1\n" +
+  "<1>[  842.114020] CPU 0 Unable to handle kernel paging request at virtual address 00000004, epc == 802b1c40, ra == 802b1c18\n" +
+  "<4>[  842.127010] CPU: 0 UID: 0 PID: 365 Comm: omcid Not tainted 6.18.64\n" +
+  "<4>[  842.133900] Call Trace:\n" +
+  "<0>[  842.140120] Kernel panic - not syncing: Fatal exception\n" +
+  "\nECC: No errors detected\n";
+let crash: Crash = {
+  records: [
+    ...(CRASH_KIND === "none"
+      ? []
+      : [
+          {
+            name: "console-ramoops-0",
+            kind: "console",
+            reason: null,
+            time_s: null,
+            text: CONSOLE_TEXT,
+          },
+        ]),
+    ...(CRASH_KIND === "panic"
+      ? [
+          {
+            name: "dmesg-ramoops-0",
+            kind: "dmesg",
+            reason: "panic",
+            time_s: 1794948180,
+            text: PANIC_TEXT,
+          },
+        ]
+      : []),
+    ...(CRASH_KIND === "oops"
+      ? [
+          {
+            name: "dmesg-ramoops-0",
+            kind: "dmesg",
+            reason: "oops",
+            time_s: 1794948175,
+            text: OOPS_TEXT,
+          },
+          {
+            name: "dmesg-ramoops-1",
+            kind: "dmesg",
+            reason: "panic",
+            time_s: 1794948175,
+            text: OOPS_TEXT.replace("Oops#1", "Panic#1"),
+          },
+        ]
+      : []),
+  ],
+};
 let sfpPvid: SfpPvid = {
   pvid: SCENARIO === undefined ? mgmt.vlan : 1,
   trial: null,
@@ -1201,6 +1285,20 @@ const stick = [
     } else if (b.KEEP) sfpPvid = { ...sfpPvid, trial: null };
     else if (b.REVERT && sfpPvid.trial) sfpPvid = { pvid: sfpPvid.trial.previous, trial: null };
     return HttpResponse.json({ id: "sfp_pvid", ok: true });
+  }),
+
+  http.get("*/api/get/crash", async () => {
+    await delay(150);
+    return away() ?? (signedIn ? HttpResponse.json({ id: "crash", value: crash }) : unauthorized());
+  }),
+
+  http.post("*/api/set/crash", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    if (kv(await request.text()).CLEAR !== "1")
+      return HttpResponse.json({ error: "refused", detail: "CLEAR=1" }, { status: 400 });
+    crash = { records: [] };
+    return HttpResponse.json({ id: "crash", ok: true });
   }),
 
   http.get("*/api/get/mgmt", async () => {

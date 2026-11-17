@@ -4,17 +4,25 @@
 /*
  * System, Device: the stick itself, its model, since when it runs and what
  * became of its settings, its name and the name the panel shows for the
- * system; its clock, the time it reads and where that comes from; and its
- * maintenance, a report of every figure and a restart. The software it runs
- * is under Software, and every way into it under Access.
+ * system; its clock, the time it reads and where that comes from; its last
+ * restart, and why when the kernel met an error; and its maintenance, a
+ * report of every figure and a restart. The software it runs is under
+ * Software, and every way into it under Access.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Download, RotateCw } from "lucide-react";
+import { Download, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { request } from "../../api/client";
-import { useClock, useHostnameChange, useProductChange, useRestart } from "../../api/config";
+import {
+  useClock,
+  useCrash,
+  useCrashClear,
+  useHostnameChange,
+  useProductChange,
+  useRestart,
+} from "../../api/config";
 import { schema } from "../../api/gen/pond";
 import { useLive } from "../../api/live";
 import { useConfirm } from "../../components/Confirm";
@@ -24,12 +32,20 @@ import { QueryNote } from "../../components/Read";
 import { Badge, Card, Facts } from "../../components/ui";
 import { type Key, useI18n } from "../../i18n";
 import { clockState, offsetText, ppmText, sourceKey, spanText, stale } from "../../lib/clock";
+import {
+  consoleRecord,
+  crashLine,
+  crashText,
+  crashWhen,
+  kernelRecord,
+  lastLines,
+} from "../../lib/crash";
 import { duration } from "../../lib/format";
 import { DEFAULT_PRODUCT, PRODUCT_MAX, productField, productSlug } from "../../lib/product";
 import { reason } from "../../lib/read";
 import { z } from "../../lib/schemas";
 import type { Tone } from "../../lib/state";
-import { Columns, Hint, Stack } from "./shared";
+import { Columns, Hint, Pair, Stack } from "./shared";
 
 const STORE: Record<string, [Key, Tone]> = {
   loaded: ["system.stored", "good"],
@@ -291,6 +307,103 @@ async function report() {
   URL.revokeObjectURL(a.href);
 }
 
+/* Every record of the kernel's last words in a text file, named for the moment it is taken. */
+function download(text: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = `stick-crash-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/*
+ * The last restart: after a kernel error, when and why, with the last lines
+ * the kernel wrote; otherwise that there was none. The records, the
+ * console's of the start before among them, to download and to delete.
+ */
+function CrashCard() {
+  const { t, lang } = useI18n();
+  const crash = useCrash();
+  const clear = useCrashClear();
+  const confirm = useConfirm();
+  const c = crash.data;
+  const record = kernelRecord(c);
+  /* The bar over every page leads here, #crash, past the cards above on a phone. */
+  return (
+    <div id="crash" className="scroll-mt-20">
+      <Card
+        title={t("system.crash")}
+        action={
+          c && (
+            <Badge tone={record ? "bad" : "good"}>
+              {t(record ? "system.crashKernel" : "system.crashClean")}
+            </Badge>
+          )
+        }
+      >
+        <QueryNote reads={crash} />
+        {c && !record && (
+          <p className="text-sm">
+            {t(consoleRecord(c) ? "system.crashConsoleOnly" : "system.crashNone")}
+          </p>
+        )}
+        {record && (
+          <>
+            <Facts
+              rows={[
+                [t("system.crashWhen"), crashWhen(record.time_s, lang) ?? t("system.crashNoClock")],
+                [
+                  t("system.crashCause"),
+                  <span key="cause" className="break-words font-mono text-xs">
+                    {crashLine(record.text)}
+                  </span>,
+                ],
+              ]}
+            />
+            <Pair label={t("system.crashLines")}>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-box bg-base-200 p-3 font-mono text-xs">
+                {lastLines(record.text, 12)}
+              </pre>
+            </Pair>
+          </>
+        )}
+        {c && c.records.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-sm w-fit"
+              onClick={() => download(crashText(c))}
+            >
+              <Download className="size-4" />
+              {t("system.crashDownload")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-error btn-outline w-fit"
+              disabled={clear.isPending}
+              onClick={() =>
+                confirm.open({
+                  title: t("system.crashClear"),
+                  body: t("system.crashClearConfirm"),
+                  action: t("system.crashClearAction"),
+                  danger: true,
+                  rootPassword: false,
+                  run: () => clear.mutateAsync({ CLEAR: "1" }),
+                })
+              }
+            >
+              <Trash2 className="size-4" />
+              {t("system.crashClear")}
+            </button>
+          </div>
+        )}
+        <Hint>{t("system.crashHint")}</Hint>
+        {confirm.dialog}
+      </Card>
+    </div>
+  );
+}
+
 /* A report of every figure, for support, and a restart, which asks first. */
 function Maintenance() {
   const { t } = useI18n();
@@ -367,6 +480,7 @@ export function DevicePage() {
           <DeviceCard />
         </Stack>
         <Stack>
+          <CrashCard />
           <ClockCard />
           <Maintenance />
         </Stack>

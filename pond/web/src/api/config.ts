@@ -24,6 +24,7 @@ import {
   firmwareTry,
   getBanks,
   getClock,
+  getCrash,
   getFirmware,
   getIdentity,
   getIptv,
@@ -277,6 +278,8 @@ export const REFRESH = {
   service_rule: [["service_rules"]],
   /* Who gives upstream IGMP its priority. */
   iptv: [["iptv"]],
+  /* The kernel's records of before the last restart, removed. */
+  crash: [["crash"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type Change = keyof typeof REFRESH;
@@ -353,6 +356,20 @@ export const useMgmtChange = () => useChange("mgmt");
 export const useHostnameChange = () => useChange("hostname");
 export const useProductChange = () => useChange("product");
 export const useIdentityChange = () => useChange("identity");
+/** CLEAR=1 removes the kernel's records of before the last restart. */
+export const useCrashClear = () => useChange("crash");
+
+/*
+ * The kernel's last words before the last restart: they change only with a
+ * restart, after which the panel signs in again, and with their removal.
+ */
+export const useCrash = () =>
+  useQuery({
+    queryKey: ["crash"],
+    queryFn: async () => (await getCrash()).value,
+    staleTime: 300_000,
+    retry: false,
+  });
 
 export function restartOptions(qc: QueryClient) {
   return mutationOptions({
