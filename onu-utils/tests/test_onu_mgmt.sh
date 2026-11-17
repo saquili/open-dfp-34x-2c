@@ -94,7 +94,14 @@ check 'grep -qx DATA_ADDRESS=192.0.2.2/30 "$ONU_ROOT/run/onu-mgmt"'
 check 'in_part "device mgmt 4094"'
 check 'in_part "interface mgmt mgmt 198.51.100.2/30"'
 # The address on the SFP port is netifd's too, as the interface "data".
-check 'in_part "interface data sfp 192.0.2.2/30"'
+check 'in_part "interface data omcibr0 192.0.2.2/30"'
+# The host link's bridge, management a VLAN of it, untagged frames in VLAN 1.
+check 'logged "onu-nl link add bridge omcibr0" && logged "onu-nl link set sfp master omcibr0"'
+check 'logged "onu-nl link set omcibr0 up" && logged "onu-nl vlan add omcibr0 1 pvid untagged self"'
+check 'logged "onu-nl vlan add omcibr0 4094 self" && logged "onu-nl vlan add sfp 4094"'
+check 'logged "onu-nl vlan add sfp 1 pvid untagged" && ! logged "onu-nl vlan add sfp 4094 pvid untagged"'
+check 'grep -qx UNTAGGED=0 "$ONU_ROOT/run/onu-mgmt"'
+check '[ "$(grep -c "ifname .omcibr0." "$T/part")" -eq 1 ] && ! grep -q "ifname .sfp." "$T/part"'
 check '[ "$(part | wc -l)" -eq 3 ]'
 # The sessions keep their packets off the pair's networks.
 check 'logged "onu-apply guard"'
@@ -113,6 +120,34 @@ run status
 check 'echo "$out" | grep -qx VLAN=4094'
 check 'echo "$out" | grep -qx ADDRESS=198.51.100.2/30'
 check '! echo "$out" | grep -q PENDING_'
+teardown
+
+echo "with untagged, the host link's untagged frames go to management"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/omcibr0"
+run start 4094 198.51.100.2/30 "" untagged
+check '[ $rc -eq 0 ] && grep -qx UNTAGGED=1 "$ONU_ROOT/run/onu-mgmt"'
+check '! logged "onu-nl link add bridge omcibr0" && logged "onu-nl link set sfp master omcibr0"'
+check 'logged "onu-nl vlan add sfp 4094 pvid untagged" && ! logged "onu-nl vlan add sfp 1 pvid untagged"'
+check 'logged "onu-nl vlan del sfp 1"'
+run status
+check 'echo "$out" | grep -qx UNTAGGED=1'
+run start 4094 198.51.100.2/30 "" tagged
+check '[ $rc -eq 2 ]'
+teardown
+
+echo "a pair in another VLAN, confirmed through it, keeps it tagged"
+setup
+run start 4094 198.51.100.2/30 "" untagged
+run add 100 192.0.2.6/30
+check '[ $rc -eq 0 ] && logged "onu-nl vlan add sfp 100"'
+: >"$LOG"
+run commit
+check '[ $rc -eq 0 ] && grep -qx MGMT_UNTAGGED=0 "$T/stored" && grep -qx MGMT_VLAN=100 "$T/stored"'
+check 'logged "onu-nl vlan add sfp 1 pvid untagged" && ! logged "onu-nl vlan add sfp 100 pvid untagged"'
+check 'logged "onu-nl vlan del sfp 4094"'
+run status
+check 'echo "$out" | grep -qx UNTAGGED=0 && echo "$out" | grep -qx VLAN=100'
 teardown
 
 echo "what is not a pair does not start"

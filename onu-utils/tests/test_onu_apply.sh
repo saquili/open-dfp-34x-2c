@@ -241,7 +241,7 @@ check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ] && ! logged "^onu-fw"'
 printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=192.0.2.2/30\n' \
 	>"$ONU_ROOT/run/onu-mgmt"
 "$MODE_SCRIPT" guard 2>/dev/null
-check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\ndata sfp 192.0.2.2")" ]'
+check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\ndata omcibr0 192.0.2.2")" ]'
 # A ping answered from either side, in bridge mode as well, as the settings say.
 printf 'FW_PING_IN=allow\n' >"$ONU_ROOT/run/onu.conf"
 "$MODE_SCRIPT" reload 2>/dev/null

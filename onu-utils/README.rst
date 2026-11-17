@@ -615,10 +615,19 @@ by its whole path where procd starts it.
    after ten minutes. netifd brings the pairs up: each is an interface of its
    own in onu-mgmt's part of netifd's configuration, so that the one a person
    manages the stick from is never taken down and up again when the other
-   comes or goes. The address on ``sfp`` itself, ``DATA_ADDRESS``, is the
-   interface ``data`` of the same part::
+   comes or goes.
 
-      onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]   # at boot
+   The host link is a port of the bridge ``omcibr0``, which ``onu-mgmt start``
+   makes, filtering VLANs, and which omcid puts the GEM ports into (ADR 0023).
+   A management VLAN is a VLAN of the bridge, of which ``sfp`` and the bridge
+   itself are members and never a GEM port. The host link's untagged frames
+   are given VLAN 1, of which the bridge itself is a member, carrying
+   ``DATA_ADDRESS``, the interface ``data`` of the same part; with
+   ``untagged`` (``MGMT_UNTAGGED=1``, the first start after an install from
+   the shipped firmware's page) they are given the management VLAN instead,
+   and management answers untagged::
+
+      onu-mgmt start VLAN ADDRESS [DATA_ADDRESS] [untagged]   # at boot
       onu-mgmt add VLAN ADDRESS
       onu-mgmt commit
       onu-mgmt cancel
