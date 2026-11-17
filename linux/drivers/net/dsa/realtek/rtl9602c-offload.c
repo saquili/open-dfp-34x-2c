@@ -2757,6 +2757,29 @@ static int rtl9602c_acl_ctag(struct flow_rule *rule,
 	return 0;
 }
 
+/*
+ * A frame without a C-tag, num_of_vlans 0 and no tag named, into @m: its
+ * C-tag field reads VID 0, as that of a frame with a priority tag does, which
+ * 802.1Q classifies as an untagged one (IEEE 802.1Q-2022 clause 6.9.1), so
+ * the rule takes both.
+ */
+static int rtl9602c_acl_no_ctag(struct flow_rule *rule,
+				struct rtl9602c_acl_match *m,
+				struct netlink_ext_ack *extack)
+{
+	struct flow_match_num_of_vlans n;
+
+	flow_rule_match_num_of_vlans(rule, &n);
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN) ||
+	    n.mask->num_of_vlans != 0xff || n.key->num_of_vlans) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "an ACL rule tells a frame without a C-tag, num_of_vlans 0, from others, and counts no tags");
+		return -EOPNOTSUPP;
+	}
+	rtl9602c_acl_push(m, RTL9602C_ACL_TMPL_FIELD_CTAG, 0, VLAN_VID_MASK);
+	return 0;
+}
+
 /* An IPv4 address inside a PPPoE session, through its two selectors. */
 static void rtl9602c_acl_pppoe_addr(struct rtl9602c_acl_match *m, u8 hi,
 				    u8 lo, u32 v, u32 c)
@@ -2800,10 +2823,11 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV6_ADDRS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_PORTS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_VLAN) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_NUM_OF_VLANS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_PPPOE) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ICMP))) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "this ACL matches addresses, a C-tag, ethertype, IP protocol, IPv4 addresses, L4 ports and ICMP types");
+				   "this ACL matches addresses, a C-tag or none, ethertype, IP protocol, IPv4 addresses, L4 ports and ICMP types");
 		return -EOPNOTSUPP;
 	}
 
@@ -2840,6 +2864,12 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN)) {
 		err = rtl9602c_acl_ctag(rule, &m, extack);
+		if (err)
+			return err;
+	}
+
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_NUM_OF_VLANS)) {
+		err = rtl9602c_acl_no_ctag(rule, &m, extack);
 		if (err)
 			return err;
 	}
