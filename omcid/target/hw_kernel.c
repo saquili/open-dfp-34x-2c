@@ -2070,23 +2070,39 @@ static unsigned int mgmt_vlan(void)
 }
 
 /*
- * Whether the stick's management takes the host link's untagged frames:
- * onu-mgmt's line UNTAGGED=1 of MGMT_PATH (ADR 0023). The switch then traps
- * them to the CPU, so that no service of the OLT's gets them.
+ * The SFP port's PVID, onu-pvid's line PVID= of PVID_PATH (ADR 0023), 1
+ * without one; and in @stick whether the stick takes that VLAN itself: the
+ * management VLAN, or a VLAN device on sfp of onu-apply's, whose untagged
+ * frames onu-pvid has the switch trap to the CPU.
  */
-static bool kernel_host_untagged(void)
+#define PVID_PATH "/run/onu-pvid"
+
+static uint16_t kernel_host_pvid(bool *stick)
 {
-	char line[64];
-	bool on = false;
-	FILE *f = fopen(MGMT_PATH, "re");
+	char line[128];
+	unsigned long pvid = 1;
+	FILE *f = fopen(PVID_PATH, "re");
 
 	while (f != NULL && fgets(line, sizeof(line), f) != NULL)
-		if (!strcmp(line, "UNTAGGED=1\n") ||
-		    !strcmp(line, "UNTAGGED=1"))
-			on = true;
+		if (!strncmp(line, "PVID=", 5))
+			pvid = strtoul(line + 5, NULL, 10);
 	if (f != NULL)
 		fclose(f);
-	return on;
+	if (pvid < 1 || pvid > 4094)
+		pvid = 1;
+	*stick = pvid == mgmt_vlan();
+	f = fopen("/proc/net/vlan/config", "re");
+	while (!*stick && f != NULL && fgets(line, sizeof(line), f) != NULL) {
+		char name[32], dev[32];
+		unsigned int vid;
+
+		if (sscanf(line, "%31s | %u | %31s", name, &vid, dev) == 3 &&
+		    vid == pvid && !strcmp(dev, UNI_IFNAME))
+			*stick = true;
+	}
+	if (f != NULL)
+		fclose(f);
+	return (uint16_t)pvid;
 }
 
 static void gem_vlans_publish(const struct omci_hw_bridge_port *ports, size_t n)
@@ -3758,12 +3774,32 @@ static bool kernel_igmp_host_priority(void)
 	       (text[4] == '\0' || text[4] == '\n');
 }
 
+/* The PVID as last read, so that a change of it programs the data path again. */
+static uint16_t g_pvid_seen;
+static bool g_pvid_stick_seen;
+
+static bool pvid_changed(void)
+{
+	bool stick = false;
+	const uint16_t pvid = kernel_host_pvid(&stick);
+
+	if (pvid == g_pvid_seen && stick == g_pvid_stick_seen)
+		return false;
+	g_pvid_seen = pvid;
+	g_pvid_stick_seen = stick;
+	return true;
+}
+
 static bool kernel_reprogram_due(void)
 {
-	const bool due = g_reprogram_due || rules_changed();
+	const bool rules = rules_changed();
+	const bool pvid = pvid_changed();
+	const bool due = g_reprogram_due || rules || pvid;
 
-	if (due && !g_reprogram_due)
+	if (rules && !g_reprogram_due)
 		OMCI_INFO("vlan: the rules of the services changed");
+	if (pvid && !g_reprogram_due)
+		OMCI_INFO("vlan: the SFP port's PVID is %u now", g_pvid_seen);
 	g_reprogram_due = false;
 	return due;
 }
@@ -3837,6 +3873,8 @@ struct tc_gact_rule {
 	uint16_t vid;
 	bool has_prio;
 	uint8_t prio;
+	/* The frames without a tag (flower's num_of_vlans 0). */
+	bool untagged;
 	int action;
 	uint32_t handle;
 };
@@ -3907,6 +3945,12 @@ static int tc_gact_add(int ifindex, unsigned int prio,
 	if (r->has_prio)
 		off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_PRIO, &r->prio,
 			      sizeof(r->prio));
+	if (r->untagged) {
+		const uint8_t none = 0;
+
+		off = nla_put(req, off, TCA_FLOWER_KEY_NUM_OF_VLANS, &none,
+			      sizeof(none));
+	}
 	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
 
 	acts = off;
@@ -3928,6 +3972,46 @@ static int tc_gact_add(int ifindex, unsigned int prio,
 
 	*(uint32_t *)&req[0] = (uint32_t)off;
 	return rtnl_talk(req, off, NULL, 0, NULL);
+}
+
+/*
+ * Untagged frames from the host dropped as they come in, while the PVID
+ * leads nowhere: a flower rule on sfp's ingress at TC_PRIO_UNTAGGED.
+ */
+static int g_untagged_dropped = -1;
+
+static enum omci_status kernel_untagged_discard(bool on)
+{
+	const int uni = (int)if_nametoindex(UNI_IFNAME);
+	const struct tc_gact_rule r = {
+		.proto = ETH_P_ALL,
+		.icmp_type = -1,
+		.untagged = true,
+		.action = TC_ACT_SHOT,
+	};
+	int err = 0;
+
+	if (!uni)
+		return OMCI_ERR_HW;
+	if (g_untagged_dropped == (int)on)
+		return OMCI_OK;
+	(void)tc_filter_del(uni, TC_PRIO_UNTAGGED);
+	if (on) {
+		err = tc_clsact_ensure(uni);
+		if (!err)
+			err = tc_gact_add(uni, TC_PRIO_UNTAGGED, &r);
+	}
+	if (err) {
+		OMCI_WARN(
+			"vlan: the host's untagged frames are not dropped: %s (%s)",
+			strerror(-err), omci_hw_last_extack());
+		g_untagged_dropped = -1;
+		return OMCI_ERR_HW;
+	}
+	g_untagged_dropped = on;
+	OMCI_INFO("vlan: the host's untagged frames are %s",
+		  on ? "dropped: the PVID leads nowhere" : "no longer dropped");
+	return OMCI_OK;
 }
 
 /* Put the traps on sfp, or take them off; on a failure none is left. */
@@ -5066,7 +5150,8 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.routing = kernel_routing,
 	.reprogram_due = kernel_reprogram_due,
 	.service_rules = kernel_service_rules,
-	.host_untagged = kernel_host_untagged,
+	.host_pvid = kernel_host_pvid,
+	.untagged_discard = kernel_untagged_discard,
 	.fdb = kernel_fdb,
 	.mcast_port = kernel_mcast_port,
 	.mcast_groups = kernel_mcast_groups,

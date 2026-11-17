@@ -306,9 +306,10 @@ static void test_the_services(struct omci_mib *mib)
 		CHECK(at != NULL);
 		at = at != NULL ? at + strlen(g_rules[i]) + (i < 2u) : NULL;
 	}
-	CHECK(at != NULL && strcmp(at, "],\"untagged\":{\"management\":false,"
-				       "\"service\":null,\"bridged\":false,"
-				       "\"clash\":false}}") == 0);
+	CHECK(at != NULL &&
+	      strcmp(at, "],\"untagged\":{\"pvid\":1,\"stick\":false,"
+			 "\"leads\":null,\"service\":null,\"host\":null,"
+			 "\"bridged\":false,\"clash\":false}}") == 0);
 	omci_hw_service_rules_set(person, 0u);
 }
 

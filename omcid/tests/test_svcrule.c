@@ -367,60 +367,128 @@ static size_t fates_of(unsigned int fibre, enum omci_vlan_fate f)
 	return k;
 }
 
+/* The rule of the last programming that gives untagged frames VLAN @fibre, or NULL. */
+static const struct omci_hw_vlan_xlate *push_of(unsigned int fibre)
+{
+	const struct omci_hw_vlan_xlate *r = NULL;
+	const size_t n = omci_hw_vlan_recorded(&r);
+
+	for (size_t i = 0; i < n; i++)
+		if (r[i].kind == OMCI_HW_VLAN_CVID_PUSH &&
+		    r[i].match_cvid == 0u && r[i].assign_cvid == fibre)
+			return &r[i];
+	return NULL;
+}
+
+/* The translation of the last programming from host VLAN @host, or NULL. */
+static const struct omci_hw_vlan_xlate *xlate_of(unsigned int host)
+{
+	const struct omci_hw_vlan_xlate *r = NULL;
+	const size_t n = omci_hw_vlan_recorded(&r);
+
+	for (size_t i = 0; i < n; i++)
+		if (r[i].kind == OMCI_HW_VLAN_CVID_XLATE &&
+		    r[i].match_cvid == host)
+			return &r[i];
+	return NULL;
+}
+
 static void test_untagged(void)
 {
 	struct omci_mib *mib = NULL;
 	struct omci_vlan_untagged u;
+	const struct omci_hw_vlan_xlate *x;
 
 	/*
-	 * The UNI's untagged frames go to VLAN 1501 on the fibre: a service of
-	 * the OLT's, which a bridge port of a GEM port carries.
+	 * The UNI's untagged frames go to VLAN 1501 on the fibre, and its VLAN
+	 * 35 crosses as it is: services of the OLT's, which a bridge port of a
+	 * GEM port carries. With the PVID 1 the untagged frames are the OLT's.
 	 */
 	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
 	port(mib, 0x101u, OMCI_BRIDGE_TP_PPTP_ETH);
 	port(mib, 0x8001u, OMCI_BRIDGE_TP_GEM_IW);
 	me171(mib, 0x101u, 2u, 0x101u);
 	push(mib, 0x101u, 1501u);
-	omci_hw_host_untagged_set(false);
+	xlate(mib, 0x101u, 35u, 35u);
+	omci_hw_host_pvid_set(1u, false);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(!omci_vlan_untagged(&u));
-	CHECK(!u.management && u.service == 1501u && u.named && !u.bridged);
-	CHECK_EQ(fates_of(1501u, OMCI_VLAN_FATE_PROGRAMMED), 1u);
+	CHECK(u.pvid == 1u && u.service == 1501u && u.host == 0u && u.named &&
+	      !u.bridged);
+	CHECK(push_of(1501u) != NULL && xlate_of(1501u) == NULL);
+	CHECK(!omci_hw_untagged_discarded());
 
 	/*
-	 * The stick's management takes them: the rule stays out of the hardware
-	 * and its service gets none, a clash.
+	 * The PVID is the management VLAN, which the stick takes: the service
+	 * moves to a host VLAN of its own, its fibre VLAN, a move of the
+	 * stick's, and the untagged frames reach no rule: a clash.
 	 */
-	omci_hw_host_untagged_set(true);
+	omci_hw_host_pvid_set(4094u, true);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(omci_vlan_untagged(&u));
-	CHECK(u.management && u.service == 1501u && !u.bridged);
-	CHECK_EQ(fates_of(1501u, OMCI_VLAN_FATE_PROGRAMMED), 0u);
-	CHECK_EQ(fates_of(1501u, OMCI_VLAN_FATE_LOCAL), 1u);
+	CHECK(u.pvid == 4094u && u.stick && u.service == 1501u &&
+	      u.host == 1501u && u.leads == 0u);
+	CHECK(push_of(1501u) == NULL && host_of(1501u) == 1501u);
+	CHECK(!omci_hw_untagged_discarded());
+
+	/*
+	 * The PVID 35, a service's host VLAN: the untagged frames go to VLAN
+	 * 35 on the fibre, ahead of its translation, which works upstream
+	 * alone.
+	 */
+	omci_hw_host_pvid_set(35u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u));
+	CHECK(u.leads == 35u && u.host == 1501u);
+	x = xlate_of(35u);
+	CHECK(push_of(35u) != NULL && x != NULL && x->up_only);
+	CHECK(push_of(1501u) == NULL && host_of(1501u) == 1501u);
+	CHECK(!omci_hw_untagged_discarded());
+
+	/* The PVID 1501, the OLT's untagged service's own: no clash. */
+	omci_hw_host_pvid_set(1501u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(!omci_vlan_untagged(&u));
+	CHECK(u.leads == 1501u && push_of(1501u) != NULL);
+	x = xlate_of(1501u);
+	CHECK(x != NULL && x->up_only);
+
+	/* A PVID that leads nowhere: the untagged frames are dropped. */
+	omci_hw_host_pvid_set(777u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(omci_vlan_untagged(&u) && u.leads == 0u);
+	CHECK(omci_hw_untagged_discarded());
 	omci_mib_fini(mib);
 
 	/*
 	 * No rule names the untagged frames, and a GEM port is a bridge port:
-	 * they cross the OLT's bridge as they are, a clash too; without the
-	 * GEM port, none.
+	 * they cross the OLT's bridge as they are, a clash while the PVID is
+	 * not 1; without the GEM port, none.
 	 */
+	omci_hw_host_pvid_set(4094u, true);
 	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
 	port(mib, 0x101u, OMCI_BRIDGE_TP_PPTP_ETH);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(!omci_vlan_untagged(&u));
-	CHECK(u.management && u.service == 0u && !u.named && !u.bridged);
+	CHECK(u.service == 0u && !u.named && !u.bridged);
 	port(mib, 0x8001u, OMCI_BRIDGE_TP_GEM_IW);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(omci_vlan_untagged(&u));
 	CHECK(u.bridged && u.service == 0u);
+	omci_hw_host_pvid_set(1u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(!omci_vlan_untagged(&u) && u.bridged);
 
 	/* An IP host's rule that tags them is no claim: it has a VLAN of its own. */
+	omci_hw_host_pvid_set(4094u, true);
 	me171(mib, 0x901u, 3u, 0x0000u);
 	push(mib, 0x901u, 600u);
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK(omci_vlan_untagged(&u) && u.service == 0u && u.bridged);
 	CHECK_EQ(host_of(600u), 600u);
-	omci_hw_host_untagged_set(false);
+	omci_hw_host_pvid_set(1u, false);
+	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	CHECK(!omci_hw_untagged_discarded());
 	omci_mib_fini(mib);
 }
 

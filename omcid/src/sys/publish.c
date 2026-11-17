@@ -262,11 +262,20 @@ void omci_publish_services(const struct omci_publish_ops *ops, void *ctx)
 	ops->close(ctx, true);
 
 	ops->open(ctx, "untagged", false);
-	ops->flag(ctx, "management", u.management);
+	ops->num(ctx, "pvid", u.pvid);
+	ops->flag(ctx, "stick", u.stick);
+	if (u.leads != 0u)
+		ops->num(ctx, "leads", u.leads);
+	else
+		ops->none(ctx, "leads");
 	if (u.service != 0u)
 		ops->num(ctx, "service", u.service);
 	else
 		ops->none(ctx, "service");
+	if (u.host != 0u)
+		ops->num(ctx, "host", u.host);
+	else
+		ops->none(ctx, "host");
 	ops->flag(ctx, "bridged", u.bridged);
 	ops->flag(ctx, "clash", clash);
 	ops->close(ctx, false);

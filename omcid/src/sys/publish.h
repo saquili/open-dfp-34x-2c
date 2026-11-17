@@ -78,11 +78,12 @@ void omci_publish_status(const struct omci_mib *mib,
 /**
  * omci_publish_services() - Write the rules of the services in force at the
  *	last programming of the VLAN rules (me/svcrule.h): {"rules":[{"fibre":
- *	F,"action":"move","host":H,"auto":B},...],"untagged":{"management":B,
- *	"service":F,"bridged":B,"clash":B}}, a person's rules first, then the
- *	moves the programming made for clashes, "host" of a move alone; and
- *	what became of the host's untagged frames (omci_vlan_untagged()),
- *	"service" null without one.
+ *	F,"action":"move","host":H,"auto":B},...],"untagged":{"pvid":P,
+ *	"stick":B,"leads":F,"service":F,"host":H,"bridged":B,"clash":B}}, a
+ *	person's rules first, then the moves the programming made for
+ *	clashes, "host" of a move alone; and what became of the host's
+ *	untagged frames (omci_vlan_untagged()), "leads", "service" and "host"
+ *	null without one.
  * @ops: the writer
  * @ctx: passed to @ops
  */

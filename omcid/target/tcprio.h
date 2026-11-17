@@ -13,6 +13,14 @@
  *   1-2        onu-mgmt  both     the management VLAN of the pair in use, and
  *                                 of the pair on trial; the boot's is the
  *                                 first, and the two take turns
+ *   3-5        onu-mgmt  sfp      the SFP port's PVID when it is a VLAN of
+ *                                 the stick's own (ADR 0023): the switch's
+ *                                 trap of untagged frames (3), and in
+ *                                 software their tag (4) and the VID of a
+ *                                 priority tag (5); on sfp's egress, 3 takes
+ *                                 the tag of the PVID's frames away
+ *   6          omcid  sfp         the drop of untagged frames while the
+ *                                 PVID leads nowhere
  *   20-35      omcid  sfp         discards of VLAN rules, a priority each
  *   50-65      omcid  sfp         drops of the VLANs no rule takes
  *   100-107    omcid  sfp         traps of IGMP and MLD
@@ -42,6 +50,10 @@
 
 #define TC_PRIO_MGMT 1u
 #define TC_PRIO_MGMT_N 2u
+#define TC_PRIO_PVID 3u
+#define TC_PRIO_PVID_N 3u
+#define TC_PRIO_UNTAGGED 6u
+#define TC_PRIO_UNTAGGED_N 1u
 #define TC_PRIO_VLAN_DISCARD 20u
 #define TC_PRIO_VLAN_DISCARD_N 16u
 #define TC_PRIO_DISCARD 50u
@@ -59,8 +71,12 @@
 #define TC_PRIO_VLAN 1000u
 #define TC_PRIO_VLAN_N 16u
 
-_Static_assert(TC_PRIO_MGMT + TC_PRIO_MGMT_N <= TC_PRIO_VLAN_DISCARD,
-	       "the management VLAN's priorities overlap the discards");
+_Static_assert(TC_PRIO_MGMT + TC_PRIO_MGMT_N <= TC_PRIO_PVID,
+	       "the management VLAN's priorities overlap the PVID's");
+_Static_assert(TC_PRIO_PVID + TC_PRIO_PVID_N <= TC_PRIO_UNTAGGED,
+	       "the PVID's priorities overlap the drop of untagged frames");
+_Static_assert(TC_PRIO_UNTAGGED + TC_PRIO_UNTAGGED_N <= TC_PRIO_VLAN_DISCARD,
+	       "the drop of untagged frames overlaps the discards");
 _Static_assert(TC_PRIO_VLAN_DISCARD + TC_PRIO_VLAN_DISCARD_N <= TC_PRIO_DISCARD,
 	       "the discards' priorities overlap the drops");
 _Static_assert(TC_PRIO_DISCARD + TC_PRIO_DISCARD_N <= TC_PRIO_TRAP,

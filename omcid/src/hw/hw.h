@@ -366,8 +366,10 @@ void omci_hw_vlan_fail_next(void);
 void omci_hw_vlan_reject_next(uint16_t key);
 
 void omci_hw_service_rules_set(const struct omci_svc_rule *rules, size_t n);
-/* Whether the host backend's management takes the host's untagged frames. */
-void omci_hw_host_untagged_set(bool on);
+/* The host backend's PVID, and whether the stick takes its VLAN. */
+void omci_hw_host_pvid_set(uint16_t pvid, bool stick);
+/* Whether the host backend was last told to drop the host's untagged frames. */
+bool omci_hw_untagged_discarded(void);
 
 void omci_hw_igmp_host_priority_set(bool host);
 #endif
@@ -1222,10 +1224,14 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  * @service_rules: the stick's rules for the services that a person set
  *	(me/svcrule.h), into @out of @cap places, as the number written; read
  *	at each programming of the VLAN rules. NULL in a backend without them
- * @host_untagged: whether the stick's management takes the host link's
- *	untagged frames (ADR 0023), which no service of the OLT's then gets;
- *	read at each programming of the VLAN rules. NULL in a backend whose
- *	management never does
+ * @host_pvid: the SFP port's PVID (ADR 0023), the VLAN the host's untagged
+ *	frames get, 1 while they go to the OLT as they are; and in @stick,
+ *	whether the stick itself takes that VLAN, management or a VLAN of its
+ *	own on the host link, whose untagged frames are trapped to the CPU.
+ *	Read at each programming of the VLAN rules. NULL in a backend whose
+ *	PVID is always 1
+ * @untagged_discard: drop the host's untagged frames as they come in, or
+ *	stop: while the PVID leads nowhere. NULL in a backend that cannot
  * @fdb: read the addresses the switch forwards by; NULL in a backend that
  *	cannot
  * @mcast_port: set how the bridge snoops the subscriber side; NULL in a
@@ -1302,7 +1308,8 @@ struct omci_hw_ops {
 	bool (*routing)(void);
 	bool (*reprogram_due)(void);
 	size_t (*service_rules)(struct omci_svc_rule *out, size_t cap);
-	bool (*host_untagged)(void);
+	uint16_t (*host_pvid)(bool *stick);
+	enum omci_status (*untagged_discard)(bool on);
 	enum omci_status (*fdb)(struct omci_hw_fdb *out, size_t cap, size_t *n);
 	enum omci_status (*mcast_port)(const struct omci_hw_mcast_port *cfg);
 	enum omci_status (*mcast_groups)(struct omci_hw_mcast_group *out,

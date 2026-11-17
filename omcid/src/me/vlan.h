@@ -214,22 +214,34 @@ bool omci_vlan_phone(uint16_t *fibre, uint16_t *host);
 /**
  * struct omci_vlan_untagged - What the VLAN rules made of the host's untagged
  *	frames at the last programming (ADR 0023).
- * @management: the stick's management takes them (the backend's
- *	host_untagged)
+ * @pvid: the SFP port's PVID, the backend's host_pvid: 1 while the untagged
+ *	frames are the OLT's, as they come
+ * @stick: the stick itself takes the PVID's VLAN, management or a VLAN of
+ *	its own
+ * @leads: the VLAN on the fibre that the PVID leads the untagged frames
+ *	into, a service's; 0 for none
  * @service: the VLAN on the fibre that the first rule of an Ethernet UNI or
- *	of the VEIP giving them a tag leads into; 0 without one
- * @named: a rule of an Ethernet UNI or of the VEIP names them: gives them a
- *	tag, passes them on or discards them
+ *	of the VEIP giving untagged frames a tag leads into, a service the OLT
+ *	set up on them; 0 without one
+ * @host: that service's host VLAN of its own while the PVID is not 1; 0
+ *	while it takes the untagged frames
+ * @named: a rule of an Ethernet UNI or of the VEIP names untagged frames:
+ *	gives them a tag, passes them on or discards them
  * @bridged: no rule names them, and the OLT made a bridge port of a GEM port
  *	or a mapper, which they cross as they are
  *
- * While the management takes them, a rule that gives them a tag stays out of
- * the hardware, of fate %OMCI_VLAN_FATE_LOCAL: its service gets none of them.
- * Management and @service or @bridged at once are a clash.
+ * While the PVID is not 1, a rule that gives untagged frames a C-tag becomes
+ * a translation from a host VLAN of its own, the fibre's when free, which the
+ * moves made list; one that gives them a C- and an S-tag stays out of the
+ * hardware, of fate %OMCI_VLAN_FATE_LOCAL. A PVID that is a service's host
+ * VLAN gives that service the untagged frames.
  */
 struct omci_vlan_untagged {
-	bool management;
+	uint16_t pvid;
+	bool stick;
+	uint16_t leads;
 	uint16_t service;
+	uint16_t host;
 	bool named;
 	bool bridged;
 };
@@ -239,8 +251,8 @@ struct omci_vlan_untagged {
  *	programming.
  * @out: set to it
  *
- * Return: whether they clash: the management takes them, and a service of the
- * OLT's takes them or they cross its bridge.
+ * Return: whether they clash: the OLT set up a service on them, or lets
+ * them cross its bridge as they are, but the PVID leads them elsewhere.
  */
 bool omci_vlan_untagged(struct omci_vlan_untagged *out);
 

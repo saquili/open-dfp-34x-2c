@@ -323,17 +323,32 @@ static size_t omci_hw_service_rules(struct omci_svc_rule *out, size_t cap)
 	return n;
 }
 
-/* Whether a test gave the stick's management the host's untagged frames. */
-static bool g_host_untagged;
+/* The PVID a test gave the host link, and whether the stick takes its VLAN. */
+static uint16_t g_host_pvid = 1u;
+static bool g_host_pvid_stick;
+static bool g_untagged_discard;
 
-void omci_hw_host_untagged_set(bool on)
+void omci_hw_host_pvid_set(uint16_t pvid, bool stick)
 {
-	g_host_untagged = on;
+	g_host_pvid = pvid;
+	g_host_pvid_stick = stick;
 }
 
-static bool omci_hw_host_untagged(void)
+static uint16_t omci_hw_host_pvid(bool *stick)
 {
-	return g_host_untagged;
+	*stick = g_host_pvid_stick;
+	return g_host_pvid;
+}
+
+static enum omci_status omci_hw_untagged_discard(bool on)
+{
+	g_untagged_discard = on;
+	return OMCI_OK;
+}
+
+bool omci_hw_untagged_discarded(void)
+{
+	return g_untagged_discard;
 }
 
 /* Whether a test chose the subscriber's own priority for IGMP. */
@@ -1093,7 +1108,8 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.encrypted = omci_hw_encrypted,
 	.routing = omci_hw_routing,
 	.service_rules = omci_hw_service_rules,
-	.host_untagged = omci_hw_host_untagged,
+	.host_pvid = omci_hw_host_pvid,
+	.untagged_discard = omci_hw_untagged_discard,
 	.fdb = omci_hw_fdb,
 	.optics = omci_hw_optics,
 	.optics_limits = omci_hw_optics_limits,

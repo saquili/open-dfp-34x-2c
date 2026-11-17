@@ -506,24 +506,48 @@ static void mgmt_vlan_clash(void)
 	CHECK(clash_warnings(log, 4093) == 1);
 	CHECK(clash_warnings(log, 4094) == 2);
 
-	/* The management takes the host's untagged frames with UNTAGGED=1 alone. */
-	CHECK(!omci_hw_kernel_ops.host_untagged());
-	f = fopen("/run/onu-mgmt", "w");
-	CHECK(f != NULL);
-	if (f) {
-		fputs("VLAN=4094\nUNTAGGED=1\nDATA_ADDRESS=\n", f);
-		fclose(f);
+	/*
+	 * The SFP port's PVID: 1 without a file; the management VLAN's, which
+	 * the stick takes; a VLAN device's on sfp, which it takes too; another.
+	 */
+	{
+		bool stick = true;
+
+		f = fopen("/run/onu-mgmt", "w");
+		CHECK(f != NULL);
+		if (f) {
+			fputs("VLAN=4094\nADDRESS=192.0.2.1/30\n", f);
+			fclose(f);
+		}
+		unlink("/run/onu-pvid");
+		CHECK(omci_hw_kernel_ops.host_pvid(&stick) == 1u && !stick);
+		f = fopen("/run/onu-pvid", "w");
+		CHECK(f != NULL);
+		if (f) {
+			fputs("PVID=4094\n", f);
+			fclose(f);
+		}
+		CHECK(omci_hw_kernel_ops.host_pvid(&stick) == 4094u && stick);
+		f = fopen("/run/onu-pvid", "w");
+		CHECK(f != NULL);
+		if (f) {
+			fputs("PVID=35\n", f);
+			fclose(f);
+		}
+		CHECK(omci_hw_kernel_ops.host_pvid(&stick) == 35u && !stick);
+		CHECK(sh("ip link add link sfp name sfp.35 type vlan id 35") ==
+		      0);
+		CHECK(omci_hw_kernel_ops.host_pvid(&stick) == 35u && stick);
+		sh("ip link del sfp.35");
+		unlink("/run/onu-pvid");
+		unlink("/run/onu-mgmt");
 	}
-	CHECK(omci_hw_kernel_ops.host_untagged());
-	f = fopen("/run/onu-mgmt", "w");
-	CHECK(f != NULL);
-	if (f) {
-		fputs("VLAN=4094\nUNTAGGED=0\n", f);
-		fclose(f);
-	}
-	CHECK(!omci_hw_kernel_ops.host_untagged());
-	unlink("/run/onu-mgmt");
-	CHECK(!omci_hw_kernel_ops.host_untagged());
+
+	/* A PVID that leads nowhere drops the untagged frames on sfp's ingress. */
+	CHECK(omci_hw_kernel_ops.untagged_discard(true) == OMCI_OK);
+	CHECK(strstr(shown("sfp"), "num_of_vlans 0") != NULL);
+	CHECK(omci_hw_kernel_ops.untagged_discard(false) == OMCI_OK);
+	CHECK(strstr(shown("sfp"), "num_of_vlans 0") == NULL);
 	unlink(log);
 	CHECK(omci_hw_kernel_ops.bridge_apply(NULL, 0, NULL) == OMCI_OK);
 }

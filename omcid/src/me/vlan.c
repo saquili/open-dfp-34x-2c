@@ -639,11 +639,15 @@ static uint16_t g_phone[2], g_phoning[2];
  * the one under way, the fibre VLAN of the first rule that tags them and
  * whether a rule names them at all.
  */
-static bool g_untag_mgmt, g_untag_bridge;
+static uint16_t g_pvid = 1u;
+static bool g_pvid_stick, g_untag_bridge;
 static uint16_t g_untag_service, g_untagging_service;
+static uint16_t g_untag_host, g_untagging_host;
 static bool g_untag_named, g_untagging_named;
-/* The service last said to clash, so that it is said once. */
-static uint16_t g_untag_warned;
+/* The VLAN on the fibre that the PVID leads the untagged frames into, or 0. */
+static uint16_t g_pvid_fibre;
+/* What was last said, so that it is said once. */
+static uint16_t g_untag_warned, g_pvid_warned;
 
 /* The class 171 instance each gathered rule came of, by its place. */
 static uint16_t g_rule_inst[OMCI_HW_VLAN_MAX_RULES];
@@ -957,6 +961,7 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 	g_phoning[0] = 0;
 	g_phoning[1] = 0;
 	g_untagging_service = 0;
+	g_untagging_host = 0;
 	g_untagging_named = false;
 
 	bool warned_full = false;
@@ -1013,8 +1018,23 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 					fibre != 0u &&
 					out_of(mib, class_id, cur.instance) ==
 						OUT_IPHOST;
+				/*
+				 * A rule of the untagged frames of an
+				 * Ethernet UNI or of the VEIP. While the SFP
+				 * port's PVID is not 1 they are not the OLT's
+				 * (ADR 0023), so a rule that tags them, as an
+				 * IP host's always, becomes a translation from
+				 * a host VLAN of its own.
+				 */
+				const bool untagged_out =
+					d.filter_outer_pri == VLAN_PRI_NO_TAG &&
+					d.filter_inner_pri == VLAN_PRI_NO_TAG &&
+					out_of(mib, class_id, cur.instance) !=
+						OUT_IPHOST;
 				const bool own =
-					phone &&
+					(phone ||
+					 (untagged_out && fibre != 0u &&
+					  g_pvid != 1u)) &&
 					cand.kind == OMCI_HW_VLAN_CVID_PUSH &&
 					own_host_vlan(&cand, sr, fibre, rules,
 						      n);
@@ -1046,34 +1066,31 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 					}
 				}
 
-				/*
-				 * A rule of the untagged frames of an Ethernet
-				 * UNI or of the VEIP, not an IP host's, which
-				 * has a host VLAN of its own: while the
-				 * stick's management takes those frames, a
-				 * rule that tags them stays out of the
-				 * hardware, as its service gets none.
-				 */
-				if (d.filter_outer_pri == VLAN_PRI_NO_TAG &&
-				    d.filter_inner_pri == VLAN_PRI_NO_TAG &&
-				    out_of(mib, class_id, cur.instance) !=
-					    OUT_IPHOST) {
-					const bool tags =
-						cand.kind ==
-							OMCI_HW_VLAN_CVID_PUSH ||
-						cand.kind ==
-							OMCI_HW_VLAN_SCVID_PUSH;
-
+				if (untagged_out) {
 					g_untagging_named = true;
-					if (tags && g_untagging_service == 0u)
+					if ((d.op == OMCI_VLAN_OP_CVID_PUSH ||
+					     d.op == OMCI_VLAN_OP_SCVID_PUSH) &&
+					    g_untagging_service == 0u) {
 						g_untagging_service = fibre;
-					if (tags && g_untag_mgmt) {
+						g_untagging_host =
+							own ? cand.match_cvid :
+							      0u;
+					}
+					/*
+					 * A C- and an S-tag given the untagged
+					 * frames move to no host VLAN of their
+					 * own: while the PVID is not 1, the
+					 * rule stays out of the hardware.
+					 */
+					if (cand.kind ==
+						    OMCI_HW_VLAN_SCVID_PUSH &&
+					    g_pvid != 1u) {
 						if (warn &&
 						    fibre != g_untag_warned) {
 							g_untag_warned = fibre;
 							OMCI_WARN(
-								"me171: the OLT gives the host's untagged frames VLAN %u, but the stick's management takes them: the service gets none",
-								fibre);
+								"me171: the OLT gives the host's untagged frames VLAN %u under an S-tag, but the SFP port's PVID is %u: the service gets none",
+								fibre, g_pvid);
 						}
 						fate_put(record, cur.instance,
 							 i,
@@ -1256,8 +1273,9 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 		g_phone[0] = g_phoning[0];
 		g_phone[1] = g_phoning[1];
 		g_untag_service = g_untagging_service;
+		g_untag_host = g_untagging_host;
 		g_untag_named = g_untagging_named;
-		if (!g_untag_mgmt || g_untag_service == 0u)
+		if (g_pvid == 1u)
 			g_untag_warned = 0;
 	}
 	if (bad_out != NULL)
@@ -1280,8 +1298,12 @@ static void svc_ready(const struct omci_mib *mib, uint16_t class_id,
 	g_svc_n = omci_hw()->service_rules != NULL ?
 			  omci_hw()->service_rules(g_svc, ARRAY_SIZE(g_svc)) :
 			  0u;
-	g_untag_mgmt = omci_hw()->host_untagged != NULL &&
-		       omci_hw()->host_untagged();
+	g_pvid_stick = false;
+	g_pvid = omci_hw()->host_pvid != NULL ?
+			 omci_hw()->host_pvid(&g_pvid_stick) :
+			 1u;
+	if (g_pvid < 1u || g_pvid > 4094u)
+		g_pvid = 1u;
 	g_untag_bridge = false;
 	memset(g_host_used, 0, sizeof(g_host_used));
 	for (size_t k = 0; k < g_svc_n; k++)
@@ -1330,11 +1352,15 @@ size_t omci_vlan_services(const struct omci_svc_rule **person,
 
 bool omci_vlan_untagged(struct omci_vlan_untagged *out)
 {
-	out->management = g_untag_mgmt;
+	out->pvid = g_pvid;
+	out->stick = g_pvid_stick;
+	out->leads = g_pvid_fibre;
 	out->service = g_untag_service;
+	out->host = g_untag_host;
 	out->named = g_untag_named;
 	out->bridged = !g_untag_named && g_untag_bridge;
-	return out->management && (out->service != 0u || out->bridged);
+	return g_pvid != 1u &&
+	       ((out->service != 0u && g_pvid != out->host) || out->bridged);
 }
 
 bool omci_vlan_phone(uint16_t *fibre, uint16_t *host)
@@ -1342,6 +1368,55 @@ bool omci_vlan_phone(uint16_t *fibre, uint16_t *host)
 	*fibre = g_phone[0];
 	*host = g_phone[1];
 	return g_phone[0] != 0u;
+}
+
+/*
+ * The SFP port's PVID, when it is the host VLAN of a service, gives that
+ * service the host's untagged frames, as an 802.1Q switch does (ADR 0023): a
+ * rule ahead of the others gives them the service's VLAN on the fibre and
+ * takes it away from the service's frames on the way down, and the service's
+ * translation then works upstream alone. Returns the number of rules.
+ */
+static size_t pvid_rule(struct omci_hw_vlan_xlate *rules, size_t n, size_t cap)
+{
+	g_pvid_fibre = 0;
+	if (g_pvid == 1u || g_pvid_stick)
+		return n;
+	for (size_t k = 0; k < n; k++) {
+		const struct omci_hw_vlan_xlate *x = &rules[k];
+
+		if (x->kind != OMCI_HW_VLAN_CVID_XLATE ||
+		    x->match_cvid != g_pvid || x->up_only)
+			continue;
+		if (x->match_has_pri || x->per_pri ||
+		    x->ethertype != OMCI_HW_ETHERTYPE_ANY || n >= cap) {
+			if (g_pvid_warned != g_pvid)
+				OMCI_WARN(
+					"vlan: the PVID %u leads to no service: its rule takes a priority or an EtherType alone, or the classifier is full",
+					g_pvid);
+			g_pvid_warned = g_pvid;
+			return n;
+		}
+		const uint16_t fibre = x->assign_cvid;
+
+		memmove(&rules[1], &rules[0], n * sizeof(rules[0]));
+		rules[k + 1].up_only = true;
+		rules[0] = (struct omci_hw_vlan_xlate){
+			.kind = OMCI_HW_VLAN_CVID_PUSH,
+			.match_cvid = 0u,
+			.assign_cvid = fibre,
+			.assign_pri = 0u,
+			.ethertype = OMCI_HW_ETHERTYPE_ANY,
+		};
+		g_pvid_fibre = rules[0].assign_cvid;
+		if (g_pvid_warned != g_pvid)
+			OMCI_INFO(
+				"vlan: the host's untagged frames go to VLAN %u on the fibre, by the PVID %u",
+				g_pvid_fibre, g_pvid);
+		g_pvid_warned = g_pvid;
+		return n + 1u;
+	}
+	return n;
 }
 
 enum omci_status omci_vlan_program(const struct omci_mib *mib,
@@ -1392,9 +1467,19 @@ enum omci_status omci_vlan_program(const struct omci_mib *mib,
 		g_last_preferred = n;
 	}
 
+	n = pvid_rule(rules, n, cap);
+
 	struct omci_hw_reject rejected = { 0 };
 	const enum omci_status applied =
 		omci_hw()->vlan_apply(rules, n, &rejected);
+
+	/*
+	 * A PVID that is neither 1, nor a VLAN of the stick's own, nor a
+	 * service's: the untagged frames go nowhere, as on a switch.
+	 */
+	if (omci_hw()->untagged_discard != NULL)
+		(void)omci_hw()->untagged_discard(
+			g_pvid != 1u && !g_pvid_stick && g_pvid_fibre == 0u);
 
 	if (applied != OMCI_OK && applied != OMCI_DECLINED) {
 		for (size_t i = 0; i < saved_n; i++)
