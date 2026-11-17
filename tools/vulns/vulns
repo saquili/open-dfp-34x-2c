@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""vulns: the known vulnerabilities of what the image is made of.
+
+Usage: vulns packages PKG_STATS_JSON [--accepted FILE]
+       vulns kernel [--makefile FILE] [--releases FILE] [--cves DIR]
+       vulns mongoose [--header FILE] [--latest VERSION]
+       vulns buildroot [--pin FILE] [--index FILE]
+
+packages  judges the CVEs that Buildroot's pkg-stats found in the packages of
+          the image's configuration. A CVE of a package the stick runs is a
+          finding unless the accepted list names it with a reason; the CVEs
+          of the packages that only build the image are listed, not judged.
+          The kernel is left to "kernel": pkg-stats cannot place a kernel of
+          our own tree.
+kernel    compares the kernel of linux/ with the newest release of its stable
+          series on kernel.org. With --cves, a checkout of the kernel's CVE
+          records (vulns.git, its .dyad files), it also names the CVEs that a
+          later release of the series fixes, and those that no release of the
+          series fixes yet.
+mongoose  compares the Mongoose that pond carries with its newest release.
+buildroot compares the pinned Buildroot with the newest point release of its
+          long-term-support series.
+
+What is not given is fetched: kernel.org's releases.json, the release list of
+Mongoose on GitHub, Buildroot's download index. Each prints its report as
+Markdown on the standard output, for a person or a job's summary.
+
+Exit status: 0 with no finding, 1 with a finding, 2 when something cannot be
+read or fetched.
+"""
+
+import argparse
+import http.client
+import json
+import os
+import re
+import sys
+import urllib.request
+
+TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+ACCEPTED = os.path.join(TOP, "tools", "vulns", "accepted")
+MAKEFILE = os.path.join(TOP, "linux", "Makefile")
+HEADER = os.path.join(TOP, "pond", "third_party", "mongoose", "mongoose.h")
+PIN = os.path.join(TOP, "buildroot", "VERSION")
+
+RELEASES_URL = "https://www.kernel.org/releases.json"
+MONGOOSE_URL = "https://api.github.com/repos/cesanta/mongoose/releases/latest"
+BUILDROOT_URL = "https://buildroot.org/downloads/"
+AGENT = "open-dfp-34x-2c-vulns"
+
+# Our own programs: pkg-stats gives them the version "local", and no CPE.
+LOCAL = "local"
+
+
+class Failure(Exception):
+    """Something could not be read or fetched."""
+
+
+def fetch(url, tries=3, partial=False):
+    """The text at url. With partial, a body shorter than its Content-Length is
+    taken as it came: Buildroot's server announces more of its index than it
+    sends (measured 2026-11-17), and what is cut is the end of the page."""
+    req = urllib.request.Request(url, headers={"User-Agent": AGENT})
+    for n in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read().decode("utf-8", "replace")
+        except http.client.IncompleteRead as err:
+            if partial and err.partial:
+                return err.partial.decode("utf-8", "replace")
+            if n == tries - 1:
+                raise Failure(f"{url}: {err}") from err
+        except (OSError, http.client.HTTPException) as err:
+            if n == tries - 1:
+                raise Failure(f"{url}: {err}") from err
+    raise Failure(url)
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError as err:
+        raise Failure(f"{path}: {err.strerror}") from err
+
+
+def version(text):
+    """A tuple of ints from "6.18.63", "6.19-rc3" or "2025.02.19"; () for "0"."""
+    text = text.strip().split("-")[0]
+    if text in ("", "0"):
+        return ()
+    try:
+        return tuple(int(p) for p in text.split("."))
+    except ValueError as err:
+        raise Failure(f"not a version: {text!r}") from err
+
+
+def dotted(v):
+    return ".".join(str(p) for p in v)
+
+
+# --- packages ---------------------------------------------------------------
+
+def load_accepted(path):
+    """{(cve, package): reason} from lines "CVE PACKAGE REASON..."; # starts a comment."""
+    accepted = {}
+    for n, line in enumerate(read(path).splitlines(), 1):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not parts[0].startswith("CVE-"):
+            raise Failure(f"{path}:{n}: want CVE PACKAGE REASON")
+        accepted[(parts[0], parts[1])] = parts[2]
+    return accepted
+
+
+def runs_on_stick(pkg):
+    return any(infra and infra[0] == "target" for infra in pkg.get("infras") or [])
+
+
+def packages(args):
+    try:
+        stats = json.loads(read(args.json))
+    except ValueError as err:
+        raise Failure(f"{args.json}: {err}") from err
+    accepted = load_accepted(args.accepted)
+    findings, kept, host, unsure = [], [], [], []
+    seen = set()
+    for name, pkg in sorted(stats.get("packages", {}).items()):
+        if name == "linux" or pkg.get("current_version") == LOCAL:
+            continue
+        ver = pkg.get("current_version") or "?"
+        for cve in pkg.get("cves") or []:
+            key = (cve, name)
+            seen.add(key)
+            if not runs_on_stick(pkg):
+                host.append((name, ver, cve))
+            elif key in accepted:
+                kept.append((name, ver, cve, accepted[key]))
+            else:
+                findings.append((name, ver, cve))
+        if runs_on_stick(pkg):
+            for cve in pkg.get("unsure_cves") or []:
+                unsure.append((name, ver, cve))
+    stale = sorted(k for k in accepted if k not in seen)
+
+    out = ["## Packages of the image", ""]
+    if findings:
+        out += [f"**{len(findings)} CVE(s) in packages the stick runs:**", "",
+                "| package | version | CVE |", "|---|---|---|"]
+        out += [f"| {n} | {v} | {c} |" for n, v, c in findings]
+    elif kept:
+        out.append("No CVE in a package the stick runs, apart from those accepted below.")
+    else:
+        out.append("No CVE in a package the stick runs.")
+    if kept:
+        out += ["", "Accepted (tools/vulns/accepted):", ""]
+        out += [f"- {c} in {n} {v}: {r}" for n, v, c, r in kept]
+    if unsure:
+        out += ["", "Unsure (pkg-stats cannot tell the version from the CVE's data):", ""]
+        out += [f"- {c} in {n} {v}" for n, v, c in unsure]
+    if host:
+        out += ["", "In packages that only build the image (not judged):", ""]
+        out += [f"- {c} in {n} {v}" for n, v, c in host]
+    if stale:
+        out += ["", "Accepted but no longer reported (the entry can go):", ""]
+        out += [f"- {c} in {n}" for c, n in stale]
+    print("\n".join(out))
+    return 1 if findings else 0
+
+
+# --- kernel -----------------------------------------------------------------
+
+def kernel_version(makefile):
+    text = read(makefile)
+    parts = []
+    for key in ("VERSION", "PATCHLEVEL", "SUBLEVEL"):
+        m = re.search(rf"^{key} = (\d+)$", text, re.M)
+        if not m:
+            raise Failure(f"{makefile}: no {key}")
+        parts.append(int(m.group(1)))
+    return tuple(parts)
+
+
+def newest_of_series(releases, series):
+    best = None
+    for rel in releases.get("releases", []):
+        if rel.get("moniker") not in ("stable", "longterm"):
+            continue
+        v = version(rel.get("version", "0"))
+        if v[:2] == series and (best is None or v > best):
+            best = v
+    return best
+
+
+def dyad_pairs(text):
+    """The (vulnerable, fixed) version pairs of a .dyad file."""
+    pairs = []
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        f = line.strip().split(":")
+        if len(f) != 4:
+            continue
+        try:
+            pairs.append((version(f[0]), version(f[2])))
+        except Failure:
+            continue
+    return pairs
+
+
+def judge(pairs, ours):
+    """'fixed', ('later', VERSION), 'unfixed' or 'unaffected' for a kernel at ours."""
+    series = ours[:2]
+    own = [(v, f) for v, f in pairs if len(f) >= 3 and f[:2] == series]
+    for v, f in own:
+        if f <= ours:
+            return "fixed"
+    later = [f for v, f in own if f > ours and v <= ours]
+    if later:
+        return ("later", min(later))
+    # No release of the series fixes it: a mainline fix after the series,
+    # or none, leaves it open when it was there by ours.
+    mainline = [(v, f) for v, f in pairs if len(f) == 2]
+    if any(f <= series for v, f in mainline):
+        return "fixed"
+    if any(v <= ours for v, f in pairs) and not own:
+        if any(f == () or f > series for v, f in pairs):
+            return "unfixed"
+    return "unaffected"
+
+
+def kernel_cves(root, ours):
+    later, unfixed = [], []
+    for dirpath, _, files in os.walk(root):
+        for name in files:
+            if not name.endswith(".dyad"):
+                continue
+            verdict = judge(dyad_pairs(read(os.path.join(dirpath, name))), ours)
+            cve = name[:-len(".dyad")]
+            if isinstance(verdict, tuple):
+                later.append((verdict[1], cve))
+            elif verdict == "unfixed":
+                unfixed.append(cve)
+    return sorted(later), sorted(unfixed)
+
+
+def kernel(args):
+    ours = kernel_version(args.makefile)
+    text = read(args.releases) if args.releases else fetch(RELEASES_URL)
+    try:
+        releases = json.loads(text)
+    except ValueError as err:
+        raise Failure(f"releases.json: {err}") from err
+    newest = newest_of_series(releases, ours[:2])
+    out = ["## Kernel", "", f"linux/ holds {dotted(ours)}."]
+    finding = False
+    if newest is None:
+        out.append(f"kernel.org lists no stable release of {dotted(ours[:2])} any more: "
+                   "the series has ended, and a later one is needed.")
+        finding = True
+    elif newest > ours:
+        out.append(f"**{dotted(newest)} is out**, the newest of {dotted(ours[:2])}.")
+        finding = True
+    else:
+        out.append(f"It is the newest release of {dotted(ours[:2])}.")
+    if args.cves:
+        later, unfixed = kernel_cves(args.cves, ours)
+        if later:
+            finding = True
+            out += ["", f"**{len(later)} CVE(s) fixed in a later {dotted(ours[:2])} release** "
+                    "(not filtered by what the board's configuration builds):", ""]
+            out += [f"- {c} (fixed in {dotted(v)})" for v, c in later]
+        else:
+            out += ["", f"No CVE is fixed in a later {dotted(ours[:2])} release."]
+        if unfixed:
+            out += ["", f"{len(unfixed)} CVE(s) that no {dotted(ours[:2])} release fixes yet "
+                    "(not a finding: nothing to update to):", ""]
+            out.append(", ".join(unfixed))
+    print("\n".join(out))
+    return 1 if finding else 0
+
+
+# --- mongoose ---------------------------------------------------------------
+
+def mongoose(args):
+    m = re.search(r'^#define MG_VERSION "([0-9.]+)"', read(args.header), re.M)
+    if not m:
+        raise Failure(f"{args.header}: no MG_VERSION")
+    ours = version(m.group(1))
+    if args.latest:
+        latest = args.latest
+    else:
+        try:
+            latest = json.loads(fetch(MONGOOSE_URL)).get("tag_name", "")
+        except ValueError as err:
+            raise Failure(f"{MONGOOSE_URL}: {err}") from err
+    newest = version(latest.lstrip("v"))
+    out = ["## Mongoose", "", f"pond carries Mongoose {dotted(ours)}."]
+    if newest > ours:
+        out.append(f"**{dotted(newest)} is out**: read its changes for security fixes "
+                   "(https://github.com/cesanta/mongoose/releases).")
+        print("\n".join(out))
+        return 1
+    out.append("It is the newest release.")
+    print("\n".join(out))
+    return 0
+
+
+# --- buildroot --------------------------------------------------------------
+
+def pinned(pin):
+    m = re.search(r"^VERSION=(\S+)$", read(pin), re.M)
+    if not m:
+        raise Failure(f"{pin}: no VERSION")
+    return m.group(1)
+
+
+def buildroot(args):
+    ours = pinned(args.pin)
+    series = ".".join(ours.split(".")[:2])
+    index = read(args.index) if args.index else fetch(BUILDROOT_URL, partial=True)
+    found = {version(v): v for v in re.findall(
+        rf"buildroot-({re.escape(series)}(?:\.\d+)?)\.tar\.xz", index)}
+    if not found:
+        raise Failure(f"no release of {series} in Buildroot's download index")
+    newest = max(found)
+    out = ["## Buildroot", "", f"The pin is Buildroot {ours}."]
+    if newest > version(ours):
+        out.append(f"**{found[newest]} is out**, the newest of {series}: its point releases "
+                   "carry the series' security fixes.")
+        print("\n".join(out))
+        return 1
+    out.append(f"It is the newest release of {series}.")
+    print("\n".join(out))
+    return 0
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog="vulns", description=__doc__.split("\n")[0])
+    sub = parser.add_subparsers(dest="check", required=True)
+    p = sub.add_parser("packages")
+    p.add_argument("json")
+    p.add_argument("--accepted", default=ACCEPTED)
+    p = sub.add_parser("kernel")
+    p.add_argument("--makefile", default=MAKEFILE)
+    p.add_argument("--releases")
+    p.add_argument("--cves")
+    p = sub.add_parser("mongoose")
+    p.add_argument("--header", default=HEADER)
+    p.add_argument("--latest")
+    p = sub.add_parser("buildroot")
+    p.add_argument("--pin", default=PIN)
+    p.add_argument("--index")
+    args = parser.parse_args(argv)
+    try:
+        return {"packages": packages, "kernel": kernel, "mongoose": mongoose,
+                "buildroot": buildroot}[args.check](args)
+    except Failure as err:
+        print(f"vulns: {err}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

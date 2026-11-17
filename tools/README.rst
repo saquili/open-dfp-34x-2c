@@ -27,6 +27,9 @@ subdirectory has a README of its own, and ``make check`` runs their tests:
   the programs of the stick name there, and no others.
 * ``image-budget/`` -- the size check of the two flash images against their
   partitions.
+* ``vulns/`` -- the known vulnerabilities of what the image is made of: the
+  CVEs of its packages, newer releases of the kernel's series, of Mongoose and
+  of Buildroot, looked up every day by ``.github/workflows/vulns.yml``.
 * ``lib-trim/`` -- the cut of the image's shared libraries to what its programs
   use, with the check that every program finds what it needs.
 * ``docs/`` -- the rendering of the repository's pages to HTML, which fails on

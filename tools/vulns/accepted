@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The CVEs that pkg-stats reports in a package the stick runs and that do not
+# apply to the image, each with the reason: "vulns packages" does not count
+# them as findings. One per line: CVE PACKAGE REASON. A CVE that the package's
+# Buildroot recipe already ignores (its IGNORE_CVES, for a patch we carry) is
+# not reported, and needs no line here. An entry that is no longer reported is
+# named by the check, and can go.
+
+CVE-2023-4039 gcc-final the stack protector of AArch64 alone; the stick is MIPS (Lexra)
