@@ -72,8 +72,8 @@ int cert_load_key(const char *path)
 	for (i = 0; i < CERT_KEY_LEN; i++)
 		key[i] = (uint8_t)(hexval(line[2 * i]) << 4 | hexval(line[2 * i + 1]));
 	memset(line, 0, sizeof(line));
-	/* micro-ecc refuses a scalar that is 0 or not below the curve's order. */
-	if (!mg_uecc_compute_public_key(key, g_pub, mg_uecc_secp256r1())) {
+	/* Mongoose refuses a scalar that is 0 or not below the curve's order. */
+	if (!mg_p256_compute_public_key(key, g_pub)) {
 		memset(key, 0, sizeof(key));
 		return -EINVAL;
 	}
@@ -203,27 +203,6 @@ static void extension(struct der *d, const uint8_t *oid, size_t oidn, bool criti
 	wrap(d, 0x30, &e);
 }
 
-/* The hash of micro-ecc's deterministic signing (RFC 6979) is SHA-256. */
-struct sha_ctx {
-	MG_UECC_HashContext uecc;
-	mg_sha256_ctx sha;
-};
-
-static void sha_init(const MG_UECC_HashContext *base)
-{
-	mg_sha256_init(&((struct sha_ctx *)(uintptr_t)base)->sha);
-}
-
-static void sha_update(const MG_UECC_HashContext *base, const uint8_t *m, unsigned int n)
-{
-	mg_sha256_update(&((struct sha_ctx *)(uintptr_t)base)->sha, m, n);
-}
-
-static void sha_finish(const MG_UECC_HashContext *base, uint8_t *out)
-{
-	mg_sha256_final(out, &((struct sha_ctx *)(uintptr_t)base)->sha);
-}
-
 static void sha256(const void *p, size_t n, uint8_t out[32])
 {
 	mg_sha256_ctx c;
@@ -255,8 +234,7 @@ size_t cert_make(const uint8_t ip[4], time_t now, uint8_t *der, size_t cap)
 	static const uint8_t v3[] = { 0xa0, 0x03, 0x02, 0x01, 0x02 };
 	struct der tbs = { .n = 0 }, t = { .n = 0 }, u = { .n = 0 };
 	struct der name = { .n = 0 }, exts = { .n = 0 }, cert = { .n = 0 };
-	struct sha_ctx hc = { .uecc = { sha_init, sha_update, sha_finish, 64, 32, NULL } };
-	uint8_t tmp[2 * 32 + 64], hash[32], sig[64], point[66], serial[32];
+	uint8_t hash[32], sig[64], point[66], serial[32];
 	char common[24];
 	time_t from, until;
 	mg_sha256_ctx sc;
@@ -264,7 +242,6 @@ size_t cert_make(const uint8_t ip[4], time_t now, uint8_t *der, size_t cap)
 
 	if (!g_have)
 		return 0;
-	hc.uecc.tmp = tmp;
 	cert_validity(now, &from, &until);
 	period = (uint32_t)((from - CERT_EPOCH) / (CERT_PERIOD_DAYS * 86400LL));
 
@@ -335,8 +312,8 @@ size_t cert_make(const uint8_t ip[4], time_t now, uint8_t *der, size_t cap)
 	if (u.full)
 		return 0;
 	sha256(u.b, u.n, hash);
-	if (!mg_uecc_sign_deterministic(g_key, hash, sizeof(hash), &hc.uecc, sig,
-					mg_uecc_secp256r1()))
+	/* ECDSA with the deterministic k of RFC 6979, of SHA-256. */
+	if (!mg_p256_sign(g_key, hash, sizeof(hash), sig))
 		return 0;
 
 	/* Certificate: the TBS, the algorithm and the signature (r, s). */
@@ -685,7 +662,7 @@ int cert_own_der(const uint8_t *chain, size_t len, const uint8_t key[CERT_KEY_LE
 	}
 	if (!leaf_read(own, own->leaf, pub, err, errcap))
 		return -EINVAL;
-	if (!mg_uecc_compute_public_key(key, mine, mg_uecc_secp256r1()) ||
+	if (!mg_p256_compute_public_key(key, mine) ||
 	    memcmp(pub, mine, sizeof(mine))) {
 		snprintf(err, errcap, "the key is not the certificate's");
 		return -EINVAL;

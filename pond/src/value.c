@@ -89,7 +89,8 @@ static void reply_end(struct reply *r)
 		 (unsigned long)(r->b.len - r->body));
 	memcpy(r->b.buf + r->length, n, LENGTH_DIGITS);
 	r->c->send.len = r->b.len;
-	r->c->is_resp = 0;
+	/* Mongoose's mark of a response in progress: the next request may come. */
+	r->c->pfn_data = NULL;
 }
 
 /* A reply of an error: {"error": @what, "detail": @why}. */
