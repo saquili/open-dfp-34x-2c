@@ -4,5 +4,5 @@
 # The licence texts of the repository (LICENSES/), computed locally. The
 # source is a directory of this repository, so it has no hash of its own.
 sha256  8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa  LICENSES/preferred/GPL-2.0-only.txt
-sha256  6313108c23efffa36948f8b2cff1560a5935373b527b0e1a837cc77e6ed1bacd  LICENSES/preferred/BSD-2-Clause.txt
 sha256  323c587d0ccf10e376f8bf9a7f31fb4ca6078105194b42e0b1e0ee2bc9bde71f  LICENSES/preferred/MIT.txt
+sha256  c8a97e7369419869e2d60eab21a9f13bf293bfc33aed0de3c459644a8edd0c80  LICENSES/deprecated/CC0-1.0.txt
