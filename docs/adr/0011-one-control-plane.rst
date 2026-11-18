@@ -95,8 +95,11 @@ The generator
     Run twice on the same input, it changes nothing. It runs after a change
     of the settings, on netifd's events (netifd runs it for each event of an
     interface, ``netifd -h``), and when omcid or dhcp6d report a change. The
-    generator is a shell script: what it writes is text, which the tests
-    compare on any host.
+    generator is a program in C, in parts by what they make
+    (``onu-utils/src/onu-apply.c`` names them), with the table of the
+    settings that ``onu-config`` has too; what it writes is text, which the
+    tests compare on any host. It was a shell script of 2,600 lines until
+    2026-11-18, whose tests it passes as they were.
 
 pppoed under netifd
     A protocol handler of the netifd fork, ``pppoed``, starts pppoed for an

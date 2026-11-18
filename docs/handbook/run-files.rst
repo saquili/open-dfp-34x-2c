@@ -68,7 +68,7 @@ Shared by two components
      - ``onu-apply``
      - What session N has and what it brought. The directory belongs to the
        group ``onu``, so that ``pppoed`` can write in it
-       (``onu-utils/scripts/onu-apply``, its header).
+       (``onu-utils/src/onu-apply.c``, its header).
    * - ``/run/ipoe/K/``
      - ``onu-dhcpc``, udhcpc's script (``ipv4``, ``router``, ``dns``,
        ``until``, of a lease); ``onu-apply`` (``dev``, ``gem``, ``kind``,
