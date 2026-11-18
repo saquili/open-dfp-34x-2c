@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-apply, against stand-ins for the
-# programs they run, in a scratch root: each stand-in writes its name and its
-# arguments to a log.
+# Tests of onu-apply, the program of build/ (BUILD), against stand-ins for the
+# programs it runs, in a scratch root: each stand-in writes its name and its
+# arguments to a log, and so does onu-apply its messages.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 BUILD=${BUILD:-$HERE/build}
-MODE_SCRIPT=$HERE/scripts/onu-apply
+MODE_SCRIPT=
 REAL_SLEEP=$(command -v sleep)
 checks=0
 failures=0
@@ -24,6 +24,11 @@ check() {
 
 logged() {
 	grep -q -- "$1" "$LOG"
+}
+
+# Whether the file $1 is the group of the accounts' (GID, setup()).
+group_of() {
+	[ "$(stat -c %g "$1" 2>/dev/null || stat -f %g "$1")" = "$GID" ]
 }
 
 # The part $1 of netifd's configuration, a section a line: "TYPE NAME:" or
@@ -67,12 +72,22 @@ drop() {
 setup() {
 	T=$(mktemp -d)
 	LOG=$T/log
+	# onu-apply's messages, which go to the system log and its standard
+	# error, go to the log as well.
+	MODE_SCRIPT=$T/onu-apply-logged
+	printf '#!/bin/sh\nexec "%s/onu-apply" "$@" 2>>"$LOG"\n' "$BUILD" >"$MODE_SCRIPT"
+	chmod +x "$MODE_SCRIPT"
 	export ONU_ROOT=$T/root LOG APPLY=$MODE_SCRIPT STANDIN=$T/netifd
 	mkdir -p "$ONU_ROOT/run" "$ONU_ROOT/etc" "$ONU_ROOT/proc/sys/net/ipv4" \
 		"$ONU_ROOT/sys/class/net/sfp" "$ONU_ROOT/sys/class/net/pon" \
 		"$ONU_ROOT/sys/class/net/gem4095" "$ONU_ROOT/sys/class/net/gem1024" \
 		"$ONU_ROOT/sys/class/net/gem256" "$T/bin" "$STANDIN"
 	echo 00:00:5e:00:53:01 >"$ONU_ROOT/sys/class/net/sfp/address"
+	# The accounts' groups, which onu-apply gives the files they read: root
+	# can give any; another account one of its own groups.
+	GID=4242
+	[ "$(id -u)" = 0 ] || GID=$( (id -G | tr ' ' '\n' | grep -vx "$(id -g)"; id -g) | head -n 1)
+	printf 'onu:x:%s:\npppoed:x:%s:\nomcid:x:%s:\n' "$GID" "$GID" "$GID" >"$ONU_ROOT/etc/group"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
 	mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/all"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding"
@@ -86,7 +101,7 @@ setup() {
 		echo 80 >"$ONU_ROOT/proc/sys/net/ipv4/neigh/$lan/proxy_delay"
 	done
 	: >"$LOG"
-	for prog in killall udhcpd logger kill onu-config dhcp6d chown; do
+	for prog in killall udhcpd kill onu-config dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
 	# A running omcid, signalled, programs the data path again and says so.
@@ -745,10 +760,10 @@ check '[ "$(cat "$T/guard.conf")" = "$(printf "mgmt mgmt*\nsession ppp*\nlink la
 # of a change through onu-call, which an account that is not root's can run.
 check 'logged "^onu-drop -c net_bind_service,net_admin,net_raw dhcp6d dhcp6d -w ppp1 "'
 # The session's directory is the group onu's, which the programs of the session write to.
-check 'logged "^chown :onu $ONU_ROOT/run/session/2$"'
+check 'group_of "$ONU_ROOT/run/session/2"'
 check 'ls -ld "$ONU_ROOT/run/session/2" | grep -q "^drwxrws---"'
 # pppoed, an account of its own, reads the session's account: the group pppoed's.
-check 'logged "^chown :pppoed $ONU_ROOT/run/onu-pppoe2$"'
+check 'group_of "$ONU_ROOT/run/onu-pppoe2"'
 check 'ls -l "$ONU_ROOT/run/onu-pppoe2" | grep -q "^-rw-r-----"'
 check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
@@ -1221,7 +1236,7 @@ check '[ "$(grep -n "^procd stop omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^
 # omcid, an account of its own, reads the identity without the PLOAM password,
 # in its own directory, as the group's.
 check 'grep -qx serial=XXXXXXXXXXXX "$ONU_ROOT/run/omcid/identity" && ! grep -q ploam "$ONU_ROOT/run/omcid/identity"'
-check 'logged "^chown :omcid $ONU_ROOT/run/omcid/identity.new$"'
+check 'group_of "$ONU_ROOT/run/omcid/identity"'
 check 'ls -l "$ONU_ROOT/run/omcid/identity" | grep -q "^-rw-r-----"'
 check 'grep -q ploam_password "$ONU_ROOT/run/onu-identity"'
 teardown
@@ -1472,7 +1487,7 @@ check '[ "$(cat "$ONU_ROOT/run/onu-pppoe2")" = "user/ipv6 secret" ]'
 # The first session did not change and did not start again; its account came
 # back from the copy that only root reads, and is pppoed's again.
 check '! logged "^onu-net del ses1$"'
-check 'logged "^chown :pppoed $ONU_ROOT/run/onu-pppoe1$"'
+check 'group_of "$ONU_ROOT/run/onu-pppoe1"'
 check 'ls -l "$ONU_ROOT/run/onu-pppoe1" | grep -q "^-rw-r-----"'
 check 'ls -l "$ONU_ROOT/run/onu-pppoe2" | grep -q "^-rw-r-----"'
 "$MODE_SCRIPT" stop 2>/dev/null

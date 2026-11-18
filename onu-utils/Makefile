@@ -21,7 +21,8 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 .PHONY: all check clean
 
 all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc \
-	$(BUILD)/onu-act $(BUILD)/onu-nl $(BUILD)/onu-drop $(BUILD)/onu-call $(BUILD)/onu-fw
+	$(BUILD)/onu-act $(BUILD)/onu-nl $(BUILD)/onu-drop $(BUILD)/onu-call $(BUILD)/onu-fw \
+	$(BUILD)/onu-apply
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -92,6 +93,14 @@ $(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
 $(BUILD)/onu-call: $(BUILD)/src/onu-call.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lubox
 
+# onu-apply puts the data path in the shape of the settings, in parts (its
+# header says which): the table of the settings it shares with onu-config, and
+# a digest of the sessions' accounts.
+APPLY = $(addprefix $(BUILD)/src/,onu-apply.o applyutil.o applyconf.o applyomcid.o applyconn.o \
+	applyppp.o applyipoe.o applyhost.o applyfw.o settings.o sha256.o)
+$(BUILD)/onu-apply: $(APPLY)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 # onu-drop starts a program as an account of its own, with the powers it needs.
 $(BUILD)/onu-drop: $(BUILD)/src/onu-drop.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -146,7 +155,8 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
 	$(BUILD)/onu-update \
 	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password \
-	$(BUILD)/test_fwmsg $(BUILD)/test_fwacl $(BUILD)/onu-fw $(BUILD)/test_sshkey
+	$(BUILD)/test_fwmsg $(BUILD)/test_fwacl $(BUILD)/onu-fw $(BUILD)/test_sshkey \
+	$(BUILD)/onu-apply
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
@@ -174,7 +184,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	sh tests/test_onu_mgmt.sh
 	sh tests/test_onu_net.sh
 	sh tests/test_onu_run.sh
-	sh tests/test_onu_apply.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_apply.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_keys.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_nl.sh
