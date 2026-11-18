@@ -787,7 +787,7 @@ Licensing
 * The third-party code committed here keeps its licence and says so: Linux,
   in ``linux/``; OpenWrt's netifd, in ``netifd/``, under ``GPL-2.0-only``;
   and Mongoose, in ``pond/third_party``, taken under ``GPL-2.0-only``, which
-  holds micro-ecc under ``BSD-2-Clause`` and parts under ``MIT``. ``REUSE.toml`` names them.
+  holds parts under ``MIT`` and ``CC0-1.0``. ``REUSE.toml`` names them.
 * The packages of the image are not committed: they are fetched by hash at
   build time and keep their own licences. ``make legal-info`` collects the
   licence of every package of the image, their texts and the sources a
