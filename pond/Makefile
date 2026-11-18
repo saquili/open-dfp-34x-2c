@@ -97,7 +97,16 @@ $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -o $@ $(ONU_CONFIG_SRC) -lz -lcrypt
 
-check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_cert $(BUILD)/onu-config
+# onu-apply, in its parts, which says what came of the settings (onu-apply
+# state).
+ONU_APPLY_SRC := $(addprefix $(ONU_UTILS)/src/,onu-apply.c applyutil.c applyconf.c applyomcid.c \
+	applyconn.c applyppp.c applyipoe.c applyhost.c applyfw.c settings.c sha256.c)
+$(BUILD)/onu-apply: $(ONU_APPLY_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -o $@ $(ONU_APPLY_SRC)
+
+check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_cert $(BUILD)/onu-config \
+	$(BUILD)/onu-apply
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
 	# What came of the settings is onu-apply's to say (onu-apply state), who
@@ -106,7 +115,7 @@ check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_ce
 	ln -s $(abspath $(ONU_UTILS))/scripts/onu-change $(BUILD)/fixtures/usr/lib/onu/onu-change
 	POND_ROOT=$(abspath $(BUILD))/fixtures ONU_ROOT=$(abspath $(BUILD))/fixtures \
 		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \
-		POND_REAL_ONU_APPLY=$(abspath $(ONU_UTILS))/scripts/onu-apply \
+		POND_REAL_ONU_APPLY=$(abspath $(BUILD))/onu-apply \
 		$(BUILD)/test_prov
 	# ubusd's list for pond and onu-act's table agree.
 	python3 -I tests/test_acl.py $(ONU_UTILS)
