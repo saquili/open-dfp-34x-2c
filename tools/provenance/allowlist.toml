@@ -202,6 +202,7 @@ gate = "unit-ids"
 rules = ["host-name"]
 paths = [
   "onu-utils/scripts/onu-apply",
+  "onu-utils/src/onu-apply.c",
   "onu-utils/tests/test_onu_apply.sh",
   "pond/src/prov_settings.c",
   "docs/testing/*",
