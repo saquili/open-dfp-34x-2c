@@ -125,16 +125,14 @@ jobs:
       - name: Install the tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates nodejs npm
+          apt-get install -y --no-install-recommends ca-certificates nodejs npm python3
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: The advisories of the panel's packages
         # From the lock file alone: nothing is installed or run. The panel's
-        # build tools are judged with what goes into its bundle.
-        working-directory: pond/web
+        # build tools are judged with what goes into its bundle, but for the
+        # advisories that tools/vulns/accepted-npm names. npm audit exits
+        # non-zero on any advisory, so its report alone is judged.
         run: |
           set -o pipefail
-          { echo "## The panel's npm packages"; echo; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          rc=0
-          npm audit --package-lock-only --audit-level=low 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || rc=$?
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          exit $rc
+          mkdir -p build && (cd pond/web && npm audit --json --package-lock-only > ../../build/audit.json) || true
+          tools/vulns/vulns npm build/audit.json | tee -a "$GITHUB_STEP_SUMMARY"
