@@ -28,7 +28,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 TCPRIO = os.path.join(REPO, "omcid", "target", "tcprio.h")
 ONU_MGMT = os.path.join(REPO, "onu-utils", "scripts", "onu-mgmt")
 ONU_PVID = os.path.join(REPO, "onu-utils", "scripts", "onu-pvid")
-ONU_APPLY = os.path.join(REPO, "onu-utils", "scripts", "onu-apply")
+ONU_APPLY_OMCID = os.path.join(REPO, "onu-utils", "src", "applyomcid.c")
+ONU_APPLY_CONN = os.path.join(REPO, "onu-utils", "src", "applyconn.c")
 ONU_FWACL = os.path.join(REPO, "onu-utils", "src", "fwacl.h")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
@@ -131,8 +132,8 @@ class BootScript(unittest.TestCase):
         self.assertEqual(sorted(prefs.values()),
                          list(range(registry["TC_PRIO_PVID"],
                                     registry["TC_PRIO_PVID"] + registry["TC_PRIO_PVID_N"])))
-        apply = read(ONU_APPLY)
-        self.assertEqual(int(re.search(r"^VLAN_PREF=(\d+)$", apply, re.M).group(1)),
+        omcid = read(ONU_APPLY_OMCID)
+        self.assertEqual(int(re.search(r"^#define VLAN_PREF (\d+)$", omcid, re.M).group(1)),
                          registry["TC_PRIO_VLAN"])
         # onu-fw's firewall has its range in its own header.
         acl = read(ONU_FWACL)
@@ -141,7 +142,8 @@ class BootScript(unittest.TestCase):
                          (registry["TC_PRIO_FIREWALL"], registry["TC_PRIO_FIREWALL_N"]))
         # The ranges are in the order the stick's rules look at a frame, and the
         # session interfaces' own drops stay below the management VLAN's range.
-        self.assertLess(int(re.search(r"^GUARD_PREFS=(\d+)$", apply, re.M).group(1)),
+        conn = read(ONU_APPLY_CONN)
+        self.assertLess(int(re.search(r"^#define GUARD_PREFS (\d+)$", conn, re.M).group(1)),
                         registry["TC_PRIO_DISCARD"])
         # The boot script writes none: onu-mgmt is the only writer of the first two.
         self.assertNotIn("onu-nl filter", read(RCS))

@@ -19,6 +19,9 @@ against the image.
 A command word that holds an expansion (``"$DROP"``) cannot be read; DYNAMIC
 names, for each one, the programs it stands for. A program that a script starts
 for another (``onu-svc start NAME -- PROGRAM``) is a use as well.
+
+The stick's programs in C run applets too, which no script shows: C_USES names
+them, for each program, with the sources that name each one.
 """
 
 import os
@@ -40,8 +43,8 @@ PACKAGES = os.path.join(BR2, "package")
 Use = namedtuple("Use", "script line spelled name options")
 
 # Programs that start the program that follows their own options: where it is.
-# onu-svc and svc_start (a function of onu-apply that calls it) take it after
-# "--"; onu-drop takes a user and then the program, after its own -c CAPS.
+# onu-svc and a script's function svc_start that calls it take it after "--";
+# onu-drop takes a user and then the program, after its own -c CAPS.
 LAUNCHERS = {"onu-svc": "--", "svc_start": "--", "onu-drop": "user"}
 
 # The command words that hold an expansion, by script, and the programs that
@@ -75,6 +78,19 @@ APPLET_SYMBOL = {"[": "TEST"}
 # symbol is what the defconfig has to turn on for the package.
 PACKAGE_PROGRAMS = {"BR2_PACKAGE_DROPBEAR": ("dropbear", "dropbearkey"),
                     "BR2_PACKAGE_NETIFD": ("netifd",)}
+
+
+# The applets that a program in C runs, or has procd run, by the program: its
+# sources (globs of the tree) and the applets. onu-apply asks pidof whether
+# omcid runs and signals it with killall, and procd runs udhcpd for the links
+# and the networks and udhcpc for an IPoE connection by DHCP.
+C_USES = {"onu-apply": (("onu-utils/src/onu-apply.c", "onu-utils/src/apply*.c"),
+                        ("pidof", "killall", "udhcpd", "udhcpc"))}
+
+
+def c_uses():
+    """The applets that the programs in C run, as one set."""
+    return {name for _, names in C_USES.values() for name in names}
 
 
 def read(path):

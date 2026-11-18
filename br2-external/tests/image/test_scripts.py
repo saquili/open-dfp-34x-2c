@@ -11,6 +11,7 @@ busybox.config turns on. imagescripts.py reads the scripts; check-applets asks
 the built tree the same question, and the usage of each applet for the options.
 """
 
+import glob
 import os
 import re
 import stat
@@ -131,10 +132,21 @@ class TheScripts(unittest.TestCase):
         # tells which to keep.
         symbols = scripts.enabled()
         called = {use.name for label, path in scripts.sources() for use in scripts.uses(label, read(path))[0]}
+        called |= scripts.c_uses()
         for name in ("hostname", "sed", "uname", "mount", "mkdir", "ln", "grep", "chown", "chmod",
                      "syslogd", "klogd", "udhcpd", "getty", "login", "cryptpw"):
             self.assertIn(name, called)
             self.assertIn(scripts.applet_symbol(name), symbols, name)
+        for name in scripts.c_uses():
+            self.assertIn(scripts.applet_symbol(name), symbols, name)
+
+    def test_each_applet_a_program_in_c_runs_is_named_in_its_sources(self):
+        for program, (globs, names) in scripts.C_USES.items():
+            text = "".join(read(path) for pattern in globs
+                           for path in sorted(glob.glob(os.path.join(scripts.REPO, pattern))))
+            self.assertTrue(text, program)
+            for name in names:
+                self.assertIn(f'"{name}"', text, (program, name))
 
 
 if __name__ == "__main__":
