@@ -557,6 +557,17 @@ by its whole path where procd starts it.
       onu-apply sync       # follow what changed outside the settings
       onu-apply guard      # at boot and after a change of the management pair
 
+   onu-apply is a program in C, in parts by what each makes, which the header
+   of ``src/onu-apply.c`` names: ``applyconf``, the files and the settings;
+   ``applyomcid``; ``applyconn``, what the sessions and the IPoE connections
+   share; ``applyppp``; ``applyipoe``; ``applyhost``, the links and the local
+   networks of the host side; ``applyfw``, onu-fw's files; and ``applyutil``.
+   It reads the table of the settings that ``onu-config`` has
+   (``src/settings.c``), and runs the stick's programs for the rest:
+   ``onu-net``, ``onu-svc``, ``onu-nl``, ``onu-fw``, ``pon`` and
+   ``onu-config``, and of BusyBox ``pidof`` and ``killall`` for omcid. Its
+   messages go to the system log, as ``onu-apply``, and to standard error.
+
    A change on trial (ADR 0011) is applied but not saved, and the settings
    and accounts applied before it are kept aside, in ``/run/onu-kept``,
    readable by root alone; unless ``confirm`` keeps it within 90 s
