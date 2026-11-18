@@ -88,7 +88,8 @@ Consequences
   thus new certificates, which the browser warns about again.
 * A handshake takes about 0.1 s of the stick's processor (92 ms measured
   from the host), and the panel's 158 KB script arrives in 0.15 s with it.
-* Mongoose's TLS is young code: it speaks only TLS 1.3 with X25519,
-  ChaCha20-Poly1305 and a P-256 key, which every current browser supports,
-  and an update of Mongoose has to carry the three fixes over or show that
-  they were made upstream.
+* Mongoose's TLS is young code: it speaks only TLS 1.3 with a P-256 key
+  exchange (X25519 until Mongoose 7.24), ChaCha20-Poly1305 and a P-256 key,
+  which every current browser supports, and an update of Mongoose has to
+  carry pond's changes of it over or show that they were made upstream
+  (``pond/README.rst``, "HTTPS").
