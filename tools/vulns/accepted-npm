@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The advisories that "npm audit" reports for the panel's packages and that
+# do not apply to the image, each with the reason: "vulns npm" does not count
+# them as findings. One per line: ADVISORY PACKAGE RANGE: REASON, where RANGE
+# is the range of versions the advisory names, as the report gives it. An
+# advisory whose range is no longer that one, as when a fixed version comes
+# out, is a finding again; an entry that is no longer reported is named by the
+# check, and can go.
+
+GHSA-fc5q-39xc-vjpf picomatch <=4.0.7: no fixed version yet (2026-11-18); picomatch is a package of the panel's build tools alone (vite, vitest, orval, @preact/preset-vite: "dev" in package-lock.json) and is not in the bundle the stick serves, and the globs it matches are the build's own

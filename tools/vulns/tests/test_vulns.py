@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 """Tests of vulns, on files made for each test; no network.
 
-The repository's own accepted list is read too: a malformed line in it would
+The repository's own accepted lists are read too: a malformed line in one would
 stop the daily run.
 """
 
@@ -241,6 +241,81 @@ class Buildroot(unittest.TestCase):
         rc, _, err = self.check("2024.11.1")
         self.assertEqual(rc, 2)
         self.assertIn("no release of 2024.11", err)
+
+
+def advisory(ident, name, rng, title="a fault", sev="high"):
+    return {"source": 1, "name": name, "dependency": name, "title": title,
+            "url": f"https://github.com/advisories/{ident}", "severity": sev, "range": rng}
+
+
+# The shape of npm audit's report: an advisory in one package, which two others
+# reach, one through the other.
+AUDIT = json.dumps({"auditReportVersion": 2, "vulnerabilities": {
+    "glob": {"name": "glob", "severity": "high", "isDirect": False,
+             "via": [advisory("GHSA-aaaa-bbbb-cccc", "glob", "<=4.0.7")], "range": "*"},
+    "finder": {"name": "finder", "severity": "high", "isDirect": False,
+               "via": ["glob"], "range": ">=5"},
+    "bundler": {"name": "bundler", "severity": "high", "isDirect": True,
+                "via": ["finder", "glob"], "range": ">=6"},
+}, "metadata": {}})
+
+
+class Npm(unittest.TestCase):
+    def setUp(self):
+        self.f = Files(self)
+        self.report = self.f.write("audit.json", AUDIT)
+
+    def check(self, accepted, report=None):
+        path = self.f.write("accepted-npm", accepted)
+        return run(["npm", report or self.report, "--accepted", path])
+
+    def test_advisory_is_a_finding(self):
+        rc, out, _ = self.check("# none\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("GHSA-aaaa-bbbb-cccc in glob <=4.0.7 (high): a fault, in bundler, finder", out)
+
+    def test_accepted_with_its_range(self):
+        rc, out, _ = self.check("GHSA-aaaa-bbbb-cccc glob <=4.0.7: build tools alone\n")
+        self.assertEqual(rc, 0)
+        self.assertIn("apart from those accepted below", out)
+        self.assertIn("- GHSA-aaaa-bbbb-cccc in glob <=4.0.7: build tools alone", out)
+
+    def test_changed_range_is_a_finding_again(self):
+        rc, out, _ = self.check("GHSA-aaaa-bbbb-cccc glob <=4.0.6: build tools alone\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("accepted for <=4.0.6, the advisory now says <=4.0.7", out)
+
+    def test_range_with_spaces(self):
+        report = self.f.write("two.json", json.dumps({"auditReportVersion": 2, "vulnerabilities": {
+            "x": {"name": "x", "via": [advisory("GHSA-dddd-eeee-ffff", "x", ">=2.0.0 <2.1.3")]}}}))
+        rc, _, _ = self.check("GHSA-dddd-eeee-ffff x >=2.0.0 <2.1.3: reason\n", report)
+        self.assertEqual(rc, 0)
+
+    def test_none(self):
+        report = self.f.write("none.json", json.dumps({"auditReportVersion": 2, "vulnerabilities": {}}))
+        rc, out, _ = self.check("", report)
+        self.assertEqual(rc, 0)
+        self.assertIn("No advisory.", out)
+
+    def test_stale_entry_named(self):
+        rc, out, _ = self.check("GHSA-aaaa-bbbb-cccc glob <=4.0.7: tools\n"
+                                "GHSA-zzzz-yyyy-xxxx gone *: old\n")
+        self.assertEqual(rc, 0)
+        self.assertIn("no longer reported (the entry can go):\n\n- GHSA-zzzz-yyyy-xxxx in gone", out)
+
+    def test_malformed_line(self):
+        rc, _, err = self.check("GHSA-aaaa-bbbb-cccc glob\n")
+        self.assertEqual(rc, 2)
+        self.assertIn("want ADVISORY PACKAGE RANGE: REASON", err)
+
+    def test_not_a_report(self):
+        report = self.f.write("old.json", json.dumps({"advisories": {}}))
+        rc, _, err = self.check("", report)
+        self.assertEqual(rc, 2)
+        self.assertIn("auditReportVersion 2", err)
+
+    def test_repository_list_reads(self):
+        vulns.load_accepted_npm(vulns.ACCEPTED_NPM)
 
 
 if __name__ == "__main__":

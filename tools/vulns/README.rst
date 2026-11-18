@@ -11,7 +11,8 @@ The known vulnerabilities of what the image is made of, looked up every day by
 A vulnerability of the stick's software is published somewhere else each time:
 the NVD for the packages of the build system, the kernel's own CVE records for
 Linux, the release notes of Mongoose for the panel's server, the point
-releases of Buildroot for its long-term-support series. Each is looked at in
+releases of Buildroot for its long-term-support series, the advisories of the
+npm registry for the panel's packages. Each is looked at in
 its own way, and each check says what it found as Markdown, for the summary of
 the workflow's run and for a person at a terminal.
 
@@ -24,6 +25,7 @@ Usage
     tools/vulns/vulns kernel [--makefile FILE] [--releases FILE] [--cves DIR]
     tools/vulns/vulns mongoose [--header FILE] [--latest VERSION]
     tools/vulns/vulns buildroot [--pin FILE] [--index FILE]
+    tools/vulns/vulns npm AUDIT_JSON [--accepted FILE]
 
 The exit status is 0 with no finding, 1 with a finding and 2 when a file
 cannot be read or a page fetched. What is not given on the command line is
@@ -71,8 +73,17 @@ library only.
     release of its series in Buildroot's download index; the point releases
     of a long-term-support series carry its security fixes.
 
-The accepted list
-=================
+``npm``
+    Judges the report of ``npm audit --json --package-lock-only``, made in
+    ``pond/web`` from the lock file alone, so that nothing is installed or
+    run. Each advisory is a finding, with the packages that bring it in,
+    unless ``accepted-npm`` names it with the range of versions it names and
+    the reason it does not apply. When the advisory's range changes, as when a
+    fixed version comes out, it is a finding again, so that an entry holds
+    only while there is nothing to update to.
+
+The accepted lists
+==================
 
 ``accepted`` holds the CVEs of packages the stick runs that do not apply to the
 image, one per line: the CVE, the package as pkg-stats names it, and the
@@ -80,6 +91,13 @@ reason. An entry is only for a CVE that cannot apply, such as one in a part of
 the package that the image does not build; a CVE that a patch fixes belongs in
 the package's ``IGNORE_CVES`` beside the patch. An entry that pkg-stats no
 longer reports is named by the check, and can go.
+
+``accepted-npm`` holds the advisories of the panel's packages that do not
+apply to the image, one per line: the advisory, the package, the range of
+versions the advisory names, a colon and the reason. An entry is only for an
+advisory without a fixed version that cannot reach the stick, such as one in
+a package of the panel's build tools alone, which is not in the bundle the
+stick serves.
 
 Tests
 =====

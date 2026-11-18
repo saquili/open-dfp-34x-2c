@@ -7,6 +7,7 @@ Usage: vulns packages PKG_STATS_JSON [--accepted FILE]
        vulns kernel [--makefile FILE] [--releases FILE] [--cves DIR]
        vulns mongoose [--header FILE] [--latest VERSION]
        vulns buildroot [--pin FILE] [--index FILE]
+       vulns npm AUDIT_JSON [--accepted FILE]
 
 packages  judges the CVEs that Buildroot's pkg-stats found in the packages of
           the image's configuration. A CVE of a package the stick runs is a
@@ -22,6 +23,11 @@ kernel    compares the kernel of linux/ with the newest release of its stable
 mongoose  compares the Mongoose that pond carries with its newest release.
 buildroot compares the pinned Buildroot with the newest point release of its
           long-term-support series.
+npm       judges the advisories in the report of "npm audit --json" of the
+          panel's packages. An advisory is a finding unless the accepted list
+          names it, with the range of versions it had then, and a reason; an
+          advisory whose range has changed since, as when a fixed version
+          comes out, is a finding again.
 
 What is not given is fetched: kernel.org's releases.json, the release list of
 Mongoose on GitHub, Buildroot's download index. Each prints its report as
@@ -41,6 +47,7 @@ import urllib.request
 
 TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 ACCEPTED = os.path.join(TOP, "tools", "vulns", "accepted")
+ACCEPTED_NPM = os.path.join(TOP, "tools", "vulns", "accepted-npm")
 MAKEFILE = os.path.join(TOP, "linux", "Makefile")
 HEADER = os.path.join(TOP, "pond", "third_party", "mongoose", "mongoose.h")
 PIN = os.path.join(TOP, "buildroot", "VERSION")
@@ -339,6 +346,99 @@ def buildroot(args):
     return 0
 
 
+# --- npm --------------------------------------------------------------------
+
+def load_accepted_npm(path):
+    """{(advisory, package): (range, reason)} from lines
+    "ADVISORY PACKAGE RANGE: REASON"; # starts a comment."""
+    accepted = {}
+    for n, line in enumerate(read(path).splitlines(), 1):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        m = re.match(r"(GHSA-[0-9a-z-]+)\s+(\S+)\s+(.+?):\s+(\S.*)$", line)
+        if not m:
+            raise Failure(f"{path}:{n}: want ADVISORY PACKAGE RANGE: REASON")
+        accepted[(m.group(1), m.group(2))] = (m.group(3).strip(), m.group(4))
+    return accepted
+
+
+def advisories(report):
+    """{(advisory, package): (range, severity, title, [packages it reaches])}
+    of an "npm audit --json" report (auditReportVersion 2)."""
+    vulns = report.get("vulnerabilities")
+    if report.get("auditReportVersion") != 2 or not isinstance(vulns, dict):
+        raise Failure("not a report of npm audit --json (auditReportVersion 2)")
+    found = {}
+    for entry in vulns.values():
+        for via in entry.get("via") or []:
+            if not isinstance(via, dict):
+                continue
+            ident = (via.get("url") or "").rstrip("/").rsplit("/", 1)[-1]
+            if not ident.startswith("GHSA-"):
+                ident = f"npm-{via.get('source', '?')}"
+            found[(ident, via.get("name") or entry.get("name") or "?")] = (
+                via.get("range") or "?", via.get("severity") or "?", via.get("title") or "")
+    # The packages that hold each advisory's package, through any depth.
+    holders = {}
+    for name, entry in vulns.items():
+        for via in entry.get("via") or []:
+            if isinstance(via, str):
+                holders.setdefault(via, set()).add(name)
+    out = {}
+    for (ident, pkg), (rng, sev, title) in found.items():
+        reach, todo = set(), [pkg]
+        while todo:
+            for h in holders.get(todo.pop(), ()):
+                if h not in reach:
+                    reach.add(h)
+                    todo.append(h)
+        out[(ident, pkg)] = (rng, sev, title, sorted(reach))
+    return out
+
+
+def npm(args):
+    try:
+        report = json.loads(read(args.json))
+    except ValueError as err:
+        raise Failure(f"{args.json}: {err}") from err
+    accepted = load_accepted_npm(args.accepted)
+    found = advisories(report)
+    findings, changed, kept = [], [], []
+    for key in sorted(found):
+        rng, sev, title, reach = found[key]
+        if key not in accepted:
+            findings.append((key, rng, sev, title, reach))
+        elif accepted[key][0] != rng:
+            changed.append((key, accepted[key][0], rng, sev, title))
+        else:
+            kept.append((key, rng, accepted[key][1]))
+    stale = sorted(k for k in accepted if k not in found)
+
+    out = ["## The panel's npm packages", ""]
+    if findings or changed:
+        out.append(f"**{len(findings) + len(changed)} advisory(ies):**")
+        out.append("")
+        for (ident, pkg), rng, sev, title, reach in findings:
+            via = f", in {', '.join(reach)}" if reach else ""
+            out.append(f"- {ident} in {pkg} {rng} ({sev}): {title}{via}")
+        for (ident, pkg), was, rng, sev, title in changed:
+            out.append(f"- {ident} in {pkg} ({sev}): {title}; accepted for {was}, "
+                       f"the advisory now says {rng}: a fixed version may be out")
+    elif kept:
+        out.append("No advisory, apart from those accepted below.")
+    else:
+        out.append("No advisory.")
+    if kept:
+        out += ["", "Accepted (tools/vulns/accepted-npm):", ""]
+        out += [f"- {i} in {p} {r}: {why}" for (i, p), r, why in kept]
+    if stale:
+        out += ["", "Accepted but no longer reported (the entry can go):", ""]
+        out += [f"- {i} in {p}" for i, p in stale]
+    print("\n".join(out))
+    return 1 if findings or changed else 0
+
+
 def main(argv):
     parser = argparse.ArgumentParser(prog="vulns", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="check", required=True)
@@ -355,10 +455,13 @@ def main(argv):
     p = sub.add_parser("buildroot")
     p.add_argument("--pin", default=PIN)
     p.add_argument("--index")
+    p = sub.add_parser("npm")
+    p.add_argument("json")
+    p.add_argument("--accepted", default=ACCEPTED_NPM)
     args = parser.parse_args(argv)
     try:
         return {"packages": packages, "kernel": kernel, "mongoose": mongoose,
-                "buildroot": buildroot}[args.check](args)
+                "buildroot": buildroot, "npm": npm}[args.check](args)
     except Failure as err:
         print(f"vulns: {err}", file=sys.stderr)
         return 2
