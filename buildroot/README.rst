@@ -23,7 +23,7 @@ What is here
 ``VERSION``
     The pin: name, version, URL, size and SHA-256 of the release tarball, and
     the fingerprint of the key that signs it. The release is Buildroot
-    2025.02.19, a point release of its long-term-support series 2025.02. Moving
+    2025.02.20, a point release of its long-term-support series 2025.02. Moving
     to another release means editing this file, and the patch if it does not
     apply to the new one.
 ``fetch``
@@ -192,8 +192,8 @@ release manager signs a message that lists the same SHA-256; to check that the
 pin is the published release, import the key whose fingerprint is in
 ``VERSION`` and verify the signature::
 
-    gpg --verify buildroot-2025.02.19.tar.xz.sign
-    grep SHA256 buildroot-2025.02.19.tar.xz.sign
+    gpg --verify buildroot-2025.02.20.tar.xz.sign
+    grep SHA256 buildroot-2025.02.20.tar.xz.sign
 
 Tests
 =====
